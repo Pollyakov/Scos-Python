@@ -33,6 +33,7 @@ class ImageWidget(QWidget):
         self.plot.invertY(True)
 
         self.image_item = pg.ImageItem()
+        self.image_item.setOpts(axisOrder='row-major')   # avoids .T transpose
         self.plot.addItem(self.image_item)
 
         layout.addWidget(self.view)
@@ -59,9 +60,7 @@ class ImageWidget(QWidget):
 
     def update_frame(self, frame: np.ndarray):
         """Display a new camera frame. Called from GUI thread."""
-        # pyqtgraph ImageItem expects (W, H) with origin bottom-left,
-        # but we use invertY so we pass (H, W) transposed
-        self.image_item.setImage(frame.T, autoLevels=False)
+        self.image_item.setImage(frame, autoLevels=False)
         self._frame = frame
 
     def auto_contrast(self):

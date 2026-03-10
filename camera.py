@@ -3,19 +3,26 @@ Camera acquisition thread.
 Grabs frames from Basler camera continuously and emits them via a Qt signal.
 """
 
+import time
+import threading
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from pypylon import pylon
 
 
 class CameraThread(QThread):
-    frame_ready = pyqtSignal(np.ndarray)   # emitted for every new frame
-    error       = pyqtSignal(str)          # emitted on camera error
+    frame_ready   = pyqtSignal(np.ndarray)   # emitted for SCOS (every frame)
+    display_ready = pyqtSignal(np.ndarray)   # emitted for display (capped at 30 FPS)
+    error         = pyqtSignal(str)
+
+    DISPLAY_FPS_CAP = 30.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._running = False
-        self.camera   = None
+        self._running      = False
+        self.camera        = None
+        self._last_display = 0.0          # timestamp of last display emit
+        self._display_interval = 1.0 / self.DISPLAY_FPS_CAP
 
         # camera parameters (applied before next start)
         self.pixel_format  = "Mono12"
@@ -159,7 +166,11 @@ class CameraThread(QThread):
                     )
                     if result.GrabSucceeded():
                         frame = result.Array.copy()
-                        self.frame_ready.emit(frame)
+                        self.frame_ready.emit(frame)   # always — for SCOS
+                        now = time.monotonic()
+                        if now - self._last_display >= self._display_interval:
+                            self.display_ready.emit(frame)   # capped — for GUI
+                            self._last_display = now
                     result.Release()
         except Exception as e:
             self.error.emit(str(e))

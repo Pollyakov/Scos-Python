@@ -188,7 +188,8 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         # Camera thread signals
-        self.camera.frame_ready.connect(self._on_frame)
+        self.camera.display_ready.connect(self._on_display_frame)  # 30 FPS cap → GUI
+        self.camera.frame_ready.connect(self._on_scos_frame)        # every frame → SCOS
         self.camera.error.connect(self._on_camera_error)
 
         # Video start/stop
@@ -264,11 +265,11 @@ class MainWindow(QMainWindow):
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
 
-    def _on_frame(self, frame: np.ndarray):
-        # Update image display
+    def _on_display_frame(self, frame: np.ndarray):
+        """Runs at ≤30 FPS — only updates the image widget."""
         self.image_widget.update_frame(frame)
 
-        # FPS counter
+        # FPS counter (based on display frames, good enough)
         self._fps_count += 1
         now = time.time()
         elapsed = now - self._last_fps_time
@@ -278,17 +279,19 @@ class MainWindow(QMainWindow):
             self._fps_count = 0
             self._last_fps_time = now
 
-        # SCOS computation
-        if self._scos_active and self._mask is not None:
-            try:
-                k2_raw, k2_corr, mean_i = self.processor.process(frame, self._mask)
-                t = time.time() - self._start_time
-                self.plot_widget.append(t, k2_corr)
-                self.lbl_mean_i.setText(f"<I>  : {mean_i:.1f} DU")
-                self.lbl_kappa.setText( f"κ²   : {k2_corr:.5f}")
-                self.lbl_bfi.setText(   f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
-            except Exception:
-                pass
+    def _on_scos_frame(self, frame: np.ndarray):
+        """Runs on every camera frame — SCOS computation only, no GUI work."""
+        if not self._scos_active or self._mask is None:
+            return
+        try:
+            k2_raw, k2_corr, mean_i = self.processor.process(frame, self._mask)
+            t = time.time() - self._start_time
+            self.plot_widget.append(t, k2_corr)
+            self.lbl_mean_i.setText(f"<I>  : {mean_i:.1f} DU")
+            self.lbl_kappa.setText( f"κ²   : {k2_corr:.5f}")
+            self.lbl_bfi.setText(   f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+        except Exception:
+            pass
 
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
