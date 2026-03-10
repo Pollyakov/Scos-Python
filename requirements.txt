@@ -1,0 +1,21 @@
+# Basler Camera
+pypylon
+
+# GUI & Real-time plotting
+PyQt6
+pyqtgraph
+
+# Image processing & numerics
+numpy
+scipy
+opencv-python
+
+# Arduino communication
+pyserial
+
+# File I/O
+tifffile
+h5py
+
+# Utilities
+matplotlib
