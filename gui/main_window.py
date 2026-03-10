@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
         self._scos_active = False
         self._start_time  = None
         self._frame_count = 0
+        self._proc_times  = []   # rolling window of process() durations (ms)
 
         # Camera & processor
         self.camera    = CameraThread()
@@ -70,6 +71,10 @@ class MainWindow(QMainWindow):
         self.status.addPermanentWidget(self._fps_label)
         self._last_fps_time = time.time()
         self._fps_count = 0
+
+        # Processing time label
+        self._proc_label = QLabel("Proc: -- ms")
+        self.status.addPermanentWidget(self._proc_label)
 
     def _build_controls(self) -> QWidget:
         panel = QWidget()
@@ -147,10 +152,12 @@ class MainWindow(QMainWindow):
         # --- Info labels ---
         info_group = QGroupBox("Info")
         info_layout = QVBoxLayout(info_group)
-        self.lbl_mean_i = QLabel("<I> : --")
-        self.lbl_kappa  = QLabel("κ²  : --")
-        self.lbl_bfi    = QLabel("1/κ²: --")
-        for lbl in (self.lbl_mean_i, self.lbl_kappa, self.lbl_bfi):
+        self.lbl_mean_i  = QLabel("⟨I⟩  : --")
+        self.lbl_kappa   = QLabel("κ²   : --")
+        self.lbl_bfi     = QLabel("1/κ² : --")
+        self.lbl_fps     = QLabel("FPS  : --")
+        self.lbl_proc    = QLabel("Proc : -- ms")
+        for lbl in (self.lbl_mean_i, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
@@ -276,18 +283,30 @@ class MainWindow(QMainWindow):
         if elapsed >= 1.0:
             fps = self._fps_count / elapsed
             self._fps_label.setText(f"FPS: {fps:.1f}")
+            self.lbl_fps.setText(f"FPS  : {fps:.1f}")
             self._fps_count = 0
             self._last_fps_time = now
 
     def _on_scos_frame(self, frame: np.ndarray):
-        """Runs on every camera frame — SCOS computation only, no GUI work."""
+        """Runs on GUI thread (queued signal from camera thread) — every frame."""
         if not self._scos_active or self._mask is None:
             return
         try:
+            t0 = time.perf_counter()
             k2_raw, k2_corr, mean_i = self.processor.process(frame, self._mask)
+            proc_ms = (time.perf_counter() - t0) * 1000
+
+            # Rolling average over last 30 frames
+            self._proc_times.append(proc_ms)
+            if len(self._proc_times) > 30:
+                self._proc_times.pop(0)
+            avg_ms = sum(self._proc_times) / len(self._proc_times)
+            self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
+            self.lbl_proc.setText(f"Proc : {avg_ms:.0f} ms (last {proc_ms:.0f} ms)")
+
             t = time.time() - self._start_time
             self.plot_widget.append(t, k2_corr)
-            self.lbl_mean_i.setText(f"<I>  : {mean_i:.1f} DU")
+            self.lbl_mean_i.setText(f"⟨I⟩  : {mean_i:.1f} DU")
             self.lbl_kappa.setText( f"κ²   : {k2_corr:.5f}")
             self.lbl_bfi.setText(   f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
         except Exception:

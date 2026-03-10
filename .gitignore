@@ -9,3 +9,6 @@ __pycache__/
 *.tif
 *.avi
 Records/
+
+# Claude Code memory
+.claude/
