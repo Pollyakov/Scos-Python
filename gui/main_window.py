@@ -318,7 +318,8 @@ class MainWindow(QMainWindow):
         self.processor.window_size = self.spn_window.value()
 
     def _on_camera_warning(self, msg: str):
-        self.status.showMessage(f"Warning: {msg}", 5000)
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(self, "Camera Warning", msg)
 
     def _on_camera_error(self, msg: str):
         self.status.showMessage(f"Camera error: {msg}")
