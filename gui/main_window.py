@@ -198,6 +198,7 @@ class MainWindow(QMainWindow):
         self.camera.display_ready.connect(self._on_display_frame)  # 30 FPS cap → GUI
         self.camera.frame_ready.connect(self._on_scos_frame)        # every frame → SCOS
         self.camera.error.connect(self._on_camera_error)
+        self.camera.warning.connect(self._on_camera_warning)
 
         # Video start/stop
         self.btn_start_video.toggled.connect(self._toggle_video)
@@ -315,6 +316,9 @@ class MainWindow(QMainWindow):
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
         self.processor.window_size = self.spn_window.value()
+
+    def _on_camera_warning(self, msg: str):
+        self.status.showMessage(f"Warning: {msg}", 5000)
 
     def _on_camera_error(self, msg: str):
         self.status.showMessage(f"Camera error: {msg}")

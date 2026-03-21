@@ -7,13 +7,14 @@ import time
 import threading
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
-from pypylon import pylon
+from pypylon import pylon, genicam
 
 
 class CameraThread(QThread):
     frame_ready   = pyqtSignal(np.ndarray)   # emitted for SCOS (every frame)
     display_ready = pyqtSignal(np.ndarray)   # emitted for display (capped at 30 FPS)
     error         = pyqtSignal(str)
+    warning       = pyqtSignal(str)
 
     DISPLAY_FPS_CAP = 30.0
 
@@ -124,7 +125,16 @@ class CameraThread(QThread):
         cam = self.camera
 
         # Pixel format
-        cam.PixelFormat.Value = self.pixel_format
+        if genicam.IsWritable(cam.PixelFormat):
+            try:
+                cam.PixelFormat.Value = self.pixel_format
+            except Exception:
+                pass  # unsupported format on this camera, keep current
+        actual_fmt = cam.PixelFormat.Value
+        if actual_fmt != self.pixel_format:
+            self.warning.emit(
+                f"Requested pixel format '{self.pixel_format}' but camera is using '{actual_fmt}'"
+            )
 
         # ROI  (must be set before exposure / frame-rate)
         if self.roi_position:
