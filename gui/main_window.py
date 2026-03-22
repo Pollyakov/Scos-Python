@@ -96,17 +96,17 @@ class MainWindow(QMainWindow):
 
         # Exposure
         self.spn_exposure = self._labeled_spin(
-            cam_layout, "Exposure (ms):", 0.021, 10000.0, 10.0, 3, step=0.1
+            cam_layout, "Exposure (ms):", 0.021, 10000.0, 8.0, 3, step=0.1
         )
 
         # Gain
         self.spn_gain = self._labeled_spin(
-            cam_layout, "Gain (dB):", 0.0, 24.0, 0.0, 1, step=0.5
+            cam_layout, "Gain (dB):", 0.0, 24.0, 8.0, 1, step=0.5
         )
 
         # Frame rate
         self.spn_fps = self._labeled_spin(
-            cam_layout, "Frame Rate (Hz):", 1.0, 220.0, 50.0, 1, step=1.0
+            cam_layout, "Frame Rate (Hz):", 1.0, 220.0, 20.0, 1, step=1.0
         )
 
         # Trigger delay
