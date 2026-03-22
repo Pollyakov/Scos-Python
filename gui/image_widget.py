@@ -17,8 +17,9 @@ class ImageWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._setup_ui()
-        self._roi_circle = None   # pyqtgraph CircleROI
-        self._circ       = None   # dict: cx, cy, r
+        self._roi_circle   = None   # pyqtgraph CircleROI
+        self._circ         = None   # dict: cx, cy, r
+        self._first_frame  = True
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -62,6 +63,9 @@ class ImageWidget(QWidget):
         """Display a new camera frame. Called from GUI thread."""
         self.image_item.setImage(frame, autoLevels=False)
         self._frame = frame
+        if self._first_frame:
+            self._first_frame = False
+            self.auto_contrast()
 
     def auto_contrast(self):
         if not hasattr(self, '_frame'):
