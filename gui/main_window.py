@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self._start_time  = None
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
+        self._last_stats_time = 0.0
 
         # Camera & processor
         self.camera    = CameraThread()
@@ -153,11 +154,13 @@ class MainWindow(QMainWindow):
         info_group = QGroupBox("Info")
         info_layout = QVBoxLayout(info_group)
         self.lbl_mean_i  = QLabel("⟨I⟩  : --")
+        self.lbl_p5      = QLabel("p5   : --")
+        self.lbl_p95     = QLabel("p95  : --")
         self.lbl_kappa   = QLabel("κ²   : --")
         self.lbl_bfi     = QLabel("1/κ² : --")
         self.lbl_fps     = QLabel("FPS  : --")
         self.lbl_proc    = QLabel("Proc : -- ms")
-        for lbl in (self.lbl_mean_i, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc):
+        for lbl in (self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
@@ -290,11 +293,22 @@ class MainWindow(QMainWindow):
             self._fps_count = 0
             self._last_fps_time = now
 
+        # Intensity stats — update every 0.5s regardless of SCOS state
+        if self._mask is not None and (now - self._last_stats_time) >= 0.5:
+            pixels = frame[self._mask].astype(np.float64)
+            mean_i = float(pixels.mean())
+            p5     = float(np.percentile(pixels, 5))
+            p95    = float(np.percentile(pixels, 95))
+            self.lbl_mean_i.setText(f"⟨I⟩  : {mean_i:.1f} DU")
+            self.lbl_p5.setText(    f"p5   : {p5:.1f} DU")
+            self.lbl_p95.setText(   f"p95  : {p95:.1f} DU")
+            self._last_stats_time = now
+
         if not self._scos_active or self._mask is None:
             return
         try:
             t0 = time.perf_counter()
-            k2_raw, k2_corr, mean_i = self.processor.process(frame, self._mask)
+            k2_raw, k2_corr, _ = self.processor.process(frame, self._mask)
             proc_ms = (time.perf_counter() - t0) * 1000
 
             # Rolling average over last 30 frames
@@ -307,9 +321,8 @@ class MainWindow(QMainWindow):
 
             t = time.time() - self._start_time
             self.plot_widget.append(t, k2_corr)
-            self.lbl_mean_i.setText(f"⟨I⟩  : {mean_i:.1f} DU")
-            self.lbl_kappa.setText( f"κ²   : {k2_corr:.5f}")
-            self.lbl_bfi.setText(   f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+            self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
+            self.lbl_bfi.setText(  f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
         except Exception:
             pass
 
