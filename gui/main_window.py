@@ -277,7 +277,9 @@ class MainWindow(QMainWindow):
         """Runs at ≤30 FPS — only updates the image widget."""
         self.image_widget.update_frame(frame)
 
-        # FPS counter (based on display frames, good enough)
+    def _on_scos_frame(self, frame: np.ndarray):
+        """Runs on GUI thread (queued signal from camera thread) — every frame."""
+        # FPS counter — counts all camera frames, not the display-capped ones
         self._fps_count += 1
         now = time.time()
         elapsed = now - self._last_fps_time
@@ -288,8 +290,6 @@ class MainWindow(QMainWindow):
             self._fps_count = 0
             self._last_fps_time = now
 
-    def _on_scos_frame(self, frame: np.ndarray):
-        """Runs on GUI thread (queued signal from camera thread) — every frame."""
         if not self._scos_active or self._mask is None:
             return
         try:
