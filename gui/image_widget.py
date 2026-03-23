@@ -45,8 +45,10 @@ class ImageWidget(QWidget):
         self.btn_draw_roi  = QPushButton("Draw ROI")
         self.btn_clear_roi = QPushButton("Clear ROI")
         self.btn_auto_clim = QPushButton("Auto Contrast")
+        self.btn_cut_image = QPushButton("Cut Image")
+        self.btn_cut_image.setCheckable(True)
         for btn in (self.btn_auto_roi, self.btn_draw_roi,
-                    self.btn_clear_roi, self.btn_auto_clim):
+                    self.btn_clear_roi, self.btn_auto_clim, self.btn_cut_image):
             btn_row.addWidget(btn)
         layout.addLayout(btn_row)
 
@@ -54,6 +56,7 @@ class ImageWidget(QWidget):
         self.btn_draw_roi.clicked.connect(self._draw_roi)
         self.btn_clear_roi.clicked.connect(self._clear_roi)
         self.btn_auto_clim.clicked.connect(self.auto_contrast)
+        self.btn_cut_image.toggled.connect(self._apply_cut)
 
     # ------------------------------------------------------------------
     # Public API
@@ -150,6 +153,19 @@ class ImageWidget(QWidget):
             return
         mask = self._make_mask(self._frame.shape, self._circ)
         self.roi_changed.emit(mask, self._circ)
+        self._apply_cut(self.btn_cut_image.isChecked())
+
+    def _apply_cut(self, enabled: bool):
+        if enabled and self._circ is not None:
+            cx, cy, r = self._circ["cx"], self._circ["cy"], self._circ["r"]
+            pad = r * 0.1
+            self.plot.setRange(
+                xRange=[cx - r - pad, cx + r + pad],
+                yRange=[cy - r - pad, cy + r + pad],
+                padding=0
+            )
+        else:
+            self.plot.autoRange()
 
     @staticmethod
     def _make_mask(shape, circ) -> np.ndarray:
