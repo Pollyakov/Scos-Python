@@ -56,7 +56,7 @@ class ImageWidget(QWidget):
         self.btn_draw_roi.clicked.connect(self._draw_roi)
         self.btn_clear_roi.clicked.connect(self._clear_roi)
         self.btn_auto_clim.clicked.connect(self.auto_contrast)
-        self.btn_cut_image.toggled.connect(self._apply_cut)
+        self.btn_cut_image.toggled.connect(self._on_cut_toggled)
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,6 +154,10 @@ class ImageWidget(QWidget):
         mask = self._make_mask(self._frame.shape, self._circ)
         self.roi_changed.emit(mask, self._circ)
         self._apply_cut(self.btn_cut_image.isChecked())
+
+    def _on_cut_toggled(self, enabled: bool):
+        self.btn_cut_image.setText("Full Image" if enabled else "Cut Image")
+        self._apply_cut(enabled)
 
     def _apply_cut(self, enabled: bool):
         if enabled and self._circ is not None:
