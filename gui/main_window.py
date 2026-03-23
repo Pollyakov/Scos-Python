@@ -33,6 +33,7 @@ class MainWindow(QMainWindow):
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
         self._last_stats_time = 0.0
+        self._last_display_time = 0.0
 
         # Camera & processor
         self.camera    = CameraThread()
@@ -278,6 +279,11 @@ class MainWindow(QMainWindow):
 
     def _on_display_frame(self, frame: np.ndarray):
         """Runs at ≤30 FPS — only updates the image widget."""
+        if self._scos_active:
+            now = time.time()
+            if now - self._last_display_time < 2.5:
+                return
+            self._last_display_time = now
         self.image_widget.update_frame(frame)
 
     def _on_scos_frame(self, frame: np.ndarray):
