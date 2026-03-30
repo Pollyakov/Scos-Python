@@ -306,9 +306,11 @@ class MainWindow(QMainWindow):
 
     def _on_trigger_toggled(self, on: bool):
         """Handle External Trigger checkbox toggle."""
-        self.camera.set_trigger(on, self.spn_trigger_delay.value())
         if on:
+            # Don't switch camera yet — wait until Arduino is ready and sending pulses
             self._upload_arduino()
+        else:
+            self.camera.set_trigger(False, self.spn_trigger_delay.value())
 
     def _upload_arduino(self):
         """Start background thread to compile + upload Arduino sketch."""
@@ -327,7 +329,14 @@ class MainWindow(QMainWindow):
 
     def _on_arduino_done(self, ok: bool, msg: str):
         self.status.showMessage(msg)
-        if not ok:
+        if ok:
+            # Arduino is now sending trigger pulses — safe to switch camera
+            self.camera.set_trigger(True, self.spn_trigger_delay.value())
+        else:
+            # Upload failed — revert checkbox without re-triggering the signal
+            self.chk_trigger.blockSignals(True)
+            self.chk_trigger.setChecked(False)
+            self.chk_trigger.blockSignals(False)
             QMessageBox.warning(self, "Arduino Upload", msg)
 
     def _on_display_frame(self, frame: np.ndarray):
