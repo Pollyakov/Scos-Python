@@ -11,13 +11,33 @@ from PyQt6.QtWidgets import (
     QPushButton, QCheckBox, QComboBox, QSplitter,
     QStatusBar, QFileDialog, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 import scipy.io
 
 from camera    import CameraThread
 from processor import SCOSProcessor
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
+
+
+class _ArduinoUploadThread(QThread):
+    """Background thread that compiles and uploads the Arduino sketch."""
+    progress = pyqtSignal(str)          # intermediate status messages
+    done     = pyqtSignal(bool, str)    # (success, final message)
+
+    def __init__(self, exposure_ms: float, frame_rate_hz: float, parent=None):
+        super().__init__(parent)
+        self._exposure_ms   = exposure_ms
+        self._frame_rate_hz = frame_rate_hz
+
+    def run(self):
+        from arduino_uploader import upload_sketch
+        ok, msg = upload_sketch(
+            self._exposure_ms,
+            self._frame_rate_hz,
+            on_progress=self.progress.emit,
+        )
+        self.done.emit(ok, msg)
 
 
 class MainWindow(QMainWindow):
@@ -34,6 +54,7 @@ class MainWindow(QMainWindow):
         self._proc_times  = []   # rolling window of process() durations (ms)
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
+        self._arduino_thread: _ArduinoUploadThread | None = None
 
         # Camera & processor
         self.camera    = CameraThread()
@@ -217,8 +238,7 @@ class MainWindow(QMainWindow):
         self.spn_fps.valueChanged.connect(self.camera.set_frame_rate)
         self.spn_trigger_delay.valueChanged.connect(
             lambda v: self.camera.set_trigger(self.chk_trigger.isChecked(), v))
-        self.chk_trigger.toggled.connect(
-            lambda on: self.camera.set_trigger(on, self.spn_trigger_delay.value()))
+        self.chk_trigger.toggled.connect(self._on_trigger_toggled)
         self.cmb_format.currentTextChanged.connect(self.camera.set_pixel_format)
 
         # ROI
@@ -276,6 +296,39 @@ class MainWindow(QMainWindow):
             self._scos_active = False
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
+
+    def keyPressEvent(self, event):
+        """Press 'v' to toggle External Trigger (and trigger Arduino upload)."""
+        if event.key() == Qt.Key.Key_V:
+            self.chk_trigger.setChecked(not self.chk_trigger.isChecked())
+        else:
+            super().keyPressEvent(event)
+
+    def _on_trigger_toggled(self, on: bool):
+        """Handle External Trigger checkbox toggle."""
+        self.camera.set_trigger(on, self.spn_trigger_delay.value())
+        if on:
+            self._upload_arduino()
+
+    def _upload_arduino(self):
+        """Start background thread to compile + upload Arduino sketch."""
+        # Kill any previous upload still running
+        if self._arduino_thread and self._arduino_thread.isRunning():
+            return
+
+        exposure_ms   = self.spn_exposure.value()          # already in ms
+        frame_rate_hz = self.spn_fps.value()
+
+        self._arduino_thread = _ArduinoUploadThread(exposure_ms, frame_rate_hz, self)
+        self._arduino_thread.progress.connect(self.status.showMessage)
+        self._arduino_thread.done.connect(self._on_arduino_done)
+        self._arduino_thread.start()
+        self.status.showMessage("Arduino: connecting…")
+
+    def _on_arduino_done(self, ok: bool, msg: str):
+        self.status.showMessage(msg)
+        if not ok:
+            QMessageBox.warning(self, "Arduino Upload", msg)
 
     def _on_display_frame(self, frame: np.ndarray):
         """Runs at ≤30 FPS — only updates the image widget."""
