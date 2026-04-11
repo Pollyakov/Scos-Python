@@ -182,7 +182,8 @@ class MainWindow(QMainWindow):
         self.lbl_bfi     = QLabel("1/κ² : --")
         self.lbl_fps     = QLabel("FPS  : --")
         self.lbl_proc    = QLabel("Proc : -- ms")
-        for lbl in (self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc):
+        self.lbl_roi     = QLabel("ROI  : full frame")
+        for lbl in (self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
@@ -350,6 +351,12 @@ class MainWindow(QMainWindow):
 
     def _on_scos_frame(self, frame: np.ndarray):
         """Runs on GUI thread (queued signal from camera thread) — every frame."""
+        # Default mask = whole frame when no ROI is set
+        if self._mask is None or self._mask.shape != frame.shape:
+            self._mask = np.ones(frame.shape, dtype=bool)
+            h, w = frame.shape
+            self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
+
         # FPS counter — counts all camera frames, not the display-capped ones
         self._fps_count += 1
         now = time.time()
@@ -397,6 +404,13 @@ class MainWindow(QMainWindow):
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
         self.processor.window_size = self.spn_window.value()
+        if circ.get("r", 0) > 0:
+            self.lbl_roi.setText(
+                f"ROI  : cx={circ['cx']:.0f} cy={circ['cy']:.0f} r={circ['r']:.0f}"
+            )
+        else:
+            h, w = mask.shape
+            self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
     def _on_camera_warning(self, msg: str):
         from PyQt6.QtWidgets import QMessageBox

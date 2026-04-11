@@ -128,6 +128,10 @@ class ImageWidget(QWidget):
             self.plot.removeItem(self._roi_circle)
             self._roi_circle = None
         self._circ = None
+        # Emit full-frame mask so processing uses the whole image
+        if hasattr(self, '_frame'):
+            mask = np.ones(self._frame.shape, dtype=bool)
+            self.roi_changed.emit(mask, {"cx": 0, "cy": 0, "r": 0})
 
     def _set_roi(self, cx: float, cy: float, r: float):
         self._clear_roi()
