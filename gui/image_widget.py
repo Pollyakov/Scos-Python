@@ -132,6 +132,7 @@ class ImageWidget(QWidget):
         if hasattr(self, '_frame'):
             mask = np.ones(self._frame.shape, dtype=bool)
             self.roi_changed.emit(mask, {"cx": 0, "cy": 0, "r": 0})
+            self.auto_contrast()
 
     def _set_roi(self, cx: float, cy: float, r: float):
         self._clear_roi()
@@ -162,6 +163,7 @@ class ImageWidget(QWidget):
         mask = self._make_mask(self._frame.shape, self._circ)
         self.roi_changed.emit(mask, self._circ)
         self._apply_cut(self.btn_cut_image.isChecked())
+        self.auto_contrast()
 
     def _on_cut_toggled(self, enabled: bool):
         self.btn_cut_image.setText("Full Image" if enabled else "Cut Image")
