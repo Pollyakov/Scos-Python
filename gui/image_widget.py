@@ -79,6 +79,10 @@ class ImageWidget(QWidget):
         else:
             data = self._frame.ravel()
         lo, hi = np.percentile(data, [2, 98])
+        if lo == hi:
+            lo, hi = float(data.min()), float(data.max())
+        if lo == hi:                    # truly uniform image
+            hi = lo + 1
         self.image_item.setLevels([lo, hi])
 
     def get_mask(self) -> np.ndarray | None:
