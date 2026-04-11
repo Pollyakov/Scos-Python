@@ -20,6 +20,7 @@ class ImageWidget(QWidget):
         self._roi_circle   = None   # pyqtgraph CircleROI
         self._circ         = None   # dict: cx, cy, r
         self._first_frame  = True
+        self._crop_rect    = None   # (y0, y1, x0, x1) when cut is active
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -64,8 +65,15 @@ class ImageWidget(QWidget):
 
     def update_frame(self, frame: np.ndarray):
         """Display a new camera frame. Called from GUI thread."""
-        self.image_item.setImage(frame, autoLevels=False)
         self._frame = frame
+        if self._crop_rect is not None:
+            y0, y1, x0, x1 = self._crop_rect
+            cropped = frame[y0:y1, x0:x1]
+            self.image_item.setImage(cropped, autoLevels=False)
+            self.image_item.setPos(x0, y0)
+        else:
+            self.image_item.setImage(frame, autoLevels=False)
+            self.image_item.setPos(0, 0)
         if self._first_frame:
             self._first_frame = False
             self.auto_contrast()
@@ -122,12 +130,17 @@ class ImageWidget(QWidget):
         self.plot.addItem(roi)
         self._roi_circle = roi
         roi.sigRegionChangeFinished.connect(self._on_roi_changed)
+        self._circ = {"cx": cx, "cy": cy, "r": r}
+        self._emit_roi()
 
     def _clear_roi(self):
         if self._roi_circle is not None:
             self.plot.removeItem(self._roi_circle)
             self._roi_circle = None
         self._circ = None
+        # Reset cut mode since there is no ROI to cut around
+        self._crop_rect = None
+        self.btn_cut_image.setChecked(False)
         # Emit full-frame mask so processing uses the whole image
         if hasattr(self, '_frame'):
             mask = np.ones(self._frame.shape, dtype=bool)
@@ -170,15 +183,28 @@ class ImageWidget(QWidget):
         self._apply_cut(enabled)
 
     def _apply_cut(self, enabled: bool):
-        if enabled and self._circ is not None:
+        if enabled and self._circ is not None and hasattr(self, '_frame'):
             cx, cy, r = self._circ["cx"], self._circ["cy"], self._circ["r"]
-            pad = r * 0.1
-            self.plot.setRange(
-                xRange=[cx - r - pad, cx + r + pad],
-                yRange=[cy - r - pad, cy + r + pad],
-                padding=0
-            )
+            pad = 20  # fixed margin in pixels
+            half = r + pad
+            h, w = self._frame.shape[:2]
+
+            # Desired square side length, clamped to frame
+            span = int(min(2 * half, h, w))
+
+            # Center the square on the ROI, clamped to frame bounds
+            x0 = max(0, min(int(cx - span / 2), w - span))
+            x1 = x0 + span
+            y0 = max(0, min(int(cy - span / 2), h - span))
+            y1 = y0 + span
+
+            self._crop_rect = (y0, y1, x0, x1)
+            self.update_frame(self._frame)
+            self.plot.autoRange()
         else:
+            self._crop_rect = None
+            if hasattr(self, '_frame'):
+                self.update_frame(self._frame)
             self.plot.autoRange()
 
     @staticmethod
