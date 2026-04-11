@@ -4,6 +4,8 @@
 
 SCOS (Speckle Contrast Optical Spectroscopy) — real-time GUI app that acquires frames from a Basler camera, computes speckle contrast (κ²) with noise correction, and plots blood flow (1/κ²) over time. Translated from MATLAB (SCOSvsTime_WithNoiseSubtraction_Ver2.m). Used in the Optical Neuroimaging Lab at Bar-Ilan University.
 
+SCOS measures cerebral blood flow velocity by illuminating tissue with a laser and capturing speckle patterns with a Basler camera. Frame-to-frame intensity fluctuations reveal how fast blood cells are moving.
+
 ## Setup & Run
 
 ```bash
