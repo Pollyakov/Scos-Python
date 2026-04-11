@@ -25,6 +25,14 @@ python bench_processor.py
 python bench_processor.py --width 2448 --height 2048 --window 7 --duration 30 --bits 12 --fps 50
 ```
 
+## Testing
+
+```bash
+python -m pytest tests/
+```
+
+A pre-commit hook runs all tests before each commit; failures block the commit.
+
 ## Architecture
 
 ```
