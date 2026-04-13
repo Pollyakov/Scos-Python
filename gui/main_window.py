@@ -3,7 +3,10 @@ Main application window.
 Combines: live image, SCOS time-series plot, camera controls panel.
 """
 
+import json
 import time
+from pathlib import Path
+
 import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -65,6 +68,7 @@ class MainWindow(QMainWindow):
         self.processor = SCOSProcessor()
 
         self._build_ui()
+        self._load_config()
         self._connect_signals()
 
     # ------------------------------------------------------------------
@@ -218,6 +222,34 @@ class MainWindow(QMainWindow):
         row.addWidget(spn)
         parent_layout.addLayout(row)
         return spn
+
+    # ------------------------------------------------------------------
+    # Config loading
+    # ------------------------------------------------------------------
+
+    def _load_config(self):
+        """Load default values from scos_config.json into GUI widgets."""
+        config_path = Path(__file__).resolve().parent.parent / "scos_config.json"
+        try:
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+
+        for key, apply_fn in {
+            "pixel_format":    lambda v: self.cmb_format.setCurrentText(str(v)),
+            "exposure_ms":     lambda v: self.spn_exposure.setValue(float(v)),
+            "gain_db":         lambda v: self.spn_gain.setValue(float(v)),
+            "frame_rate_hz":   lambda v: self.spn_fps.setValue(float(v)),
+            "trigger_delay_us": lambda v: self.spn_trigger_delay.setValue(float(v)),
+            "external_trigger": lambda v: self.chk_trigger.setChecked(bool(v)),
+            "window_size":     lambda v: self.spn_window.setValue(int(v)),
+        }.items():
+            if key in cfg:
+                try:
+                    apply_fn(cfg[key])
+                except (ValueError, TypeError):
+                    pass
 
     # ------------------------------------------------------------------
     # Signal connections
