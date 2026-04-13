@@ -55,6 +55,10 @@ class MainWindow(QMainWindow):
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
         self._arduino_thread: _ArduinoUploadThread | None = None
+        self._arduino_debounce = QTimer(self)
+        self._arduino_debounce.setSingleShot(True)
+        self._arduino_debounce.setInterval(1000)  # 1 second
+        self._arduino_debounce.timeout.connect(self._upload_arduino)
 
         # Camera & processor
         self.camera    = CameraThread()
@@ -235,8 +239,10 @@ class MainWindow(QMainWindow):
         # Camera parameter changes (live)
         self.spn_exposure.valueChanged.connect(
             lambda v: self.camera.set_exposure(v * 1000))   # ms → µs
+        self.spn_exposure.valueChanged.connect(self._schedule_arduino_reupload)
         self.spn_gain.valueChanged.connect(self.camera.set_gain)
         self.spn_fps.valueChanged.connect(self.camera.set_frame_rate)
+        self.spn_fps.valueChanged.connect(self._schedule_arduino_reupload)
         self.spn_trigger_delay.valueChanged.connect(
             lambda v: self.camera.set_trigger(self.chk_trigger.isChecked(), v))
         self.chk_trigger.toggled.connect(self._on_trigger_toggled)
@@ -311,12 +317,19 @@ class MainWindow(QMainWindow):
             # Don't switch camera yet — wait until Arduino is ready and sending pulses
             self._upload_arduino()
         else:
+            self._arduino_debounce.stop()
             self.camera.set_trigger(False, self.spn_trigger_delay.value())
+
+    def _schedule_arduino_reupload(self):
+        """Re-upload Arduino sketch if external trigger is active (debounced)."""
+        if self.chk_trigger.isChecked():
+            self._arduino_debounce.start()  # restart the 1s timer
 
     def _upload_arduino(self):
         """Start background thread to compile + upload Arduino sketch."""
-        # Kill any previous upload still running
+        # Previous upload still running — schedule retry so new values get sent
         if self._arduino_thread and self._arduino_thread.isRunning():
+            self._arduino_debounce.start()
             return
 
         exposure_ms   = self.spn_exposure.value()          # already in ms
@@ -329,11 +342,16 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Arduino: connecting…")
 
     def _on_arduino_done(self, ok: bool, msg: str):
-        self.status.showMessage(msg)
         if ok:
+            exp = self.spn_exposure.value()
+            fps = self.spn_fps.value()
+            self.status.showMessage(
+                f"Arduino: trigger pulses active  |  exposure={exp} ms, FPS={fps} Hz"
+            )
             # Arduino is now sending trigger pulses — safe to switch camera
             self.camera.set_trigger(True, self.spn_trigger_delay.value())
         else:
+            self.status.showMessage(msg)
             # Upload failed — revert checkbox without re-triggering the signal
             self.chk_trigger.blockSignals(True)
             self.chk_trigger.setChecked(False)
@@ -347,6 +365,11 @@ class MainWindow(QMainWindow):
             if now - self._last_display_time < 2.5:
                 return
             self._last_display_time = now
+        self._frame_count += 1
+        self.status.showMessage(
+            f"Frame #{self._frame_count}  |  shape={frame.shape}  "
+            f"min={frame.min()}  max={frame.max()}  dtype={frame.dtype}"
+        )
         self.image_widget.update_frame(frame)
 
     def _on_scos_frame(self, frame: np.ndarray):
