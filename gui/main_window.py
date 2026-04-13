@@ -453,7 +453,8 @@ class MainWindow(QMainWindow):
                 self.spn_fps.blockSignals(True)
                 self.spn_exposure.setValue(info["exposure_us"] / 1000.0)
                 self.spn_gain.setValue(info["gain_db"])
-                self.spn_fps.setValue(info["frame_rate"])
+                if not self.chk_trigger.isChecked():
+                    self.spn_fps.setValue(info["frame_rate"])
                 self.spn_exposure.blockSignals(False)
                 self.spn_gain.blockSignals(False)
                 self.spn_fps.blockSignals(False)
