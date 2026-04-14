@@ -183,6 +183,7 @@ class MainWindow(QMainWindow):
         # --- Info labels ---
         info_group = QGroupBox("Info")
         info_layout = QVBoxLayout(info_group)
+        self.lbl_size    = QLabel("Size : --")
         self.lbl_mean_i  = QLabel("⟨I⟩  : --")
         self.lbl_p5      = QLabel("p5   : --")
         self.lbl_p95     = QLabel("p95  : --")
@@ -191,7 +192,7 @@ class MainWindow(QMainWindow):
         self.lbl_fps     = QLabel("FPS  : --")
         self.lbl_proc    = QLabel("Proc : -- ms")
         self.lbl_roi     = QLabel("ROI  : full frame")
-        for lbl in (self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc, self.lbl_roi):
+        for lbl in (self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
@@ -410,6 +411,7 @@ class MainWindow(QMainWindow):
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)
             h, w = frame.shape
+            self.lbl_size.setText(f"Size : {w}×{h}")
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
         # FPS counter — counts all camera frames, not the display-capped ones
