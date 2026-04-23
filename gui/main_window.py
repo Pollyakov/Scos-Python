@@ -477,6 +477,30 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Camera error: {msg}")
         self.btn_start_video.setChecked(False)
 
+        # Diagnose trigger-mode failures: the camera times out when no triggers arrive
+        if self.chk_trigger.isChecked():
+            from arduino_uploader import find_arduino_port
+            port = find_arduino_port()
+            if port is None:
+                QMessageBox.warning(
+                    self,
+                    "No Frames — Arduino Disconnected",
+                    "Frames stopped arriving in external trigger mode, and the "
+                    "Arduino is no longer detected on any COM port.\n\n"
+                    "→ Check the USB cable to the Arduino.\n"
+                    "→ Reconnect the Arduino, then re-enable External Trigger."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No Frames — No Triggers Received",
+                    f"Frames stopped arriving in external trigger mode.\n\n"
+                    f"Arduino is detected on {port}, but the camera receives "
+                    f"no trigger pulses.\n\n"
+                    "→ Check the wire from Arduino Pin 7 to Basler Line2.\n"
+                    "→ Verify the Arduino is powered and running the sketch."
+                )
+
     def _sync_params_from_camera(self):
         """Read current camera params and populate spinboxes."""
         try:
