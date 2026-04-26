@@ -68,6 +68,10 @@ IMPORTANT: `convert_gain(gain_db, bit_depth, sat_capacity)` returns DU/e (digita
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
 
+## Future Protocol Design
+
+The full target measurement protocol (multi-phase calibration with dark + bright frames, ROI shrink, `var_bright` noise term, rBFi normalization, recording-length limits, etc.) is documented in [docs/SCOS_protocol.md](docs/SCOS_protocol.md). The current code implements only a subset — assume features described there are NOT yet present unless this CLAUDE.md says otherwise.
+
 ## Code Style
 
 - Python 3.11+, type hints on public functions
