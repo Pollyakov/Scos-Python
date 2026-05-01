@@ -45,5 +45,5 @@ After that start presenting the graph (including the first seconds) of rBFi
 rBFI = BFI/mean_BFI_firstSeconds.
 Update the graph every X  seconds and update the image every X seconds. Make sure to stretch the x-axis accordingly every time the graph reaches the old limit.
 X default is 5. Where should we store this setting for your opinion? In setting file or additional manu?
-End when “Stop SCOS” is pressed or when time’s up. I suppose that some limit should be set. Lets say to 4 hours (also in some setting file).
+End when “Stop SCOS” is pressed or when time’s up. Lets say to maximum of 4 hours (also in some setting file).
 Then save the rBFi and <I> data into .mat file and the graph into figure file (in python format).
