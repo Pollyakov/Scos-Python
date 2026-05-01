@@ -79,6 +79,17 @@ The full target measurement protocol (multi-phase calibration with dark + bright
 - NumPy vectorized operations preferred over Python loops for image processing
 - Use `np.float64` for all intermediate SCOS calculations to avoid precision loss
 
+## Delegation Policy
+
+Each subagent spawn is its own conversation and costs tokens — be deliberate.
+
+- **Single-file reads, single-symbol greps, "where is X" lookups** → use Read/Grep/Glob directly. Do **not** spawn the Task tool for these.
+- **Simple multi-step searches** (e.g. "find all callers of convert_gain across the repo") → prefer the project-local **quick-search** subagent (`.claude/agents/quick-search.md`, pinned to Haiku, read-only). It is cheaper than `general-purpose`.
+- **Slightly broader read-only exploration** → use the built-in **Explore** agent.
+- **Reserve `general-purpose` and `Plan`** for genuinely multi-file, open-ended, or design-level work — e.g. wiring a new calibration phase from `docs/SCOS_protocol.md`, refactoring the camera/processor threading model, or auditing for race conditions.
+
+If you catch yourself reaching for `Task` to answer a question that could be one Grep call, stop and just do the Grep call.
+
 ## Compaction Instructions
 
 When compacting, preserve: list of modified files, current task, any test results or error messages, and the threading model (which thread does what).
