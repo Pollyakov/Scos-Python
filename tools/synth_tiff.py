@@ -48,7 +48,7 @@ def main() -> None:
     print(f"Generating {args.frames}×{args.height}×{args.width} uint16  ({mb:.0f} MB) …")
     stack = generate(args.width, args.height, args.frames, args.mean, args.seed)
     tifffile.imwrite(args.out, stack, photometric="minisblack")
-    print(f"Saved → {args.out}")
+    print(f"Saved: {args.out}")
 
 
 if __name__ == "__main__":
