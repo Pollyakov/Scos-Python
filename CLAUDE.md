@@ -6,6 +6,46 @@ SCOS (Speckle Contrast Optical Spectroscopy) — real-time GUI app that acquires
 
 SCOS measures cerebral blood flow velocity by illuminating tissue with a laser and capturing speckle patterns with a Basler camera. Frame-to-frame intensity fluctuations reveal how fast blood cells are moving.
 
+## Current Phase: Migration to Real-Time
+
+We're rewriting the project from offline batch processing to real-time
+acquisition + processing. The detailed plan lives in
+`docs/Plan_RealTime.pdf` (compact: `docs/Plan_RealTime.pdf`, full:
+`docs/Full_Plan_RealTime.pdf`). Read it before making architectural
+decisions — but read [`docs/Plan_RealTime_Patches.md`](docs/Plan_RealTime_Patches.md)
+alongside it: the plan has known bugs and gaps (silent-frame-drop in the
+example pipeline code, contradictory plot-update interval, missing
+hardware-trigger handling, etc.) that the patches document fixes.
+
+**Current phase:** Phase 0 — preparing the offline reference dataset
+(see plan, Section 6).
+
+**Architecture target:** 3 threads + 2 queues:
+- Thread 1: Camera capture (pypylon RetrieveResult)
+- Thread 2: Processor (κ² with noise correction)
+- Main thread: GUI (QTimer reads result_queue every 1000 ms)
+
+**Code organization target:**
+- `core/` — pure logic (math, frame source, session state machine, pipeline)
+- `gui/` — PyQt6 widgets only, no math
+- Existing `camera.py` and `processor.py` will be refactored into
+  `core/camera_source.py` and `core/scos_math.py` respectively.
+
+**Key parameters for THIS lab:**
+- Frame size: 700 × 700 pixels
+- Frame rate: ~20 Hz (target)
+- Recording duration: up to several hours
+- Camera: Basler GigE via pypylon
+
+**State machine for session:**
+IDLE → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING → FINISHED
+
+## What NOT to do
+- Don't add features in the old `processor.py` — write new code in `core/`
+- Don't put math in GUI files
+- Don't access GUI widgets from camera/processor threads (only via pyqtSignal)
+- Don't break the offline reference test once it's set up
+
 ## Setup & Run
 
 ```bash
