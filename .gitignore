@@ -9,6 +9,7 @@ __pycache__/
 *.tif
 *.avi
 Records/
+scratch/
 
 # Claude Code memory
 .claude/
