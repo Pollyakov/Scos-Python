@@ -44,6 +44,7 @@ Do that for n first seconds to determine the normalization constant (mean_BFI_fi
 After that start presenting the graph (including the first seconds) of rBFi
 rBFI = BFI/mean_BFI_firstSeconds.
 Update the graph every X  seconds and update the image every X seconds. Make sure to stretch the x-axis accordingly every time the graph reaches the old limit.
-X default is 5. Where should we store this setting for your opinion? In setting file or additional manu?
+X default is 1. Store the default in a settings file (e.g., config.yaml or settings.json) so it's easy to change without touching code.
+Show it in the GUI's "Advanced settings" panel so a user can override it for one session.
 End when “Stop SCOS” is pressed or when time’s up. Lets say to maximum of 4 hours (also in some setting file).
 Then save the rBFi and <I> data into .mat file and the graph into figure file (in python format).
