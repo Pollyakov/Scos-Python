@@ -101,6 +101,7 @@ class TestLocalVariance:
         """
         3×3 image with window=3:
         The center pixel sees the full 3×3 window.
+        Unbiased variance (÷ N-1 = ÷8) matches MATLAB stdfilt.
         """
         im = np.array([
             [1, 2, 3],
@@ -108,11 +109,10 @@ class TestLocalVariance:
             [7, 8, 9],
         ], dtype=np.float64)
         mean_im, var_im = local_variance(im, 3)
-        # Center pixel: mean of 1..9 = 5.0, var = mean(sq) - mean^2
-        # mean(sq) = (1+4+9+16+25+36+49+64+81)/9 = 285/9
-        # var = 285/9 - 25 = 60/9 ≈ 6.6667
+        # Center pixel: mean = 5.0
+        # biased var  = 60/9; unbiased var = 60/9 × 9/8 = 60/8 = 7.5
         assert mean_im[1, 1] == pytest.approx(5.0, abs=0.5)
-        assert var_im[1, 1] == pytest.approx(60.0 / 9.0, abs=0.5)
+        assert var_im[1, 1] == pytest.approx(60.0 / 8.0, abs=0.5)
 
 
 # ======================================================================
@@ -131,6 +131,7 @@ class TestSCOSProcessor:
         assert proc.sat_capacity == 10500.0
         assert proc.dark_mean is None
         assert proc.dark_var is None
+        assert proc.bright_var is None
 
     def test_custom_params(self):
         proc = SCOSProcessor(window_size=5, gain_db=6.0, bit_depth=12, sat_capacity=8000.0)
@@ -152,6 +153,28 @@ class TestSCOSProcessor:
         assert proc.dark_var.shape == (20, 20)
         # Mean should be close to 100
         assert np.mean(proc.dark_mean) == pytest.approx(100.0, abs=2.0)
+
+    def test_calibrate_bright_sets_bright_var(self):
+        """calibrate_bright() should produce a non-None bright_var of the right shape."""
+        rng = np.random.default_rng(1)
+        bright = rng.normal(2000, 50, size=(20, 20, 10))
+        proc = SCOSProcessor(window_size=5)
+        proc.calibrate_bright(bright)
+        assert proc.bright_var is not None
+        assert proc.bright_var.shape == (20, 20)
+        assert np.all(proc.bright_var >= 0)
+
+    def test_calibrate_bright_subtracts_dark(self):
+        """calibrate_bright() should subtract dark_mean before computing spVar."""
+        rng = np.random.default_rng(2)
+        dark = rng.normal(100, 3, size=(20, 20, 5))
+        bright = rng.normal(2000, 50, size=(20, 20, 10))
+        proc = SCOSProcessor(window_size=5)
+        proc.calibrate(dark)
+        proc.calibrate_bright(bright)
+        # Bright var computed after dark subtraction should be non-negative
+        assert proc.bright_var is not None
+        assert np.all(proc.bright_var >= 0)
 
     def test_process_returns_three_floats(self):
         """process() should return (kappa2_raw, kappa2_corr, mean_intensity)."""
