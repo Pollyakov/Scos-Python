@@ -1,5 +1,24 @@
 # SCOS Real-Time Demo Plan (Simplified)
 
+## Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1 — TIFF mock camera | **COMPLETE** | `python main.py --mock-tiff scratch/mock.tif` |
+| Math bug fixes (processor.py) | **COMPLETE** | Commits 9627398, dc3e7c1 |
+| Math validation — raw κ² | **COMPLETE** | 0.40% error vs MATLAB ✓ |
+| Math validation — corrected κ² | **TODO** | Need full 600 dark frames; currently have 322 |
+| Phase 2 — real camera | **TODO** | `python main.py` (no flag) |
+
+**Next session starting point:**
+1. Find the full dark calibration dataset (600 frames) for
+   `expT5ms_Gain24dB_BL100DU_FR40Hz_005_dark` and recheck corrected κ²
+   with `bit_depth=10, sat_capacity=10400` for the `a2A1920-160umPRO`.
+2. Then move to Phase 2: connect real lab camera + laser, run
+   `python check_camera.py`, then `python main.py`.
+
+---
+
 ## Context
 
 We have **1 day to prepare + half a day of show**, and limited access to the
