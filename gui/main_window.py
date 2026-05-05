@@ -44,7 +44,7 @@ class _ArduinoUploadThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, camera=None):
         super().__init__()
         self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
         self.resize(1400, 800)
@@ -55,6 +55,7 @@ class MainWindow(QMainWindow):
         self._start_time  = None
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
+        self._last_proc_label_time = 0.0
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
         self._arduino_thread: _ArduinoUploadThread | None = None
@@ -64,7 +65,7 @@ class MainWindow(QMainWindow):
         self._arduino_debounce.timeout.connect(self._upload_arduino)
 
         # Camera & processor
-        self.camera    = CameraThread()
+        self.camera    = camera if camera is not None else CameraThread()
         self.processor = SCOSProcessor()
 
         self._build_ui()
@@ -443,13 +444,15 @@ class MainWindow(QMainWindow):
             k2_raw, k2_corr, _ = self.processor.process(frame, self._mask)
             proc_ms = (time.perf_counter() - t0) * 1000
 
-            # Rolling average over last 30 frames
+            # Rolling average over last 100 frames
             self._proc_times.append(proc_ms)
-            if len(self._proc_times) > 30:
+            if len(self._proc_times) > 100:
                 self._proc_times.pop(0)
             avg_ms = sum(self._proc_times) / len(self._proc_times)
-            self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
-            self.lbl_proc.setText(f"Proc : {avg_ms:.0f} ms (last {proc_ms:.0f} ms)")
+            if (now - self._last_proc_label_time) >= 1.0:
+                self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
+                self.lbl_proc.setText(f"Proc : {avg_ms:.0f} ms (last {proc_ms:.0f} ms)")
+                self._last_proc_label_time = now
 
             t = time.time() - self._start_time
             self.plot_widget.append(t, k2_corr)

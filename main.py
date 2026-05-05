@@ -1,8 +1,18 @@
 """
 SCOS Application entry point.
+
+Run with a TIFF mock camera (no hardware needed):
+    python main.py --mock-tiff path/to/stack.tif
+
+Generate a synthetic stack first if you don't have real data:
+    python tools/synth_tiff.py --out scratch/mock.tif
+
+Run with the real Basler camera (default):
+    python main.py
 """
 
 import sys
+import argparse
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
@@ -13,6 +23,11 @@ pg.setConfigOption('foreground', '#cccccc')
 
 
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--mock-tiff", type=str, default=None,
+                        help="Replay a TIFF stack instead of opening a Basler camera.")
+    args, _ = parser.parse_known_args()
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
@@ -31,7 +46,14 @@ def main():
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
 
-    window = MainWindow()
+    if args.mock_tiff:
+        from mock_camera import MockCameraThread
+        camera = MockCameraThread(args.mock_tiff)
+    else:
+        from camera import CameraThread
+        camera = CameraThread()
+
+    window = MainWindow(camera=camera)
     window.show()
     sys.exit(app.exec())
 
