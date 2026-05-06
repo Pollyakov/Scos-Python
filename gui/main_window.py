@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 import scipy.io
 
 from camera    import CameraThread
-from processor import SCOSProcessor
+from processor import SCOSProcessor, GainTableError
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 
@@ -522,6 +522,10 @@ class MainWindow(QMainWindow):
             self.plot_widget.append(t, k2_corr)
             self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
             self.lbl_bfi.setText(  f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+        except GainTableError as e:
+            # Stop SCOS before showing the dialog so queued frames don't re-trigger it.
+            self.btn_start_scos.setChecked(False)
+            QMessageBox.critical(self, "SCOS Error", str(e))
         except Exception:
             pass
 

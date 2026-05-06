@@ -10,6 +10,10 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import uniform_filter
 
+
+class GainTableError(ValueError):
+    """Raised when a camera's SN + nBits combination is absent from the gain CSV."""
+
 # OpenCV is ~5× faster than scipy for box filtering.
 # Imported once at module load; falls back to scipy if not installed.
 try:
@@ -85,10 +89,9 @@ def load_gain_from_table(
                 matches.append((row_db, row_g))
 
     if not matches:
-        raise ValueError(
-            f"load_gain_from_table: no calibration entry for cameraSN={camera_sn}, "
-            f"nBits={n_bits} in {csv_path}. "
-            "Add a measured row or use convert_gain() for a formula-based estimate."
+        raise GainTableError(
+            f"Can't calculate SCOS: CameraSN {camera_sn} Mono{n_bits} "
+            f"was not found in G[DU/e] Calibration file"
         )
 
     dbs = np.array([m[0] for m in matches])

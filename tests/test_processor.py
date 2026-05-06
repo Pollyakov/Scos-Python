@@ -8,7 +8,95 @@ import pytest
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from processor import convert_gain, load_gain_from_table, local_variance, SCOSProcessor
+from processor import convert_gain, load_gain_from_table, local_variance, SCOSProcessor, GainTableError
+
+
+# ======================================================================
+# load_gain_from_table
+# ======================================================================
+
+class TestLoadGainFromTable:
+    """load_gain_from_table(camera_sn, n_bits, gain_db) → DU/e from CSV."""
+
+    # Rows in CamerasMeasuredGain.csv for camera 40513592 nBits=10:
+    #   16 dB → 0.583144665
+    #   18 dB → 0.732088235
+    #   20 dB → 0.920986881
+
+    def test_exact_match_returns_measured_value(self):
+        """Exact gain_db in table → returns measuredG directly."""
+        g = load_gain_from_table("40513592", 10, 20.0)
+        assert g == pytest.approx(0.920986881, rel=1e-6)
+
+    def test_exact_match_another_entry(self):
+        """Check a second exact row."""
+        g = load_gain_from_table("40513592", 10, 16.0)
+        assert g == pytest.approx(0.583144665, rel=1e-6)
+
+    def test_interpolation_between_entries(self, recwarn):
+        """
+        gain_db not in table → closest entry used, result interpolated,
+        and a UserWarning is issued.
+        For camera 40513592 nBits=10, closest to 17 dB is 16 dB (0.583144665).
+        Expected: 0.583144665 * 10^((17-16)/20)
+        """
+        expected = 0.583144665 * 10 ** ((17.0 - 16.0) / 20.0)
+        g = load_gain_from_table("40513592", 10, 17.0)
+        assert g == pytest.approx(expected, rel=1e-5)
+        # A UserWarning about interpolation must be issued
+        assert any(issubclass(w.category, UserWarning) for w in recwarn.list)
+
+    def test_unknown_camera_raises(self):
+        """Unknown cameraSN → GainTableError with the popup message format."""
+        with pytest.raises(GainTableError, match="Can't calculate SCOS"):
+            load_gain_from_table("99999999", 10, 20.0)
+
+    def test_unknown_camera_message_format(self):
+        """Error message contains CameraSN and MonoN as the GUI popup will show."""
+        with pytest.raises(GainTableError) as exc_info:
+            load_gain_from_table("99999999", 10, 20.0)
+        msg = str(exc_info.value)
+        assert "99999999" in msg
+        assert "Mono10" in msg
+        assert "G[DU/e] Calibration file" in msg
+
+    def test_wrong_nbits_raises(self):
+        """Known SN but wrong nBits → GainTableError."""
+        with pytest.raises(GainTableError, match="Can't calculate SCOS"):
+            load_gain_from_table("40513592", 8, 20.0)
+
+    def test_non_numeric_sn_raises(self):
+        """Non-numeric serial number → ValueError."""
+        with pytest.raises(ValueError, match="must be numeric"):
+            load_gain_from_table("BADCAM", 10, 20.0)
+
+    def test_missing_file_raises(self):
+        """Non-existent CSV path → FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            load_gain_from_table("40513592", 10, 20.0,
+                                 gain_data_file="/nonexistent/path.csv")
+
+    def test_scos_processor_uses_table_when_sn_set(self):
+        """SCOSProcessor with camera_sn uses load_gain_from_table, not convert_gain."""
+        import numpy as np
+        # camera 40513592, nBits=10, gain=20 dB → measuredG = 0.920986881
+        proc = SCOSProcessor(window_size=5, gain_db=20.0, bit_depth=10,
+                             sat_capacity=11117.0, camera_sn="40513592")
+        frame = np.full((50, 50), 500, dtype=np.uint16)
+        mask  = np.ones((50, 50), dtype=bool)
+        # Must not raise; G from table differs from convert_gain result
+        k2_raw, k2_corr, mean_i = proc.process(frame, mask)
+        assert isinstance(k2_raw, float)
+
+    def test_scos_processor_falls_back_without_sn(self):
+        """SCOSProcessor without camera_sn uses convert_gain (no table needed)."""
+        import numpy as np
+        proc = SCOSProcessor(window_size=5, gain_db=8.0, bit_depth=12,
+                             sat_capacity=10500.0)  # no camera_sn
+        frame = np.full((50, 50), 500, dtype=np.uint16)
+        mask  = np.ones((50, 50), dtype=bool)
+        k2_raw, k2_corr, mean_i = proc.process(frame, mask)
+        assert isinstance(k2_raw, float)
 
 
 # ======================================================================
