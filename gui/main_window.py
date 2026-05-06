@@ -134,9 +134,10 @@ class MainWindow(QMainWindow):
         self.plot_widget  = PlotWidget()
         splitter.addWidget(self.image_widget)
         splitter.addWidget(self.plot_widget)
-        splitter.setStretchFactor(0, 5)   # image : plot ≈ 5 : 2, scales with window
-        splitter.setStretchFactor(1, 2)
-        self.plot_widget.setMinimumHeight(120)
+        splitter.setStretchFactor(0, 1)   # image : plot = 1 : 4 — graph is primary
+        splitter.setStretchFactor(1, 4)
+        self.image_widget.setMinimumHeight(80)
+        self.plot_widget.setMinimumHeight(200)
         root.addWidget(splitter, stretch=3)
 
         # Right: controls panel
