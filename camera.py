@@ -165,15 +165,32 @@ class CameraThread(QThread):
         cam.ExposureTime.Value = self.exposure_us
         cam.Gain.Value         = self.gain_db
 
+    # How many consecutive 2-second timeouts before we declare a real error.
+    # 5 × 2 s = 10 s grace period — survives a brief Arduino reset/reboot.
+    _MAX_CONSECUTIVE_TIMEOUTS = 5
+
     def run(self):
         """Main acquisition loop — runs in a separate thread."""
+        consecutive_timeouts = 0
         try:
             self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
             while self._running:
                 if self.camera.IsGrabbing():
                     result = self.camera.RetrieveResult(
-                        2000, pylon.TimeoutHandling_ThrowException
+                        2000, pylon.TimeoutHandling_Return
                     )
+                    if not result.IsValid():
+                        # Timeout — no frame arrived within 2 s
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= self._MAX_CONSECUTIVE_TIMEOUTS:
+                            self.error.emit(
+                                f"No frames received for "
+                                f"{consecutive_timeouts * 2} s — "
+                                "camera stopped or trigger lost."
+                            )
+                            break
+                        continue
+                    consecutive_timeouts = 0
                     if result.GrabSucceeded():
                         frame = result.Array.copy()
                         self.frame_ready.emit(frame)   # always — for SCOS

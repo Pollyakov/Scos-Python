@@ -8,7 +8,7 @@ import pytest
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from processor import convert_gain, local_variance, SCOSProcessor
+from processor import convert_gain, load_gain_from_table, local_variance, SCOSProcessor
 
 
 # ======================================================================

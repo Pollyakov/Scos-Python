@@ -67,12 +67,15 @@ class _ArduinoUploadThread(QThread):
         self._frame_rate_hz = frame_rate_hz
 
     def run(self):
-        from arduino_uploader import upload_sketch
-        ok, msg = upload_sketch(
-            self._exposure_ms,
-            self._frame_rate_hz,
-            on_progress=self.progress.emit,
-        )
+        try:
+            from arduino_uploader import upload_sketch
+            ok, msg = upload_sketch(
+                self._exposure_ms,
+                self._frame_rate_hz,
+                on_progress=self.progress.emit,
+            )
+        except Exception as exc:
+            ok, msg = False, f"Arduino upload error: {exc}"
         self.done.emit(ok, msg)
 
 
@@ -142,6 +145,10 @@ class MainWindow(QMainWindow):
         # Processing time label
         self._proc_label = QLabel("Proc: -- ms")
         self.status.addPermanentWidget(self._proc_label)
+
+        # Calibration status — permanent so per-frame messages don't overwrite it
+        self._calib_label = QLabel("")
+        self.status.addPermanentWidget(self._calib_label)
 
     def _build_controls(self) -> QWidget:
         panel = QWidget()
@@ -390,6 +397,7 @@ class MainWindow(QMainWindow):
             self._upload_arduino()
         else:
             self._arduino_debounce.stop()
+            self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
             self.camera.set_trigger(False, self.spn_trigger_delay.value())
 
     def _schedule_arduino_reupload(self):
@@ -411,14 +419,21 @@ class MainWindow(QMainWindow):
         self._arduino_thread.progress.connect(self.status.showMessage)
         self._arduino_thread.done.connect(self._on_arduino_done)
         self._arduino_thread.start()
+        self.chk_trigger.setText("External Trigger  (uploading…)")
+        self.chk_trigger.setEnabled(False)
         self.status.showMessage("Arduino: connecting…")
 
     def _on_arduino_done(self, ok: bool, msg: str):
+        self.chk_trigger.setText("External Trigger")
+        self.chk_trigger.setEnabled(True)
         if ok:
             exp = self.spn_exposure.value()
             fps = self.spn_fps.value()
             self.status.showMessage(
                 f"Arduino: trigger pulses active  |  exposure={exp} ms, FPS={fps} Hz"
+            )
+            self.setWindowTitle(
+                f"SCOS — Trigger ACTIVE ({fps:.0f} Hz, {exp:.0f} ms)"
             )
             # Arduino is now sending trigger pulses — safe to switch camera
             self.camera.set_trigger(True, self.spn_trigger_delay.value())
@@ -591,8 +606,10 @@ class MainWindow(QMainWindow):
           Uses smoothingCoefficients.mat as spVar fallback if main_dir fails.
         """
         dark_dir  = self.camera.get_dark_dir()
-        smoothing = self.camera.get_calibration_mat()   # fallback for spVar
-        main_dir  = self.camera._recording_dir          # for computing spVar
+        smoothing = self.camera.get_calibration_mat()
+        # If smoothingCoefficients.mat exists, use it — avoids reading all main
+        # TIFFs concurrently with playback, which saturates the disk.
+        main_dir  = None if smoothing is not None else self.camera._recording_dir
 
         info    = self.camera.get_info()
         sat_cap = info.get("sat_capacity", None)
@@ -601,9 +618,7 @@ class MainWindow(QMainWindow):
         self._pending_mask_mat   = self.camera.get_mask_mat()
 
         self.btn_start_scos.setEnabled(False)
-        self.status.showMessage(
-            "Computing calibration (dark + spVar) in background …"
-        )
+        self._calib_label.setText("Calibrating…")
 
         self._calib_thread = _CalibrationLoaderThread(
             self.processor, dark_dir, main_dir, smoothing,
@@ -617,7 +632,7 @@ class MainWindow(QMainWindow):
         self.btn_start_scos.setEnabled(True)
 
         if not success:
-            self.status.showMessage(f"Calibration failed: {msg}")
+            self._calib_label.setText(f"Cal FAILED: {msg}")
             return
 
         # Load ROI mask from Mask.mat (fast — just reads one small file)
@@ -636,7 +651,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        self.status.showMessage(f"Calibration loaded — {msg}")
+        self._calib_label.setText(f"Cal OK — {msg}")
 
     def _save_data(self):
         path, _ = QFileDialog.getSaveFileName(

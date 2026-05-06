@@ -3,6 +3,10 @@ SCOS algorithm: computes speckle contrast (κ²) from a single frame.
 Matches MATLAB RecordSCOSLong.m (corrSpeckleContrast formula).
 """
 
+import csv
+import warnings
+from pathlib import Path
+
 import numpy as np
 from scipy.ndimage import uniform_filter
 
@@ -13,11 +17,104 @@ try:
 except ImportError:
     _cv2 = None
 
+# Default calibration table bundled with the project.
+_DEFAULT_GAIN_TABLE = Path(__file__).parent / "CamerasMeasuredGain.csv"
+
+
+def load_gain_from_table(
+    camera_sn: str,
+    n_bits: int,
+    gain_db: float,
+    gain_data_file: "str | Path | None" = None,
+) -> float:
+    """
+    Return the measured DU/e gain for a specific camera from a CSV table.
+
+    Matches MATLAB LoadG.m: finds the closest gain_dB entry for the given
+    cameraSN + nBits combination and interpolates linearly in dB space:
+        G = G_closest × 10^((gain_db − closest_gain_db) / 20)
+
+    Parameters
+    ----------
+    camera_sn      : camera serial number as a numeric string, e.g. "40513592"
+    n_bits         : bit depth — must match the nBits column in the CSV
+    gain_db        : requested gain in dB
+    gain_data_file : path to CamerasMeasuredGain.csv; defaults to the file
+                     bundled next to processor.py
+
+    Returns
+    -------
+    actual_g : DU/e conversion constant (float)
+
+    Raises
+    ------
+    ValueError       if camera_sn is non-numeric or no row matches cameraSN+nBits
+    FileNotFoundError if the CSV file cannot be found
+    """
+    try:
+        sn_numeric = float(camera_sn)
+    except ValueError:
+        raise ValueError(
+            f"load_gain_from_table: camera_sn must be numeric, got {camera_sn!r}"
+        )
+
+    csv_path = Path(gain_data_file) if gain_data_file is not None else _DEFAULT_GAIN_TABLE
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"Gain table not found: {csv_path}. "
+            "Place CamerasMeasuredGain.csv next to processor.py or pass gain_data_file."
+        )
+
+    # Parse CSV without pandas — stdlib only.
+    # Strip whitespace from header names and all values to handle the lab CSV's
+    # irregular spacing.
+    matches: list[tuple[float, float]] = []  # (gain_dB, measuredG)
+    with open(csv_path, newline="") as fh:
+        reader = csv.reader(fh)
+        headers = [h.strip() for h in next(reader)]
+        for raw_row in reader:
+            row = {k: v.strip() for k, v in zip(headers, raw_row)}
+            try:
+                row_sn   = float(row["cameraSN"])
+                row_bits = int(row["nBits"])
+                row_db   = float(row["gain_dB"])
+                row_g    = float(row["measuredG"])
+            except (ValueError, KeyError):
+                continue  # skip blank or malformed rows
+            if row_sn == sn_numeric and row_bits == n_bits:
+                matches.append((row_db, row_g))
+
+    if not matches:
+        raise ValueError(
+            f"load_gain_from_table: no calibration entry for cameraSN={camera_sn}, "
+            f"nBits={n_bits} in {csv_path}. "
+            "Add a measured row or use convert_gain() for a formula-based estimate."
+        )
+
+    dbs = np.array([m[0] for m in matches])
+    gs  = np.array([m[1] for m in matches])
+    idx = int(np.argmin(np.abs(dbs - gain_db)))
+
+    actual_g = float(gs[idx] * 10 ** ((gain_db - dbs[idx]) / 20.0))
+
+    if abs(dbs[idx] - gain_db) > 1e-9:
+        warnings.warn(
+            f"gain_db={gain_db} not in table for cameraSN={camera_sn}, nBits={n_bits}. "
+            f"Interpolated G={actual_g:.6f} DU/e from closest entry at {dbs[idx]} dB.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return actual_g
+
 
 def convert_gain(gain_db: float, bit_depth: int = 8, sat_capacity: float = 10500.0) -> float:
     """
-    Convert camera gain from dB to DU/e (digital units per electron).
-    Matches MATLAB ConvertGain.m
+    Convert camera gain from dB to DU/e using the camera's sat_capacity.
+    Matches MATLAB ConvertGain.m.
+
+    Use load_gain_from_table() instead when a measured CSV entry exists for
+    the camera — it is more accurate than this formula-based estimate.
     """
     G0 = (2 ** bit_depth) / sat_capacity
     return 10 ** (gain_db / 20.0) * G0
@@ -113,11 +210,15 @@ class SCOSProcessor:
     """
 
     def __init__(self, window_size: int = 7, gain_db: float = 0.0,
-                 bit_depth: int = 8, sat_capacity: float = 10500.0):
+                 bit_depth: int = 8, sat_capacity: float = 10500.0,
+                 camera_sn: str | None = None):
         self.window_size  = window_size
         self.gain_db      = gain_db
         self.bit_depth    = bit_depth
         self.sat_capacity = sat_capacity
+        # When set, process() uses load_gain_from_table() for measured DU/e.
+        # When None, falls back to convert_gain() (formula-based).
+        self.camera_sn    = camera_sn
         # scale: raw TIFF uint16 values are divided by this before processing.
         # 1.0 for real camera frames; 64.0 for 10-bit left-justified TIFFs (a2A1920).
         self.scale        = 1.0
@@ -221,7 +322,10 @@ class SCOSProcessor:
         kappa2_corr   : noise-corrected κ²
         mean_intensity: mean pixel value inside ROI after dark subtraction
         """
-        G  = convert_gain(self.gain_db, self.bit_depth, self.sat_capacity)
+        if self.camera_sn is not None:
+            G = load_gain_from_table(self.camera_sn, self.bit_depth, self.gain_db)
+        else:
+            G = convert_gain(self.gain_db, self.bit_depth, self.sat_capacity)
         im = frame.astype(np.float64) / self.scale  # no-op when scale=1.0
 
         if self.dark_mean is not None:
