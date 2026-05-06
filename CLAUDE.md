@@ -15,15 +15,15 @@ for the ideas-only summary. The long-term plan (`docs/Plan_RealTime.pdf`,
 `docs/Full_Plan_RealTime.pdf`, `docs/Plan_RealTime_Patches.md`) is still
 the post-demo direction.
 
-**Phase 1 — COMPLETE.** TIFF mock camera implemented and tested.
-- Run with mock (no hardware needed):
+**Phase 1 — COMPLETE.** Both mock cameras implemented and tested.
+- Synthetic TIFF (no real data needed):
   ```
   python tools/synth_tiff.py --out scratch/mock.tif --frames 1200
   python main.py --mock-tiff scratch/mock.tif
   ```
-- Or point at a real recorded TIFF folder:
+- Real lab recording folder (auto-loads calibration + mask):
   ```
-  python main.py --mock-tiff path/to/stack.tif
+  python main.py --mock-folder "path/to/expT5ms_Gain24dB_BL100DU_FR40Hz_005"
   ```
 
 **Phase 2 — TODO.** Connect the real Basler camera + laser:
@@ -32,19 +32,17 @@ the post-demo direction.
   python check_camera.py  # smoke-test first
   ```
 
-**Math bugs fixed (processor.py, commit 9627398):**
+**Math bugs fixed:**
 1. Missing `bright_var` (spVar) term in corrected formula — added `calibrate_bright()`
 2. Biased variance estimator → fixed to unbiased (×N²/(N²−1))
 3. Dark variance not spatially smoothed → now applies `uniform_filter`
+4. Wrong `sat_capacity` (was 10400, correct value for a2A1920-160umPRO is **11117 e-**)
+   — diagnosed via Phase-0 PTC analysis; `load_calibration_mat` now accepts this as a parameter.
 
 **Math validation result (against MATLAB reference, 600 real frames):**
-- Raw κ²: **0.40% error** ✓ — formula correct
-- Corrected κ²: formula correct, but requires correct camera parameters.
-  TODO: recheck with the full 600 dark frames (only 322 were available).
-
-**Open TODO before demo:**
-- Find the full dark calibration dataset (600 frames) for the
-  `expT5ms_Gain24dB_BL100DU_FR40Hz_005` recording and recheck corrected κ².
+- Raw κ²: **0.45% error** ✓
+- Corrected κ²: **1.2% error** ✓ (using sat_capacity=11117, spVar from smoothingCoefficients.mat,
+  dark calibration from 600 dark frames)
 
 **Architecture target:** 3 threads + 2 queues:
 - Thread 1: Camera capture (pypylon RetrieveResult)
@@ -131,7 +129,7 @@ IMPORTANT: `convert_gain(gain_db, bit_depth, sat_capacity)` returns DU/e (digita
 Known camera parameters:
 | Camera | bit_depth | sat_capacity | Notes |
 |--------|-----------|-------------|-------|
-| Basler a2A1920-160umPRO | 10 | 10400 | TIFF values are ×64 (10-bit left-justified in uint16) |
+| Basler a2A1920-160umPRO (SN 40513592) | 10 | **11117** | TIFF ×64 (10-bit left-justified in uint16); 1216×1936; sat_capacity measured via Phase-0 diagnostic |
 | Lab demo camera (700×700) | 12 | 10500 | Default — verify on first use |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
