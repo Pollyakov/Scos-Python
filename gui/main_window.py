@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QGroupBox, QLabel, QDoubleSpinBox, QSpinBox,
     QPushButton, QCheckBox, QComboBox, QSplitter,
     QStatusBar, QFileDialog, QMessageBox
@@ -85,7 +85,8 @@ class MainWindow(QMainWindow):
     def __init__(self, camera=None):
         super().__init__()
         self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
-        self.resize(1400, 800)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(min(1400, screen.width() - 20), screen.height() - 10)
 
         # State
         self._mask        = None
@@ -133,7 +134,9 @@ class MainWindow(QMainWindow):
         self.plot_widget  = PlotWidget()
         splitter.addWidget(self.image_widget)
         splitter.addWidget(self.plot_widget)
-        splitter.setSizes([500, 300])
+        splitter.setStretchFactor(0, 5)   # image : plot ≈ 5 : 2, scales with window
+        splitter.setStretchFactor(1, 2)
+        self.plot_widget.setMinimumHeight(120)
         root.addWidget(splitter, stretch=3)
 
         # Right: controls panel
@@ -162,13 +165,17 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.setSpacing(4)
+        layout.setContentsMargins(4, 4, 4, 4)
 
         # --- Camera Controls ---
         cam_group = QGroupBox("Camera")
         cam_layout = QVBoxLayout(cam_group)
+        cam_layout.setSpacing(2)
+        cam_layout.setContentsMargins(4, 8, 4, 4)
 
-        # Pixel format
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("Format:"))
         self.cmb_format = QComboBox()
         self.cmb_format.addItems(["Mono8", "Mono10", "Mono12"])
@@ -176,62 +183,52 @@ class MainWindow(QMainWindow):
         row.addWidget(self.cmb_format)
         cam_layout.addLayout(row)
 
-        # Exposure
         self.spn_exposure = self._labeled_spin(
             cam_layout, "Exposure (ms):", 0.021, 10000.0, 8.0, 3, step=0.1
         )
-
-        # Gain
         self.spn_gain = self._labeled_spin(
             cam_layout, "Gain (dB):", 0.0, 24.0, 8.0, 1, step=0.5
         )
-
-        # Frame rate
         self.spn_fps = self._labeled_spin(
             cam_layout, "Frame Rate (Hz):", 1.0, 220.0, 20.0, 1, step=1.0
         )
-
-        # Trigger delay
         self.spn_trigger_delay = self._labeled_spin(
             cam_layout, "Trigger Delay (µs):", 0.0, 1e6, 0.0, 0, step=100.0
         )
-
-        # External trigger
         self.chk_trigger = QCheckBox("External Trigger")
         cam_layout.addWidget(self.chk_trigger)
-
         layout.addWidget(cam_group)
 
         # --- Video Controls ---
         vid_group = QGroupBox("Acquisition")
         vid_layout = QVBoxLayout(vid_group)
+        vid_layout.setSpacing(2)
+        vid_layout.setContentsMargins(4, 8, 4, 4)
 
         self.btn_start_video = QPushButton("Start Video")
         self.btn_start_video.setCheckable(True)
         vid_layout.addWidget(self.btn_start_video)
-
         layout.addWidget(vid_group)
 
         # --- SCOS Controls ---
         scos_group = QGroupBox("SCOS")
         scos_layout = QVBoxLayout(scos_group)
+        scos_layout.setSpacing(2)
+        scos_layout.setContentsMargins(4, 8, 4, 4)
 
         self.spn_window = self._labeled_int_spin(
             scos_layout, "Window Size:", 3, 51, 7, step=2
         )
-
         self.spn_n1 = self._labeled_int_spin(
             scos_layout, "Dark Frames (N1):", 10, 3000, 600, step=50
         )
-
         self.btn_dark_cal = QPushButton("Dark Calibration")
-        self.btn_dark_cal.setEnabled(False)   # enabled once Start Video is pressed
+        self.btn_dark_cal.setEnabled(False)
         scos_layout.addWidget(self.btn_dark_cal)
 
         self.spn_n2 = self._labeled_int_spin(
             scos_layout, "Bright Frames (N2):", 10, 3000, 600, step=50
         )
-
         self.btn_bright_cal = QPushButton("Bright Calibration")
         self.btn_bright_cal.setEnabled(False)
         scos_layout.addWidget(self.btn_bright_cal)
@@ -244,22 +241,25 @@ class MainWindow(QMainWindow):
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
         scos_layout.addWidget(self.btn_save)
-
         layout.addWidget(scos_group)
 
         # --- Info labels ---
+        # FPS and Proc are already in the permanent status-bar widgets;
+        # omitting them here keeps the panel short enough to avoid scrolling.
         info_group = QGroupBox("Info")
         info_layout = QVBoxLayout(info_group)
-        self.lbl_size    = QLabel("Size : --")
-        self.lbl_mean_i  = QLabel("⟨I⟩  : --")
-        self.lbl_p5      = QLabel("p5   : --")
-        self.lbl_p95     = QLabel("p95  : --")
-        self.lbl_kappa   = QLabel("κ²   : --")
-        self.lbl_bfi     = QLabel("1/κ² : --")
-        self.lbl_fps     = QLabel("FPS  : --")
-        self.lbl_proc    = QLabel("Proc : -- ms")
-        self.lbl_roi     = QLabel("ROI  : full frame")
-        for lbl in (self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95, self.lbl_kappa, self.lbl_bfi, self.lbl_fps, self.lbl_proc, self.lbl_roi):
+        info_layout.setSpacing(1)
+        info_layout.setContentsMargins(4, 8, 4, 4)
+
+        self.lbl_size   = QLabel("Size : --")
+        self.lbl_mean_i = QLabel("⟨I⟩  : --")
+        self.lbl_p5     = QLabel("p5   : --")
+        self.lbl_p95    = QLabel("p95  : --")
+        self.lbl_kappa  = QLabel("κ²   : --")
+        self.lbl_bfi    = QLabel("1/κ² : --")
+        self.lbl_roi    = QLabel("ROI  : full frame")
+        for lbl in (self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
+                    self.lbl_kappa, self.lbl_bfi, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
@@ -269,6 +269,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _labeled_spin(parent_layout, label, min_, max_, default, decimals, step=1.0):
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel(label))
         spn = QDoubleSpinBox()
         spn.setRange(min_, max_)
@@ -282,6 +283,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _labeled_int_spin(parent_layout, label, min_, max_, default, step=1):
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel(label))
         spn = QSpinBox()
         spn.setRange(min_, max_)
@@ -400,9 +402,11 @@ class MainWindow(QMainWindow):
             # Cancel any in-progress calibration gracefully
             if self._dark_cal_collector is not None:
                 self._dark_cal_collector = None
+                self.btn_dark_cal.setText("Dark Calibration")
                 self._calib_label.setText("Dark cal cancelled")
             if self._bright_cal_collector is not None:
                 self._bright_cal_collector = None
+                self.btn_bright_cal.setText("Bright Calibration")
                 self._calib_label.setText("Bright cal cancelled")
             self.camera.stop()
             self.btn_start_video.setText("Start Video")
@@ -473,9 +477,9 @@ class MainWindow(QMainWindow):
         # Step 4: start collecting
         n1 = self.spn_n1.value()
         self._dark_cal_collector = DarkCalCollector(n1, self.spn_window.value())
+        self.btn_dark_cal.setText(f"Dark Cal: 0 / {n1}")
         self.btn_dark_cal.setEnabled(False)
         self.btn_start_scos.setEnabled(False)
-        self.status.showMessage(f"Dark calibration: 0 / {n1} frames…")
 
     def _finish_dark_cal(self):
         """
@@ -519,7 +523,11 @@ class MainWindow(QMainWindow):
 
         self._dark_cal_collector = None
         self._restore_cal_buttons()
-        self.status.showMessage("Dark calibration complete.")
+        QMessageBox.information(
+            self, "Dark Calibration Complete",
+            f"Dark calibration complete — {n_collected} frames collected.\n\n"
+            "You can now run Bright Calibration, or press Start SCOS."
+        )
 
     def _start_bright_cal(self):
         """
@@ -570,10 +578,10 @@ class MainWindow(QMainWindow):
 
         n2 = self.spn_n2.value()
         self._bright_cal_collector = BrightCalCollector(n2, self.spn_window.value())
+        self.btn_bright_cal.setText(f"Bright Cal: 0 / {n2}")
         self.btn_bright_cal.setEnabled(False)
         self.btn_dark_cal.setEnabled(False)
         self.btn_start_scos.setEnabled(False)
-        self.status.showMessage(f"Bright calibration: 0 / {n2} frames…")
 
     def _finish_bright_cal(self):
         """
@@ -611,10 +619,16 @@ class MainWindow(QMainWindow):
 
         self._bright_cal_collector = None
         self._restore_cal_buttons()
-        self.status.showMessage("Bright calibration complete.")
+        QMessageBox.information(
+            self, "Bright Calibration Complete",
+            f"Bright calibration complete — {n_collected} frames collected.\n\n"
+            "Press Start SCOS to begin measurement."
+        )
 
     def _restore_cal_buttons(self):
         """Re-enable calibration and SCOS buttons after either cal finishes or is cancelled."""
+        self.btn_dark_cal.setText("Dark Calibration")
+        self.btn_bright_cal.setText("Bright Calibration")
         self.btn_dark_cal.setEnabled(True)
         self.btn_bright_cal.setEnabled(True)
         self.btn_start_scos.setEnabled(True)
@@ -655,12 +669,10 @@ class MainWindow(QMainWindow):
         self._arduino_thread.progress.connect(self.status.showMessage)
         self._arduino_thread.done.connect(self._on_arduino_done)
         self._arduino_thread.start()
-        self.chk_trigger.setText("External Trigger  (uploading…)")
         self.chk_trigger.setEnabled(False)
         self.status.showMessage("Arduino: connecting…")
 
     def _on_arduino_done(self, ok: bool, msg: str):
-        self.chk_trigger.setText("External Trigger")
         self.chk_trigger.setEnabled(True)
         if ok:
             exp = self.spn_exposure.value()
@@ -711,7 +723,6 @@ class MainWindow(QMainWindow):
         if elapsed >= 1.0:
             fps = self._fps_count / elapsed
             self._fps_label.setText(f"FPS: {fps:.1f}")
-            self.lbl_fps.setText(f"FPS  : {fps:.1f}")
             self._fps_count = 0
             self._last_fps_time = now
 
@@ -728,11 +739,13 @@ class MainWindow(QMainWindow):
 
         # Calibration intercepts — after FPS/stats (so labels stay live) and
         # before the rate-limiter (every frame must be counted).
+        # Progress is shown in the button text, not the status bar, because
+        # _on_display_frame overwrites the status bar at 30 FPS.
         if self._dark_cal_collector is not None:
             self._dark_cal_collector.add_frame(frame)
             n       = self._dark_cal_collector.n_collected
             n_total = self._dark_cal_collector.n_target
-            self.status.showMessage(f"Dark calibration: {n} / {n_total} frames…")
+            self.btn_dark_cal.setText(f"Dark Cal: {n} / {n_total}")
             if self._dark_cal_collector.done:
                 self._finish_dark_cal()
             return
@@ -741,7 +754,7 @@ class MainWindow(QMainWindow):
             self._bright_cal_collector.add_frame(frame)
             n       = self._bright_cal_collector.n_collected
             n_total = self._bright_cal_collector.n_target
-            self.status.showMessage(f"Bright calibration: {n} / {n_total} frames…")
+            self.btn_bright_cal.setText(f"Bright Cal: {n} / {n_total}")
             if self._bright_cal_collector.done:
                 self._finish_bright_cal()
             return
@@ -771,7 +784,6 @@ class MainWindow(QMainWindow):
             avg_ms = sum(self._proc_times) / len(self._proc_times)
             if (now - self._last_proc_label_time) >= 1.0:
                 self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
-                self.lbl_proc.setText(f"Proc : {avg_ms:.0f} ms (last {proc_ms:.0f} ms)")
                 self._last_proc_label_time = now
 
             t = time.time() - self._start_time
@@ -801,7 +813,13 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Camera Warning", msg)
 
     def _on_camera_error(self, msg: str):
-        self.status.showMessage(f"Camera error: {msg}")
+        # pypylon reports "device removed" on GigE timeout even when the camera
+        # is physically present — rewrite to avoid confusing the user.
+        if "removed" in msg.lower() or "disconnect" in msg.lower():
+            display = "Camera connection lost — press Start Video to reconnect."
+        else:
+            display = f"Camera error: {msg}"
+        self.status.showMessage(display)
         self.btn_start_video.setChecked(False)
 
         # Diagnose trigger-mode failures: the camera times out when no triggers arrive

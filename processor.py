@@ -339,8 +339,11 @@ class SCOSProcessor:
         mean_sq   = mean_im ** 2
         mask_safe = mask & (mean_sq > 0)          # combined ROI + numerical-safety mask
 
+        # Divide only on safe pixels to avoid NumPy divide-by-zero warnings.
+        safe_mean_sq = mean_sq[mask_safe]
+
         # Raw κ² — no corrections
-        kappa2_raw = float(np.mean((var_im / mean_sq)[mask_safe]))
+        kappa2_raw = float(np.mean(var_im[mask_safe] / safe_mean_sq))
 
         # Corrected κ² — subtract all noise terms in-place to avoid temporaries
         # corr_num = var_im − G·mean − spVar − dark_var − 1/12
@@ -351,7 +354,7 @@ class SCOSProcessor:
             corr_num -= self.dark_var               # in-place
         corr_num -= (1.0 / 12.0)                   # scalar, in-place
 
-        kappa2_corr = float(np.mean((corr_num / mean_sq)[mask_safe]))
+        kappa2_corr = float(np.mean(corr_num[mask_safe] / safe_mean_sq))
 
         mean_intensity = float(np.mean(im[mask]))
         return kappa2_raw, kappa2_corr, mean_intensity
