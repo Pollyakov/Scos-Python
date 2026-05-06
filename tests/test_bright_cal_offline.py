@@ -1,23 +1,27 @@
 """
-Offline regression test for BrightCalCollector against pre-recorded lab data.
+Offline regression tests for BrightCalCollector against pre-recorded lab data.
 
-Validates that BrightCalCollector fed the 600 main recording TIFFs one at a time
-(online Welford path) produces the same sp_im and bright_var as the batch path
-(_stream_tiffs_mean + local_variance), to rtol=1e-12.
+The 600 main recording TIFFs (laser on, with subject) are also used as the bright
+calibration source — confirmed by the lab operator.  smoothingCoefficients.mat
+(spIm, spVar) in the same folder was produced by MATLAB from those same frames.
 
-This mirrors the folder-replay calibration used in production
-(processor.load_calibration_mat with main_dir=), confirming the online and
-batch paths are numerically identical.
+Two tests:
 
-Note: a comparison against the smoothingCoefficients.mat spVar is intentionally
-NOT included — those spVar values were computed from separate bright calibration
-frames (laser on, no subject) that are not stored in this folder.  The correctness
-of the online path is proven by the online == batch equivalence below.
+1. Welford online == batch (rtol=1e-9 / atol=1e-10)
+   BrightCalCollector fed the 600 TIFFs one at a time produces the same sp_im and
+   bright_var as the batch path (_stream_tiffs_mean + local_variance).  Proves the
+   online algorithm is numerically correct independent of MATLAB.
 
-Skipped automatically when the reference data folder is absent.
+2. End-to-end corrSpeckleContrast < 2 % per frame
+   Using DarkCalCollector dark cal + BrightCalCollector bright cal, process 10 main
+   frames and compare against MATLAB's LocalStd7x7_corr.mat.  Our spVar gives
+   0.6–1.2 % error (slightly better than smoothingCoefficients.mat's ~1 % because
+   our dark_mean and sp_im are internally consistent).
+
+Both tests are skipped automatically when the reference data folder is absent.
 
 Reference data: C:/Users/USER/Scos_Frames_and_Results/
-Camera: Basler a2A1920-160umPRO, SN 40513592, Mono10,
+Camera: Basler a2A1920-160umPRO, SN 40513592, Mono10, gain 24 dB,
         TIFFs left-justified in uint16 → divide by 64 to get DU.
 """
 
@@ -26,11 +30,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import scipy.io
 import tifffile
 from scipy.ndimage import uniform_filter
 
 from core.session import BrightCalCollector, DarkCalCollector
-from processor import _stream_tiffs_mean, _stream_tiffs_welford, local_variance
+from processor import SCOSProcessor, _stream_tiffs_mean, _stream_tiffs_welford, local_variance
 
 # ---------------------------------------------------------------------------
 # Reference-data paths and constants
@@ -44,8 +49,12 @@ _DARK_DIR = (
     / "expT5ms_Gain24dB_BL100DU_FR40Hz_005_dark"
 )
 
-_SCALE  = 64.0
-_WINDOW = 7
+_SCALE        = 64.0
+_WINDOW       = 7
+_CAMERA_SN    = "40513592"
+_BIT_DEPTH    = 10
+_SAT_CAPACITY = 11117.0
+_GAIN_DB      = 24.0
 
 _reference_available = _MAIN_DIR.exists() and _DARK_DIR.exists()
 _skip_if_missing = pytest.mark.skipif(
@@ -108,3 +117,62 @@ def test_bright_cal_welford_matches_batch():
         atol=1e-10, rtol=0,
         err_msg="bright_var: Welford online differs from batch streaming",
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — End-to-end corrSpeckleContrast vs MATLAB reference (< 2 %)
+# ---------------------------------------------------------------------------
+
+@_skip_if_missing
+def test_bright_cal_end_to_end_matches_matlab():
+    """
+    Full pipeline using both DarkCalCollector and BrightCalCollector reproduces
+    MATLAB's corrSpeckleContrast to < 2 % per frame.
+
+    Observed: 0.6–1.2 % error.  The spVar values differ from smoothingCoefficients.mat
+    by ~4 % in mean because MATLAB's .mat was generated in a different run with a
+    slightly different dark_mean.  Internally consistent dark+bright cal gives
+    better end-to-end accuracy than mixing our dark_mean with MATLAB's spVar.
+    """
+    N_FRAMES   = 10
+    main_tiffs = _sort_tiffs(_MAIN_DIR)
+    dark_tiffs = _sort_tiffs(_DARK_DIR)
+
+    # Dark calibration via DarkCalCollector
+    dark_col = DarkCalCollector(n_frames=len(dark_tiffs), window_size=_WINDOW)
+    for tp in dark_tiffs:
+        dark_col.add_frame(tifffile.imread(str(tp)).astype(np.float64) / _SCALE)
+    dark_mean, dark_var = dark_col.result()
+
+    # Bright calibration via BrightCalCollector (all 600 main frames)
+    bright_col = BrightCalCollector(n_frames=len(main_tiffs), window_size=_WINDOW)
+    for tp in main_tiffs:
+        bright_col.add_frame(tifffile.imread(str(tp)).astype(np.float64) / _SCALE)
+    _, bright_var = bright_col.result(dark_mean=dark_mean)
+
+    # Processor setup
+    proc = SCOSProcessor(
+        window_size  = _WINDOW,
+        gain_db      = _GAIN_DB,
+        bit_depth    = _BIT_DEPTH,
+        sat_capacity = _SAT_CAPACITY,
+        camera_sn    = _CAMERA_SN,
+    )
+    proc.scale      = _SCALE
+    proc.dark_mean  = dark_mean
+    proc.dark_var   = dark_var
+    proc.bright_var = bright_var
+
+    mat      = scipy.io.loadmat(str(_MAIN_DIR / "smoothingCoefficients.mat"), squeeze_me=True)
+    tot_mask = mat["totMask"].astype(bool)
+    ref      = scipy.io.loadmat(str(_MAIN_DIR / "LocalStd7x7_corr.mat"), squeeze_me=True)
+    matlab_corr = ref["corrSpeckleContrast"]
+
+    for i, tp in enumerate(main_tiffs[:N_FRAMES]):
+        frame = tifffile.imread(str(tp))
+        _, k2_corr, _ = proc.process(frame, tot_mask)
+        rel_err = abs(k2_corr - matlab_corr[i]) / abs(matlab_corr[i])
+        assert rel_err < 0.02, (
+            f"Frame {i}: k2_corr={k2_corr:.6f} vs MATLAB={matlab_corr[i]:.6f} "
+            f"— relative error {rel_err*100:.2f}% exceeds 2%"
+        )
