@@ -12,6 +12,10 @@ from enum import Enum, auto
 import numpy as np
 from scipy.ndimage import uniform_filter
 
+# local_variance lives in processor.py for now; imported here so core/ code
+# doesn't duplicate the cv2 / scipy fallback logic.
+from processor import local_variance
+
 
 class State(Enum):
     IDLE          = auto()
@@ -107,3 +111,80 @@ class DarkCalCollector:
         raw_var  = self._M2 / (self._n - 1)          # unbiased, matches MATLAB var()
         dark_var = uniform_filter(raw_var, size=self.window_size)
         return self._mean.copy(), dark_var
+
+
+class BrightCalCollector:
+    """
+    Online per-pixel mean using Welford's algorithm.
+
+    Accumulates N2 bright frames one at a time, then computes:
+        sp_im      = mean_bright − dark_mean   (spIm in MATLAB)
+        bright_var = local spatial variance of sp_im   (spVar in MATLAB)
+
+    bright_var is set as processor.bright_var in process() to correct for
+    camera fixed-pattern noise from the illuminated sensor.
+
+    Usage:
+        col = BrightCalCollector(n_frames=600, window_size=7)
+        for frame in camera:
+            col.add_frame(frame)
+            if col.done:
+                sp_im, bright_var = col.result(dark_mean=proc.dark_mean)
+                break
+    """
+
+    def __init__(self, n_frames: int, window_size: int) -> None:
+        self.n_target    = n_frames
+        self.window_size = window_size
+        self._n:    int               = 0
+        self._mean: np.ndarray | None = None
+
+    # ------------------------------------------------------------------
+    # Properties
+
+    @property
+    def n_collected(self) -> int:
+        return self._n
+
+    @property
+    def done(self) -> bool:
+        return self._n >= self.n_target
+
+    # ------------------------------------------------------------------
+    # Frame accumulation
+
+    def add_frame(self, frame: np.ndarray) -> None:
+        """Incorporate one frame into the running mean (Welford)."""
+        f = frame.astype(np.float64)
+        self._n += 1
+        if self._mean is None:
+            self._mean = np.zeros_like(f)
+        self._mean += (f - self._mean) / self._n
+
+    # ------------------------------------------------------------------
+    # Final computation
+
+    def result(
+        self, dark_mean: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return (sp_im, bright_var).
+
+        sp_im      — mean bright image minus dark_mean [DU].
+                     If dark_mean is None, sp_im = mean_bright (no subtraction).
+        bright_var — local spatial variance of sp_im, computed with the same
+                     window_size box filter used for κ².  Matches MATLAB:
+                         spIm  = mean(bright_frames) − darkIm
+                         spVar = stdfilt(spIm, true(windowSize)).^2
+
+        Raises RuntimeError if no frames have been collected.
+        """
+        if self._n < 1 or self._mean is None:
+            raise RuntimeError(
+                f"BrightCalCollector needs at least 1 frame; only {self._n} collected."
+            )
+        sp_im = self._mean.copy()
+        if dark_mean is not None:
+            sp_im -= dark_mean
+        _, bright_var = local_variance(sp_im, self.window_size)
+        return sp_im, bright_var
