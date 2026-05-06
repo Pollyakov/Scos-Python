@@ -25,7 +25,9 @@ pg.setConfigOption('foreground', '#cccccc')
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--mock-tiff", type=str, default=None,
-                        help="Replay a TIFF stack instead of opening a Basler camera.")
+                        help="Replay a multipage TIFF stack (synthetic data).")
+    parser.add_argument("--mock-folder", type=str, default=None,
+                        help="Replay a per-frame TIFF folder (real lab recording).")
     args, _ = parser.parse_known_args()
 
     app = QApplication(sys.argv)
@@ -46,7 +48,10 @@ def main():
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
 
-    if args.mock_tiff:
+    if args.mock_folder:
+        from folder_camera import FolderMockCamera
+        camera = FolderMockCamera(args.mock_folder)
+    elif args.mock_tiff:
         from mock_camera import MockCameraThread
         camera = MockCameraThread(args.mock_tiff)
     else:
