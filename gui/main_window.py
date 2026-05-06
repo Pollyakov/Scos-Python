@@ -23,6 +23,39 @@ from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 
 
+class _CalibrationLoaderThread(QThread):
+    """Background thread: streams dark TIFFs + computes spVar from main TIFFs."""
+    done = pyqtSignal(bool, str)   # (success, status message)
+
+    def __init__(self, processor, dark_dir, main_dir, smoothing_mat,
+                 scale, sat_capacity, window_size, parent=None):
+        super().__init__(parent)
+        self._proc    = processor
+        self._dark    = dark_dir
+        self._main    = main_dir        # NEW: compute spVar from raw frames
+        self._smooth  = smoothing_mat   # fallback if main_dir is None
+        self._scale   = scale
+        self._sat     = sat_capacity
+        self._window  = window_size
+
+    def run(self):
+        try:
+            self._proc.load_calibration_mat(
+                smoothing_mat=self._smooth,
+                dark_dir=self._dark,
+                main_dir=self._main,
+                scale=self._scale,
+                sat_capacity=self._sat,
+                window_size=self._window,
+            )
+            n_dark = len(list(self._dark.glob("*.tiff"))) if self._dark else 0
+            src    = "computed from frames" if self._main else "loaded from mat"
+            self.done.emit(True,
+                f"dark:{n_dark}  spVar:{src}  sat_cap={self._sat:.0f}e-")
+        except Exception as e:
+            self.done.emit(False, str(e))
+
+
 class _ArduinoUploadThread(QThread):
     """Background thread that compiles and uploads the Arduino sketch."""
     progress = pyqtSignal(str)          # intermediate status messages
@@ -58,7 +91,9 @@ class MainWindow(QMainWindow):
         self._last_proc_label_time = 0.0
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
+        self._calib_thread:   _CalibrationLoaderThread | None = None
         self._arduino_thread: _ArduinoUploadThread | None = None
+        self._last_scos_proc_t = 0.0   # monotonic time of last SCOS process() call
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -311,6 +346,9 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("Video running")
                 # Read back actual camera params and update spinboxes
                 self._sync_params_from_camera()
+                # Auto-load calibration when replaying a real recording folder
+                if hasattr(self.camera, "get_calibration_mat"):
+                    self._auto_load_folder_calibration()
             except Exception as e:
                 self.btn_start_video.setChecked(False)
                 QMessageBox.critical(self, "Camera Error", str(e))
@@ -439,6 +477,17 @@ class MainWindow(QMainWindow):
 
         if not self._scos_active or self._mask is None:
             return
+
+        # Rate-limit SCOS processing to avoid GUI freeze when process() is slower
+        # than the camera frame rate.  Once we have timing data, skip frames that
+        # arrive before the previous processing budget has elapsed.  Without this,
+        # frame_ready signals queue up faster than the GUI thread can drain them.
+        if self._proc_times:
+            avg_proc_s = (sum(self._proc_times) / len(self._proc_times)) / 1000.0
+            if time.monotonic() - self._last_scos_proc_t < avg_proc_s * 0.95:
+                return  # still within last processing budget — skip this frame
+        self._last_scos_proc_t = time.monotonic()
+
         try:
             t0 = time.perf_counter()
             k2_raw, k2_corr, _ = self.processor.process(frame, self._mask)
@@ -505,26 +554,89 @@ class MainWindow(QMainWindow):
                 )
 
     def _sync_params_from_camera(self):
-        """Read current camera params and populate spinboxes."""
+        """Read current camera params and populate all GUI controls."""
         try:
             info = self.camera.get_info()
             if info:
                 self.spn_exposure.blockSignals(True)
                 self.spn_gain.blockSignals(True)
                 self.spn_fps.blockSignals(True)
+                self.cmb_format.blockSignals(True)
                 self.spn_exposure.setValue(info["exposure_us"] / 1000.0)
                 self.spn_gain.setValue(info["gain_db"])
                 if not self.chk_trigger.isChecked():
                     self.spn_fps.setValue(info["frame_rate"])
+                if info.get("pixel_format"):
+                    self.cmb_format.setCurrentText(info["pixel_format"])
                 self.spn_exposure.blockSignals(False)
                 self.spn_gain.blockSignals(False)
                 self.spn_fps.blockSignals(False)
+                self.cmb_format.blockSignals(False)
                 self.status.showMessage(
                     f"{info['model']}  SN:{info['serial']}  "
                     f"{info['width']}×{info['height']}  {info['pixel_format']}"
                 )
         except Exception:
             pass
+
+    def _auto_load_folder_calibration(self):
+        """Start background calibration load for FolderMockCamera recordings.
+
+        Streams dark TIFFs + main TIFFs in a background thread so the GUI stays
+        responsive.  Disables 'Start SCOS' until calibration finishes.
+
+        Calibration order:
+          1. Stream dark_dir TIFFs  → dark_mean, dark_var
+          2. Stream recording TIFFs → mean_bright → spIm → spVar (computed from scratch)
+          Uses smoothingCoefficients.mat as spVar fallback if main_dir fails.
+        """
+        dark_dir  = self.camera.get_dark_dir()
+        smoothing = self.camera.get_calibration_mat()   # fallback for spVar
+        main_dir  = self.camera._recording_dir          # for computing spVar
+
+        info    = self.camera.get_info()
+        sat_cap = info.get("sat_capacity", None)
+        self.processor.gain_db   = info.get("gain_db",   self.processor.gain_db)
+        self.processor.bit_depth = info.get("bit_depth", 10)
+        self._pending_mask_mat   = self.camera.get_mask_mat()
+
+        self.btn_start_scos.setEnabled(False)
+        self.status.showMessage(
+            "Computing calibration (dark + spVar) in background …"
+        )
+
+        self._calib_thread = _CalibrationLoaderThread(
+            self.processor, dark_dir, main_dir, smoothing,
+            64.0, sat_cap, self.spn_window.value(), self,
+        )
+        self._calib_thread.done.connect(self._on_calibration_done)
+        self._calib_thread.start()
+
+    def _on_calibration_done(self, success: bool, msg: str):
+        """Runs on the GUI thread when _CalibrationLoaderThread finishes."""
+        self.btn_start_scos.setEnabled(True)
+
+        if not success:
+            self.status.showMessage(f"Calibration failed: {msg}")
+            return
+
+        # Load ROI mask from Mask.mat (fast — just reads one small file)
+        mask_mat = getattr(self, "_pending_mask_mat", None)
+        if mask_mat is not None:
+            try:
+                mat = scipy.io.loadmat(str(mask_mat))
+                if "totMask" in mat:
+                    self._mask = mat["totMask"].astype(bool)
+                if "channels" in mat:
+                    ch = mat["channels"][0, 0]
+                    cy = float(ch["Centers"][0, 0])
+                    cx = float(ch["Centers"][0, 1])
+                    r  = float(ch["Radii"][0, 0])
+                    self.image_widget.set_roi_circle(cx, cy, r)
+            except Exception:
+                pass
+
+        self.status.showMessage(f"Calibration loaded — {msg}")
 
     def _save_data(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -553,6 +665,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
+        # Stop calibration thread first so it isn't writing to the processor
+        # while the camera thread is also stopped.
+        if self._calib_thread and self._calib_thread.isRunning():
+            self._calib_thread.wait(5000)
+            if self._calib_thread.isRunning():
+                self._calib_thread.terminate()
         self.camera.stop()
         self.camera.close()
         event.accept()

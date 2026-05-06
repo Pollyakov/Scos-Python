@@ -147,6 +147,10 @@ class ImageWidget(QWidget):
             self.roi_changed.emit(mask, {"cx": 0, "cy": 0, "r": 0})
             self.auto_contrast()
 
+    def set_roi_circle(self, cx: float, cy: float, r: float) -> None:
+        """Programmatically set the ROI circle (e.g. from a saved Mask.mat)."""
+        self._set_roi(cx, cy, r)
+
     def _set_roi(self, cx: float, cy: float, r: float):
         self._clear_roi()
         roi = pg.CircleROI(
