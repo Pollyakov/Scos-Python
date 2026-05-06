@@ -3,6 +3,7 @@ Main application window.
 Combines: live image, SCOS time-series plot, camera controls panel.
 """
 
+import datetime
 import json
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ import scipy.io
 
 from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError
+from core.session import DarkCalCollector
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 
@@ -101,6 +103,11 @@ class MainWindow(QMainWindow):
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
         self._arduino_debounce.timeout.connect(self._upload_arduino)
+
+        # Dark calibration state
+        self._dark_cal_collector:     DarkCalCollector | None = None
+        self._dark_cal_trigger_was_on: bool = False
+        self._dark_cal_output_folder:  Path | None = None
 
         # Camera & processor
         self.camera    = camera if camera is not None else CameraThread()
@@ -212,6 +219,14 @@ class MainWindow(QMainWindow):
             scos_layout, "Window Size:", 3, 51, 7, step=2
         )
 
+        self.spn_n1 = self._labeled_int_spin(
+            scos_layout, "Dark Frames (N1):", 10, 3000, 600, step=50
+        )
+
+        self.btn_dark_cal = QPushButton("Dark Calibration")
+        self.btn_dark_cal.setEnabled(False)   # enabled once Start Video is pressed
+        scos_layout.addWidget(self.btn_dark_cal)
+
         self.btn_start_scos = QPushButton("Start SCOS")
         self.btn_start_scos.setCheckable(True)
         self.btn_start_scos.setEnabled(False)
@@ -288,6 +303,7 @@ class MainWindow(QMainWindow):
             "trigger_delay_us": lambda v: self.spn_trigger_delay.setValue(float(v)),
             "external_trigger": lambda v: self.chk_trigger.setChecked(bool(v)),
             "window_size":     lambda v: self.spn_window.setValue(int(v)),
+            "n_dark_frames":   lambda v: self.spn_n1.setValue(int(v)),
         }.items():
             if key in cfg:
                 try:
@@ -331,6 +347,9 @@ class MainWindow(QMainWindow):
         self.spn_window.valueChanged.connect(
             lambda v: setattr(self.processor, 'window_size', v))
 
+        # Dark calibration
+        self.btn_dark_cal.clicked.connect(self._start_dark_cal)
+
         # Save
         self.btn_save.clicked.connect(self._save_data)
 
@@ -350,6 +369,7 @@ class MainWindow(QMainWindow):
                 self.camera.start_capture()
                 self.btn_start_video.setText("Stop Video")
                 self.btn_start_scos.setEnabled(True)
+                self.btn_dark_cal.setEnabled(True)
                 self.status.showMessage("Video running")
                 # Read back actual camera params and update spinboxes
                 self._sync_params_from_camera()
@@ -363,6 +383,11 @@ class MainWindow(QMainWindow):
             self._scos_active = False
             self.btn_start_scos.setChecked(False)
             self.btn_start_scos.setEnabled(False)
+            self.btn_dark_cal.setEnabled(False)
+            # Cancel any in-progress dark calibration gracefully
+            if self._dark_cal_collector is not None:
+                self._dark_cal_collector = None
+                self._calib_label.setText("Dark cal cancelled")
             self.camera.stop()
             self.btn_start_video.setText("Start Video")
             self.status.showMessage("Video stopped")
@@ -374,6 +399,7 @@ class MainWindow(QMainWindow):
             self.plot_widget.reset()
             self.btn_start_scos.setText("Stop SCOS")
             self.btn_save.setEnabled(False)
+            self.btn_dark_cal.setEnabled(False)   # can't calibrate mid-measurement
             self.processor.window_size = self.spn_window.value()
             self.processor.gain_db     = self.spn_gain.value()
             fmt = self.cmb_format.currentText()
@@ -382,6 +408,101 @@ class MainWindow(QMainWindow):
             self._scos_active = False
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
+            self.btn_dark_cal.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Dark calibration
+    # ------------------------------------------------------------------
+
+    def _start_dark_cal(self):
+        """
+        Walk the user through the dark calibration sequence:
+          1. Prompt to turn off the laser.
+          2. Prompt for an output folder (remembered for the session).
+          3. Switch camera to internal trigger (no Arduino upload side-effect).
+          4. Collect N1 frames via frame_ready → _on_scos_frame.
+          5. _finish_dark_cal() fires when N1 frames are in.
+        """
+        if not self.camera.isRunning():
+            QMessageBox.warning(self, "Dark Calibration",
+                                "Please press Start Video first.")
+            return
+
+        # Step 1: ask user to turn off the laser
+        reply = QMessageBox.question(
+            self,
+            "Dark Calibration — Step 1 of 1",
+            "Please turn off the laser.\n\n"
+            "Click OK when the laser is off and the measurement area is dark.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Ok:
+            return
+
+        # Step 2: choose (or reuse) output folder
+        if self._dark_cal_output_folder is None:
+            folder = QFileDialog.getExistingDirectory(
+                self, "Choose folder to save dark calibration .mat"
+            )
+            if not folder:
+                return
+            self._dark_cal_output_folder = Path(folder)
+
+        # Step 3: disable external trigger without triggering Arduino upload
+        self._dark_cal_trigger_was_on = self.chk_trigger.isChecked()
+        self.camera.set_trigger(False, self.spn_trigger_delay.value())
+
+        # Step 4: start collecting
+        n1 = self.spn_n1.value()
+        self._dark_cal_collector = DarkCalCollector(n1, self.spn_window.value())
+        self.btn_dark_cal.setEnabled(False)
+        self.btn_start_scos.setEnabled(False)
+        self.status.showMessage(f"Dark calibration: 0 / {n1} frames…")
+
+    def _finish_dark_cal(self):
+        """
+        Called (on GUI thread) when N1 frames have been collected.
+        Computes dark_mean + dark_var, stores them in the processor,
+        saves a .mat file, and restores the camera trigger.
+        """
+        try:
+            dark_mean, dark_var = self._dark_cal_collector.result()
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Dark Calibration Error", str(exc))
+            self._dark_cal_collector = None
+            self.btn_dark_cal.setEnabled(True)
+            self.btn_start_scos.setEnabled(True)
+            return
+
+        # Store in processor (same fields process() reads)
+        self.processor.dark_mean = dark_mean
+        self.processor.dark_var  = dark_var
+
+        # Save .mat — keys match the names used throughout processor.py and MATLAB
+        n_collected = self._dark_cal_collector.n_collected
+        if self._dark_cal_output_folder is not None:
+            ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            mat_path = self._dark_cal_output_folder / f"dark_cal_{ts}.mat"
+            scipy.io.savemat(str(mat_path), {
+                "mean_dark":  dark_mean,   # per-pixel temporal mean  [DU]
+                "var_dark":   dark_var,    # per-pixel variance, spatially filtered [DU²]
+                "n_frames":   n_collected,
+                "window_size": self._dark_cal_collector.window_size,
+            })
+            self._calib_label.setText(
+                f"Dark cal OK — {n_collected} frames, saved {mat_path.name}"
+            )
+        else:
+            self._calib_label.setText(f"Dark cal OK — {n_collected} frames (not saved)")
+
+        # Restore trigger to whatever the user had before
+        if self._dark_cal_trigger_was_on:
+            self.camera.set_trigger(True, self.spn_trigger_delay.value())
+
+        self._dark_cal_collector = None
+        self.btn_dark_cal.setEnabled(True)
+        self.btn_start_scos.setEnabled(True)
+        self.status.showMessage("Dark calibration complete.")
 
     def keyPressEvent(self, event):
         """Press 'v' to toggle External Trigger (and trigger Arduino upload)."""
@@ -489,6 +610,18 @@ class MainWindow(QMainWindow):
             self.lbl_p5.setText(    f"p5   : {p5:.1f} DU")
             self.lbl_p95.setText(   f"p95  : {p95:.1f} DU")
             self._last_stats_time = now
+
+        # Dark calibration — intercept frames here (after FPS/stats so the user
+        # sees live feedback during the ~30 s collection window).
+        # The rate-limiter below is intentionally bypassed: every frame must count.
+        if self._dark_cal_collector is not None:
+            self._dark_cal_collector.add_frame(frame)
+            n       = self._dark_cal_collector.n_collected
+            n_total = self._dark_cal_collector.n_target
+            self.status.showMessage(f"Dark calibration: {n} / {n_total} frames…")
+            if self._dark_cal_collector.done:
+                self._finish_dark_cal()
+            return
 
         if not self._scos_active or self._mask is None:
             return
