@@ -178,12 +178,12 @@ class TestLocalVariance:
         assert mean_im.shape == (64, 128)
         assert var_im.shape == (64, 128)
 
-    def test_output_dtype_float64(self):
-        """Outputs should be float64 regardless of input dtype."""
+    def test_output_dtype_float32(self):
+        """Outputs should be float32 (internal precision for fast box filtering)."""
         im = np.zeros((20, 20), dtype=np.uint16)
         mean_im, var_im = local_variance(im, 3)
-        assert mean_im.dtype == np.float64
-        assert var_im.dtype == np.float64
+        assert mean_im.dtype == np.float32
+        assert var_im.dtype == np.float32
 
     def test_known_simple_case(self):
         """

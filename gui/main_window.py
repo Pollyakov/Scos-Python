@@ -5,6 +5,7 @@ Combines: live image, SCOS time-series plot, camera controls panel.
 
 import datetime
 import json
+import queue
 import time
 from pathlib import Path
 
@@ -81,6 +82,59 @@ class _ArduinoUploadThread(QThread):
         self.done.emit(ok, msg)
 
 
+class _SCOSWorkerThread(QThread):
+    """
+    Runs SCOSProcessor.process() off the GUI thread.
+
+    Holds a 1-frame queue.  If a new frame arrives before the previous one has
+    been processed, the pending frame is replaced — this thread always processes
+    the most recent frame and never falls behind.
+    """
+    result_ready   = pyqtSignal(float, float, float, float)  # t, k2_raw, k2_corr, proc_ms
+    error_occurred = pyqtSignal(str)                          # GainTableError message
+
+    def __init__(self, processor, parent=None):
+        super().__init__(parent)
+        self._processor = processor
+        self._q: queue.Queue = queue.Queue(maxsize=1)
+
+    def submit(self, frame: np.ndarray, mask: np.ndarray, t: float) -> None:
+        """Enqueue a frame, dropping any unprocessed pending frame."""
+        try:
+            self._q.get_nowait()        # discard stale frame
+        except queue.Empty:
+            pass
+        try:
+            self._q.put_nowait((frame, mask, t))
+        except queue.Full:
+            pass                        # defensive — should not happen
+
+    def stop(self) -> None:
+        """Drain the queue and send a sentinel so run() exits cleanly."""
+        try:
+            self._q.get_nowait()
+        except queue.Empty:
+            pass
+        self._q.put_nowait(None)
+
+    def run(self) -> None:
+        while True:
+            item = self._q.get()        # blocks until frame or sentinel
+            if item is None:
+                break
+            frame, mask, t = item
+            t0 = time.perf_counter()
+            try:
+                k2_raw, k2_corr, _ = self._processor.process(frame, mask)
+            except GainTableError as e:
+                self.error_occurred.emit(str(e))
+                continue
+            except Exception:
+                continue
+            proc_ms = (time.perf_counter() - t0) * 1000
+            self.result_ready.emit(t, k2_raw, k2_corr, proc_ms)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, camera=None):
         super().__init__()
@@ -99,7 +153,6 @@ class MainWindow(QMainWindow):
         self._last_display_time = 0.0
         self._calib_thread:   _CalibrationLoaderThread | None = None
         self._arduino_thread: _ArduinoUploadThread | None = None
-        self._last_scos_proc_t = 0.0   # monotonic time of last SCOS process() call
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -114,6 +167,8 @@ class MainWindow(QMainWindow):
         # Camera & processor
         self.camera    = camera if camera is not None else CameraThread()
         self.processor = SCOSProcessor()
+        self._scos_worker = _SCOSWorkerThread(self.processor, parent=self)
+        self._scos_worker.start()
 
         self._build_ui()
         self._load_config()
@@ -330,10 +385,14 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         # Camera thread signals
-        self.camera.display_ready.connect(self._on_display_frame)  # 30 FPS cap → GUI
-        self.camera.frame_ready.connect(self._on_scos_frame)        # every frame → SCOS
+        self.camera.display_ready.connect(self._on_display_frame)   # 30 FPS cap → GUI
+        self.camera.frame_ready.connect(self._on_scos_frame)         # every frame → SCOS
         self.camera.error.connect(self._on_camera_error)
         self.camera.warning.connect(self._on_camera_warning)
+
+        # SCOS worker thread signals (results arrive on GUI thread via queued connection)
+        self._scos_worker.result_ready.connect(self._on_scos_result)
+        self._scos_worker.error_occurred.connect(self._on_scos_error)
 
         # Video start/stop
         self.btn_start_video.toggled.connect(self._toggle_video)
@@ -713,6 +772,7 @@ class MainWindow(QMainWindow):
         # Default mask = whole frame when no ROI is set
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)
+            self.processor.set_roi(self._mask)
             h, w = frame.shape
             self.lbl_size.setText(f"Size : {w}×{h}")
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
@@ -763,44 +823,39 @@ class MainWindow(QMainWindow):
         if not self._scos_active or self._mask is None:
             return
 
-        # Rate-limit SCOS processing to avoid GUI freeze when process() is slower
-        # than the camera frame rate.  Once we have timing data, skip frames that
-        # arrive before the previous processing budget has elapsed.  Without this,
-        # frame_ready signals queue up faster than the GUI thread can drain them.
-        if self._proc_times:
-            avg_proc_s = (sum(self._proc_times) / len(self._proc_times)) / 1000.0
-            if time.monotonic() - self._last_scos_proc_t < avg_proc_s * 0.95:
-                return  # still within last processing budget — skip this frame
-        self._last_scos_proc_t = time.monotonic()
+        # Hand the frame off to the worker thread.  The worker keeps a 1-frame
+        # queue so it always processes the latest frame and never falls behind.
+        t = time.time() - self._start_time
+        self._scos_worker.submit(frame, self._mask, t)
 
-        try:
-            t0 = time.perf_counter()
-            k2_raw, k2_corr, _ = self.processor.process(frame, self._mask)
-            proc_ms = (time.perf_counter() - t0) * 1000
+    def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float, proc_ms: float):
+        """Receives SCOS result from the worker thread — runs on the GUI thread."""
+        if not self._scos_active:
+            return
 
-            # Rolling average over last 100 frames
-            self._proc_times.append(proc_ms)
-            if len(self._proc_times) > 100:
-                self._proc_times.pop(0)
+        self._proc_times.append(proc_ms)
+        if len(self._proc_times) > 100:
+            self._proc_times.pop(0)
+
+        now = time.time()
+        if (now - self._last_proc_label_time) >= 1.0:
             avg_ms = sum(self._proc_times) / len(self._proc_times)
-            if (now - self._last_proc_label_time) >= 1.0:
-                self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
-                self._last_proc_label_time = now
+            self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
+            self._last_proc_label_time = now
 
-            t = time.time() - self._start_time
-            self.plot_widget.append(t, k2_corr)
-            self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
-            self.lbl_bfi.setText(  f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
-        except GainTableError as e:
-            # Stop SCOS before showing the dialog so queued frames don't re-trigger it.
-            self.btn_start_scos.setChecked(False)
-            QMessageBox.critical(self, "SCOS Error", str(e))
-        except Exception:
-            pass
+        self.plot_widget.append(t, k2_corr)
+        self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
+        self.lbl_bfi.setText(f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+
+    def _on_scos_error(self, msg: str):
+        """GainTableError raised in worker thread — stop SCOS and show dialog."""
+        self.btn_start_scos.setChecked(False)
+        QMessageBox.critical(self, "SCOS Error", msg)
 
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
         self.processor.window_size = self.spn_window.value()
+        self.processor.set_roi(mask)
         if circ.get("r", 0) > 0:
             self.lbl_roi.setText(
                 f"ROI  : cx={circ['cx']:.0f} cy={circ['cy']:.0f} r={circ['r']:.0f}"
@@ -921,6 +976,7 @@ class MainWindow(QMainWindow):
                 mat = scipy.io.loadmat(str(mask_mat))
                 if "totMask" in mat:
                     self._mask = mat["totMask"].astype(bool)
+                    self.processor.set_roi(self._mask)
                 if "channels" in mat:
                     ch = mat["channels"][0, 0]
                     cy = float(ch["Centers"][0, 0])
@@ -965,6 +1021,8 @@ class MainWindow(QMainWindow):
             self._calib_thread.wait(5000)
             if self._calib_thread.isRunning():
                 self._calib_thread.terminate()
+        self._scos_worker.stop()
+        self._scos_worker.wait(2000)
         self.camera.stop()
         self.camera.close()
         event.accept()

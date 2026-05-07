@@ -26,8 +26,17 @@ def run(width, height, window, duration_s, bit_depth, camera_fps):
     ys, xs = np.ogrid[:height, :width]
     mask   = (ys - cy) ** 2 + (xs - cx) ** 2 <= r ** 2
 
+    proc.set_roi(mask)   # precompute bounding-box crop
+
+    rows, cols = np.where(mask)
+    r0, r1 = rows.min(), rows.max()
+    c0, c1 = cols.min(), cols.max()
+    crop_h = r1 - r0 + 1
+    crop_w = c1 - c0 + 1
+
     print(f"Frame: {width}×{height}  window: {window}  bit_depth: {bit_depth}  camera: {camera_fps} Hz")
     print(f"Mask pixels: {mask.sum():,}  /  {width*height:,} total")
+    print(f"ROI crop: {crop_w}×{crop_h}  ({crop_w*crop_h*100//(width*height)}% of frame)")
     print(f"Running for {duration_s} s ...\n")
 
     durations = []
