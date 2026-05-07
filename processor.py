@@ -219,10 +219,10 @@ class SCOSProcessor:
     def __init__(self, window_size: int = 7, gain_db: float = 0.0,
                  bit_depth: int = 8, sat_capacity: float = 10500.0,
                  camera_sn: str | None = None):
-        self.window_size  = window_size
-        self.gain_db      = gain_db
-        self.bit_depth    = bit_depth
-        self.sat_capacity = sat_capacity
+        self.window_size   = window_size
+        self.gain_db       = gain_db
+        self.bit_depth     = bit_depth
+        self.sat_capacity  = sat_capacity
         # When set, process() uses load_gain_from_table() for measured DU/e.
         # When None, falls back to convert_gain() (formula-based).
         self.camera_sn    = camera_sn
@@ -234,9 +234,16 @@ class SCOSProcessor:
         self.dark_var   : np.ndarray | None = None  # spatially smoothed
         self.bright_var : np.ndarray | None = None  # spVar
 
+        self._cached_G  : float | None = None       # cached gain so CSV isn't re-read every frame
+
         # ROI crop: set by set_roi(); None = full frame (no crop).
         self._roi       : tuple[slice, slice] | None = None
         self._mask_crop : np.ndarray | None = None
+        # float32 crops of calibration arrays — rebuilt by set_roi().
+        # Keeping these as float32 avoids dtype-upcast in process() arithmetic.
+        self._dm_f32 : np.ndarray | None = None   # dark_mean crop
+        self._dv_f32 : np.ndarray | None = None   # dark_var crop
+        self._bv_f32 : np.ndarray | None = None   # bright_var crop
 
     def set_roi(self, mask: np.ndarray) -> None:
         """
@@ -246,14 +253,17 @@ class SCOSProcessor:
         the mask, padded by window_size//2 + 1 pixels so every edge pixel has a
         full neighbourhood for the box filter.  Matches MATLAB's im_cut crop.
 
-        Call this whenever the ROI mask changes.  Calibration arrays (dark_mean,
-        dark_var, bright_var) are sliced lazily inside process() — no need to
-        re-call set_roi() when calibration is updated.
+        Also caches float32 crops of dark_mean, dark_var, and bright_var so
+        that process() can stay in float32 throughout without repeated dtype
+        conversions.
+
+        Call this whenever the ROI mask OR calibration arrays change.
         """
         rows, cols = np.where(mask)
         if rows.size == 0:
             self._roi = None
             self._mask_crop = None
+            self._dm_f32 = self._dv_f32 = self._bv_f32 = None
             return
         pad = self.window_size // 2 + 1
         H, W = mask.shape
@@ -263,6 +273,11 @@ class SCOSProcessor:
         c1 = min(W, int(cols.max()) + pad + 1)
         self._roi = (slice(r0, r1), slice(c0, c1))
         self._mask_crop = mask[self._roi]
+        # Pre-build float32 crops so process() avoids repeated conversions.
+        roi = self._roi
+        self._dm_f32 = self.dark_mean[roi].astype(np.float32) if self.dark_mean  is not None else None
+        self._dv_f32 = self.dark_var[roi].astype(np.float32)  if self.dark_var   is not None else None
+        self._bv_f32 = self.bright_var[roi].astype(np.float32) if self.bright_var is not None else None
 
     def calibrate(self, dark_frames: np.ndarray) -> None:
         """
@@ -359,25 +374,31 @@ class SCOSProcessor:
         kappa2_corr   : noise-corrected κ²
         mean_intensity: mean pixel value inside ROI after dark subtraction
         """
-        if self.camera_sn is not None:
-            G = load_gain_from_table(self.camera_sn, self.bit_depth, self.gain_db)
-        else:
-            G = convert_gain(self.gain_db, self.bit_depth, self.sat_capacity)
+        if self._cached_G is None:
+            if self.camera_sn is not None:
+                self._cached_G = load_gain_from_table(self.camera_sn, self.bit_depth, self.gain_db)
+            else:
+                self._cached_G = convert_gain(self.gain_db, self.bit_depth, self.sat_capacity)
+        G = self._cached_G
 
         # Crop to ROI bounding box (set by set_roi) — same as MATLAB's im_cut.
         # Slicing numpy arrays is a zero-copy view; astype() below does the copy.
         if self._roi is not None:
             roi        = self._roi
             mask_work  = self._mask_crop
+            dark_mean  = self._dm_f32   # pre-cropped float32 — may be None
+            dark_var   = self._dv_f32
+            bright_var = self._bv_f32
         else:
             roi        = (slice(None), slice(None))
             mask_work  = mask
+            dark_mean  = self.dark_mean.astype(np.float32)  if self.dark_mean  is not None else None
+            dark_var   = self.dark_var.astype(np.float32)   if self.dark_var   is not None else None
+            bright_var = self.bright_var.astype(np.float32) if self.bright_var is not None else None
 
-        im = frame[roi].astype(np.float64) / self.scale
-
-        dark_mean  = self.dark_mean[roi]  if self.dark_mean  is not None else None
-        dark_var   = self.dark_var[roi]   if self.dark_var   is not None else None
-        bright_var = self.bright_var[roi] if self.bright_var is not None else None
+        # Stay in float32 throughout: avoids a redundant float64 allocation
+        # and keeps all subsequent arithmetic in float32 (cv2.blur is already f32).
+        im = frame[roi].astype(np.float32) / np.float32(self.scale)
 
         if dark_mean is not None:
             im -= dark_mean
@@ -395,12 +416,13 @@ class SCOSProcessor:
 
         # Corrected κ² — subtract all noise terms in-place to avoid temporaries
         # corr_num = var_im − G·mean − spVar − dark_var − 1/12
-        corr_num  = var_im - (G * mean_im)
+        # Cast G to float32 so the multiplication stays in float32.
+        corr_num  = var_im - (np.float32(G) * mean_im)
         if bright_var is not None:
             corr_num -= bright_var
         if dark_var is not None:
             corr_num -= dark_var
-        corr_num -= (1.0 / 12.0)
+        corr_num -= np.float32(1.0 / 12.0)
 
         kappa2_corr = float(np.mean(corr_num[mask_safe] / safe_mean_sq))
 

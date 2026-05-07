@@ -556,9 +556,11 @@ class MainWindow(QMainWindow):
             self.btn_start_scos.setEnabled(True)
             return
 
-        # Store in processor (same fields process() reads)
+        # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
         self.processor.dark_var  = dark_var
+        if self._mask is not None:
+            self.processor.set_roi(self._mask)
 
         # Save .mat — keys match the names used throughout processor.py and MATLAB
         n_collected = self._dark_cal_collector.n_collected
@@ -660,6 +662,8 @@ class MainWindow(QMainWindow):
             return
 
         self.processor.bright_var = bright_var
+        if self._mask is not None:
+            self.processor.set_roi(self._mask)
 
         n_collected = self._bright_cal_collector.n_collected
         if self._cal_output_folder is not None:
