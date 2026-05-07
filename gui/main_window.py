@@ -448,7 +448,13 @@ class MainWindow(QMainWindow):
                 # Read back actual camera params and update spinboxes
                 self._sync_params_from_camera()
                 # Auto-load calibration when replaying a real recording folder
-                if hasattr(self.camera, "get_calibration_mat"):
+                is_mock_folder = hasattr(self.camera, "get_calibration_mat")
+                if is_mock_folder:
+                    # External trigger and Arduino make no sense in playback mode
+                    self.chk_trigger.blockSignals(True)
+                    self.chk_trigger.setChecked(False)
+                    self.chk_trigger.setEnabled(False)
+                    self.chk_trigger.blockSignals(False)
                     self._auto_load_folder_calibration()
             except Exception as e:
                 self.btn_start_video.setChecked(False)
@@ -459,6 +465,7 @@ class MainWindow(QMainWindow):
             self.btn_start_scos.setEnabled(False)
             self.btn_dark_cal.setEnabled(False)
             self.btn_bright_cal.setEnabled(False)
+            self.chk_trigger.setEnabled(True)   # re-enable in case it was disabled for mock-folder
             # Cancel any in-progress calibration gracefully
             if self._dark_cal_collector is not None:
                 self._dark_cal_collector = None
