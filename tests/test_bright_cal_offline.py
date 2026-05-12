@@ -61,6 +61,7 @@ _skip_if_missing = pytest.mark.skipif(
     not _reference_available,
     reason="reference lab data not found — run on the lab machine to execute",
 )
+_slow = pytest.mark.slow
 
 
 def _sort_tiffs(folder: Path) -> list[Path]:
@@ -75,6 +76,7 @@ def _sort_tiffs(folder: Path) -> list[Path]:
 # Test — Welford online == batch streaming  (rtol = 1e-12)
 # ---------------------------------------------------------------------------
 
+@_slow
 @_skip_if_missing
 def test_bright_cal_welford_matches_batch():
     """
@@ -123,6 +125,7 @@ def test_bright_cal_welford_matches_batch():
 # Test 2 — End-to-end corrSpeckleContrast vs MATLAB reference (< 2 %)
 # ---------------------------------------------------------------------------
 
+@_slow
 @_skip_if_missing
 def test_bright_cal_end_to_end_matches_matlab():
     """
