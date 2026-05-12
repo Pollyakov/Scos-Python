@@ -161,10 +161,12 @@ def local_variance(im: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]
     return mean_im, var_im
 
 
-def _stream_tiffs_welford(tiff_files: list, scale: float) -> tuple[np.ndarray, np.ndarray]:
+def _stream_tiffs_welford(tiff_files: list, scale: float,
+                          on_progress=None) -> tuple[np.ndarray, np.ndarray]:
     """Per-pixel mean and unbiased variance from a list of TIFF paths (no full RAM load)."""
     import tifffile
     n    = len(tiff_files)
+    step = max(1, n // 20)
     mean = M2 = None
     for i, f in enumerate(tiff_files):
         fr = tifffile.imread(str(f)).astype(np.float64) / scale
@@ -174,19 +176,26 @@ def _stream_tiffs_welford(tiff_files: list, scale: float) -> tuple[np.ndarray, n
         delta  = fr - mean
         mean  += delta / (i + 1)
         M2    += delta * (fr - mean)
+        if on_progress is not None and (i % step == 0 or i == n - 1):
+            on_progress(i + 1, n)
     assert mean is not None and M2 is not None
     return mean, M2 / (n - 1)
 
 
-def _stream_tiffs_mean(tiff_files: list, scale: float) -> np.ndarray:
+def _stream_tiffs_mean(tiff_files: list, scale: float,
+                       on_progress=None) -> np.ndarray:
     """Per-pixel temporal mean from a list of TIFF paths."""
     import tifffile
+    n   = len(tiff_files)
+    step = max(1, n // 20)
     acc = None
-    for f in tiff_files:
+    for i, f in enumerate(tiff_files):
         fr = tifffile.imread(str(f)).astype(np.float64) / scale
         acc = fr if acc is None else acc + fr
+        if on_progress is not None and (i % step == 0 or i == n - 1):
+            on_progress(i + 1, n)
     assert acc is not None
-    return acc / len(tiff_files)
+    return acc / n
 
 
 def _sort_tiffs(folder) -> list:
@@ -313,6 +322,7 @@ class SCOSProcessor:
         scale: float = 64.0,
         sat_capacity: float | None = None,
         window_size: int | None = None,
+        on_progress: "callable | None" = None,
     ) -> None:
         """
         Load or compute calibration arrays.
@@ -340,18 +350,28 @@ class SCOSProcessor:
         if dark_dir is not None:
             tiffs = _sort_tiffs(dark_dir)
             if tiffs:
-                mean, M2_over_nm1 = _stream_tiffs_welford(tiffs, scale)
+                def _dark_prog(i, n):
+                    if on_progress:
+                        on_progress(f"Dark frames: {i}/{n}")
+                mean, M2_over_nm1 = _stream_tiffs_welford(tiffs, scale, _dark_prog)
                 self.dark_mean = mean
                 self.dark_var  = uniform_filter(M2_over_nm1, size=w)
+                if on_progress:
+                    on_progress("Dark calibration done")
 
         # --- Bright calibration (spVar) ---
         if main_dir is not None:
             # Compute from raw frames: spIm = mean(main) - dark_mean, then local variance
             tiffs = _sort_tiffs(main_dir)
             if tiffs:
-                mean_bright = _stream_tiffs_mean(tiffs, scale)
+                def _bright_prog(i, n):
+                    if on_progress:
+                        on_progress(f"Bright frames: {i}/{n}")
+                mean_bright = _stream_tiffs_mean(tiffs, scale, _bright_prog)
                 sp_im = mean_bright - (self.dark_mean if self.dark_mean is not None
                                        else np.zeros_like(mean_bright))
+                if on_progress:
+                    on_progress("Computing spVar…")
                 _, self.bright_var = local_variance(sp_im, w)
         elif smoothing_mat is not None:
             # Fallback: load pre-computed spVar from MATLAB file

@@ -66,6 +66,12 @@ class PlotWidget(QWidget):
         if self._dirty:
             self.curve.setData(self._time, self._bfi)
             self._dirty = False
+            if len(self._bfi) >= 10:
+                arr = np.array(self._bfi)
+                lo = float(np.percentile(arr, 5))
+                hi = float(np.percentile(arr, 95))
+                pad = max((hi - lo) * 0.15, hi * 0.05)
+                self.graph.setYRange(max(0.0, lo - pad), hi + pad, padding=0)
 
     def reset(self):
         self._time.clear()

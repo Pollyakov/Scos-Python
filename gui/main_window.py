@@ -28,7 +28,8 @@ from gui.plot_widget  import PlotWidget
 
 class _CalibrationLoaderThread(QThread):
     """Background thread: streams dark TIFFs + computes spVar from main TIFFs."""
-    done = pyqtSignal(bool, str)   # (success, status message)
+    done     = pyqtSignal(bool, str)   # (success, status message)
+    progress = pyqtSignal(str)         # human-readable step description
 
     def __init__(self, processor, dark_dir, main_dir, smoothing_mat,
                  scale, sat_capacity, window_size, parent=None):
@@ -50,6 +51,7 @@ class _CalibrationLoaderThread(QThread):
                 scale=self._scale,
                 sat_capacity=self._sat,
                 window_size=self._window,
+                on_progress=self.progress.emit,
             )
             n_dark = len(list(self._dark.glob("*.tiff"))) if self._dark else 0
             src    = "computed from frames" if self._main else "loaded from mat"
@@ -203,15 +205,8 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status)
         self.status.showMessage("Ready — camera not started")
 
-        # FPS timer label
-        self._fps_label = QLabel("FPS: --")
-        self.status.addPermanentWidget(self._fps_label)
         self._last_fps_time = time.time()
         self._fps_count = 0
-
-        # Processing time label
-        self._proc_label = QLabel("Proc: -- ms")
-        self.status.addPermanentWidget(self._proc_label)
 
         # Calibration status — permanent so per-frame messages don't overwrite it
         self._calib_label = QLabel("")
@@ -292,6 +287,12 @@ class MainWindow(QMainWindow):
         self.btn_start_scos = QPushButton("Start SCOS")
         self.btn_start_scos.setCheckable(True)
         self.btn_start_scos.setEnabled(False)
+        self.btn_start_scos.setStyleSheet("""
+            QPushButton          { background:#2a7a2a; color:white; font-weight:bold;
+                                   padding:4px; border-radius:3px; }
+            QPushButton:checked  { background:#7a2a2a; }
+            QPushButton:disabled { background:#444; color:#888; font-weight:normal; }
+        """)
         scos_layout.addWidget(self.btn_start_scos)
 
         self.btn_save = QPushButton("Save Data...")
@@ -300,12 +301,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(scos_group)
 
         # --- Info labels ---
-        # FPS and Proc are already in the permanent status-bar widgets;
-        # omitting them here keeps the panel short enough to avoid scrolling.
         info_group = QGroupBox("Info")
         info_layout = QVBoxLayout(info_group)
         info_layout.setSpacing(1)
         info_layout.setContentsMargins(4, 8, 4, 4)
+
+        self._fps_label  = QLabel("FPS  : --")
+        self._proc_label = QLabel("Proc : -- ms")
+        for lbl in (self._fps_label, self._proc_label):
+            lbl.setStyleSheet("font-weight: bold; color: #00cc44;")
+        self._proc_label.setStyleSheet("font-weight: bold; color: #ffaa00;")
 
         self.lbl_size   = QLabel("Size : --")
         self.lbl_mean_i = QLabel("⟨I⟩  : --")
@@ -314,7 +319,8 @@ class MainWindow(QMainWindow):
         self.lbl_kappa  = QLabel("κ²   : --")
         self.lbl_bfi    = QLabel("1/κ² : --")
         self.lbl_roi    = QLabel("ROI  : full frame")
-        for lbl in (self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
+        for lbl in (self._fps_label, self._proc_label, self.lbl_size,
+                    self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
                     self.lbl_kappa, self.lbl_bfi, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
@@ -963,17 +969,20 @@ class MainWindow(QMainWindow):
         self._pending_mask_mat   = self.camera.get_mask_mat()
 
         self.btn_start_scos.setEnabled(False)
+        self.btn_start_scos.setText("Waiting for calibration…")
         self._calib_label.setText("Calibrating…")
 
         self._calib_thread = _CalibrationLoaderThread(
             self.processor, dark_dir, main_dir, smoothing,
             64.0, sat_cap, self.spn_window.value(), self,
         )
+        self._calib_thread.progress.connect(self._calib_label.setText)
         self._calib_thread.done.connect(self._on_calibration_done)
         self._calib_thread.start()
 
     def _on_calibration_done(self, success: bool, msg: str):
         """Runs on the GUI thread when _CalibrationLoaderThread finishes."""
+        self.btn_start_scos.setText("Start SCOS")
         self.btn_start_scos.setEnabled(True)
 
         if not success:
