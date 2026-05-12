@@ -28,6 +28,8 @@ def main():
                         help="Replay a multipage TIFF stack (synthetic data).")
     parser.add_argument("--mock-folder", type=str, default=None,
                         help="Replay a per-frame TIFF folder (real lab recording).")
+    parser.add_argument("--mock-h5", type=str, default=None,
+                        help="Replay a saved scos_*.h5 result file (no camera/processing).")
     args, _ = parser.parse_known_args()
 
     app = QApplication(sys.argv)
@@ -48,17 +50,22 @@ def main():
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
 
-    if args.mock_folder:
+    if args.mock_h5:
+        from h5_replay import H5ReplayThread, _NullCamera
+        camera = _NullCamera()
+        window = MainWindow(camera=camera, h5_replay=H5ReplayThread(args.mock_h5, loop=True))
+    elif args.mock_folder:
         from folder_camera import FolderMockCamera
         camera = FolderMockCamera(args.mock_folder)
+        window = MainWindow(camera=camera)
     elif args.mock_tiff:
         from mock_camera import MockCameraThread
         camera = MockCameraThread(args.mock_tiff)
+        window = MainWindow(camera=camera)
     else:
         from camera import CameraThread
         camera = CameraThread()
-
-    window = MainWindow(camera=camera)
+        window = MainWindow(camera=camera)
     window.show()
     sys.exit(app.exec())
 

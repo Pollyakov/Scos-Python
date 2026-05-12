@@ -139,7 +139,7 @@ class _SCOSWorkerThread(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, camera=None):
+    def __init__(self, camera=None, h5_replay=None):
         super().__init__()
         self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
         screen = QApplication.primaryScreen().availableGeometry()
@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
         # Camera & processor
         self.camera    = camera if camera is not None else CameraThread()
         self.processor = SCOSProcessor()
+        self._h5_replay = h5_replay          # not None → HDF5 replay mode
         self._scos_worker = _SCOSWorkerThread(self.processor, parent=self)
         self._scos_worker.start()
 
@@ -403,6 +404,10 @@ class MainWindow(QMainWindow):
         self._scos_worker.result_ready.connect(self._on_scos_result)
         self._scos_worker.error_occurred.connect(self._on_scos_error)
 
+        if self._h5_replay is not None:
+            self._h5_replay.result_ready.connect(self._on_scos_result)
+            self._h5_replay.finished_replay.connect(self._on_h5_replay_finished)
+
         # Video start/stop
         self.btn_start_video.toggled.connect(self._toggle_video)
 
@@ -440,6 +445,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _toggle_video(self, checked: bool):
+        if self._h5_replay is not None:
+            self._toggle_video_h5(checked)
+            return
+
         if checked:
             try:
                 self.camera.pixel_format  = self.cmb_format.currentText()
@@ -487,6 +496,36 @@ class MainWindow(QMainWindow):
             self.camera.stop()
             self.btn_start_video.setText("Start Video")
             self.status.showMessage("Video stopped")
+
+    def _toggle_video_h5(self, checked: bool):
+        """Start/stop HDF5 replay — no camera, no processor."""
+        if checked:
+            meta = self._h5_replay.get_metadata()
+            self.spn_fps.setValue(meta.get("frame_rate_hz", 20.0))
+            self.spn_exposure.setValue(meta.get("exposure_ms", 8.0))
+            self.spn_gain.setValue(meta.get("gain_db", 8.0))
+            self._start_time  = time.time()
+            self._scos_active = True
+            self.plot_widget.reset()
+            self._h5_replay.start_replay()
+            self.btn_start_video.setText("Stop Replay")
+            self.btn_start_scos.setEnabled(False)   # replay drives results directly
+            self.btn_dark_cal.setEnabled(False)
+            self.btn_bright_cal.setEnabled(False)
+            self.chk_trigger.setEnabled(False)
+            self.status.showMessage(f"Replaying: {self._h5_replay._path.name}")
+        else:
+            self._scos_active = False
+            self._h5_replay.stop()
+            self.btn_start_video.setText("Start Replay")
+            self.status.showMessage("Replay stopped")
+
+    def _on_h5_replay_finished(self):
+        """Called when H5ReplayThread exhausts the file (non-loop mode)."""
+        self._scos_active = False
+        self.btn_start_video.setChecked(False)
+        self.btn_start_video.setText("Start Replay")
+        self.status.showMessage("Replay finished")
 
     def _toggle_scos(self, checked: bool):
         if checked:
@@ -1083,6 +1122,8 @@ class MainWindow(QMainWindow):
                 self._calib_thread.terminate()
         self._scos_worker.stop()
         self._scos_worker.wait(2000)
+        if self._h5_replay is not None:
+            self._h5_replay.stop()
         self.camera.stop()
         self.camera.close()
         if self._recorder is not None:
