@@ -21,7 +21,8 @@ import scipy.io
 
 from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError
-from core.session import BrightCalCollector, DarkCalCollector
+from core.session   import BrightCalCollector, DarkCalCollector
+from core.recorder  import HDF5Recorder
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 
@@ -92,7 +93,7 @@ class _SCOSWorkerThread(QThread):
     been processed, the pending frame is replaced — this thread always processes
     the most recent frame and never falls behind.
     """
-    result_ready   = pyqtSignal(float, float, float, float)  # t, k2_raw, k2_corr, proc_ms
+    result_ready   = pyqtSignal(float, float, float, float, float)  # t, k2_raw, k2_corr, mean_i, proc_ms
     error_occurred = pyqtSignal(str)                          # GainTableError message
 
     def __init__(self, processor, parent=None):
@@ -127,14 +128,14 @@ class _SCOSWorkerThread(QThread):
             frame, mask, t = item
             t0 = time.perf_counter()
             try:
-                k2_raw, k2_corr, _ = self._processor.process(frame, mask)
+                k2_raw, k2_corr, mean_i = self._processor.process(frame, mask)
             except GainTableError as e:
                 self.error_occurred.emit(str(e))
                 continue
             except Exception:
                 continue
             proc_ms = (time.perf_counter() - t0) * 1000
-            self.result_ready.emit(t, k2_raw, k2_corr, proc_ms)
+            self.result_ready.emit(t, k2_raw, k2_corr, mean_i, proc_ms)
 
 
 class MainWindow(QMainWindow):
@@ -155,6 +156,8 @@ class MainWindow(QMainWindow):
         self._last_display_time = 0.0
         self._calib_thread:   _CalibrationLoaderThread | None = None
         self._arduino_thread: _ArduinoUploadThread | None = None
+        self._recorder:       HDF5Recorder | None = None
+        self._roi_circ:       dict = {}
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -498,12 +501,45 @@ class MainWindow(QMainWindow):
             self.processor.gain_db     = self.spn_gain.value()
             fmt = self.cmb_format.currentText()
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
+            self._start_recorder()
         else:
             self._scos_active = False
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
             self.btn_dark_cal.setEnabled(True)
             self.btn_bright_cal.setEnabled(True)
+            self._stop_recorder()
+
+    def _start_recorder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose folder to save HDF5 recording", str(Path.home())
+        )
+        if not folder:
+            return   # user cancelled — SCOS runs without auto-save
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = Path(folder) / f"scos_{ts}.h5"
+        meta = {
+            "frame_rate_hz":  self.spn_fps.value(),
+            "exposure_ms":    self.spn_exposure.value(),
+            "gain_db":        self.spn_gain.value(),
+            "window_size":    self.spn_window.value(),
+            "bit_depth":      int(self.cmb_format.currentText().replace("Mono", "")),
+            "roi_cx":         float(self._roi_circ.get("cx", -1)),
+            "roi_cy":         float(self._roi_circ.get("cy", -1)),
+            "roi_r":          float(self._roi_circ.get("r",  -1)),
+            "sat_capacity_e": float(self.processor.sat_capacity),
+        }
+        self._recorder = HDF5Recorder(path, meta)
+        self.status.showMessage(f"Recording → {path}")
+
+    def _stop_recorder(self) -> None:
+        if self._recorder is None:
+            return
+        self._recorder.close()
+        n = self._recorder.n_points
+        path = self._recorder.path
+        self._recorder = None
+        self.status.showMessage(f"Saved {n} points → {path}")
 
     # ------------------------------------------------------------------
     # Dark calibration
@@ -845,7 +881,8 @@ class MainWindow(QMainWindow):
         t = time.time() - self._start_time
         self._scos_worker.submit(frame, self._mask, t)
 
-    def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float, proc_ms: float):
+    def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float,
+                        mean_i: float, proc_ms: float):
         """Receives SCOS result from the worker thread — runs on the GUI thread."""
         if not self._scos_active:
             return
@@ -863,6 +900,8 @@ class MainWindow(QMainWindow):
         self.plot_widget.append(t, k2_corr)
         self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
         self.lbl_bfi.setText(f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+        if self._recorder is not None:
+            self._recorder.append(t, k2_raw, k2_corr, mean_i)
 
     def _on_scos_error(self, msg: str):
         """GainTableError raised in worker thread — stop SCOS and show dialog."""
@@ -871,6 +910,7 @@ class MainWindow(QMainWindow):
 
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
+        self._roi_circ = circ
         self.processor.window_size = self.spn_window.value()
         self.processor.set_roi(mask)
         if circ.get("r", 0) > 0:
@@ -1045,4 +1085,7 @@ class MainWindow(QMainWindow):
         self._scos_worker.wait(2000)
         self.camera.stop()
         self.camera.close()
+        if self._recorder is not None:
+            self._recorder.close()
+            self._recorder = None
         event.accept()
