@@ -80,6 +80,45 @@ class HDF5Recorder:
         self._buf_bfi.clear()
         self._buf_meani.clear()
 
+    def append_frame(self, frame: "np.ndarray") -> None:
+        """Save one raw camera frame. Creates 'frames' dataset on first call."""
+        import numpy as np
+        if "frames" not in self._f:
+            H, W = frame.shape
+            self._f.create_dataset(
+                "frames",
+                shape=(0, H, W), maxshape=(None, H, W),
+                chunks=(1, H, W), dtype=frame.dtype,
+                compression="gzip", compression_opts=1,
+            )
+        ds = self._f["frames"]
+        n = ds.shape[0]
+        ds.resize(n + 1, axis=0)
+        ds[n] = frame
+        if n % 10 == 9:
+            self._f.flush()
+
+    def save_calibration(
+        self,
+        mean_dark:   "np.ndarray | None",
+        var_dark:    "np.ndarray | None",
+        var_bright:  "np.ndarray | None",
+        mask:        "np.ndarray | None",
+    ) -> None:
+        """Write calibration arrays as 2D datasets.  Called once after Start SCOS."""
+        import numpy as np  # local import keeps top-level deps minimal
+        cal = self._f.require_group("calibration")
+        for name, arr in (
+            ("mean_dark",  mean_dark),
+            ("var_dark",   var_dark),
+            ("var_bright", var_bright),
+            ("mask",       mask),
+        ):
+            if arr is not None:
+                cal.create_dataset(name, data=arr.astype(np.float32),
+                                   compression="gzip", compression_opts=4)
+        self._f.flush()
+
     def close(self) -> None:
         self.flush()
         self._f.close()

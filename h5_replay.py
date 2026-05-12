@@ -46,9 +46,12 @@ class _NullCamera:
     def start_capture(self):  pass
     def stop(self):           pass
     def close(self):          pass
-    def set_frame_rate(self, *_): pass
-    def set_exposure(self, *_):   pass
-    def set_gain(self, *_):       pass
+    def set_frame_rate(self, *_):    pass
+    def set_exposure(self, *_):      pass
+    def set_gain(self, *_):          pass
+    def set_pixel_format(self, *_):  pass
+    def set_trigger_mode(self, *_):  pass
+    def set_trigger_delay(self, *_): pass
 
     def get_info(self) -> dict:
         return {"frame_rate": self.frame_rate, "exposure_us": self.exposure_us,

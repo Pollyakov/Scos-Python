@@ -21,7 +21,7 @@ import scipy.io
 
 from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError
-from core.session   import BrightCalCollector, DarkCalCollector
+from core.session   import BrightCalCollector, DarkCalCollector, State
 from core.recorder  import HDF5Recorder
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
@@ -147,7 +147,6 @@ class MainWindow(QMainWindow):
 
         # State
         self._mask        = None
-        self._scos_active = False
         self._start_time  = None
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
@@ -158,6 +157,12 @@ class MainWindow(QMainWindow):
         self._arduino_thread: _ArduinoUploadThread | None = None
         self._recorder:       HDF5Recorder | None = None
         self._roi_circ:       dict = {}
+
+        # Session state machine
+        self._state:           State       = State.IDLE
+        self._bfi_norm:        float | None = None   # mean BFI over baseline window
+        self._bfi_norm_buffer: list[float] = []      # raw BFI during MEASURING_INIT
+        self._norm_seconds:    float        = 5.0    # baseline window length (SessionConfig default)
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -215,6 +220,11 @@ class MainWindow(QMainWindow):
         # Calibration status — permanent so per-frame messages don't overwrite it
         self._calib_label = QLabel("")
         self.status.addPermanentWidget(self._calib_label)
+
+        # Session state indicator
+        self._state_label = QLabel("IDLE")
+        self._state_label.setStyleSheet("color: #888; font-style: italic; margin-left: 8px;")
+        self.status.addPermanentWidget(self._state_label)
 
     def _build_controls(self) -> QWidget:
         panel = QWidget()
@@ -299,6 +309,20 @@ class MainWindow(QMainWindow):
         """)
         scos_layout.addWidget(self.btn_start_scos)
 
+        # Save frames row
+        save_frames_row = QHBoxLayout()
+        self.chk_save_frames = QCheckBox("Save frames every")
+        self.chk_save_frames.setChecked(False)
+        self.spn_frame_stride = QSpinBox()
+        self.spn_frame_stride.setRange(1, 1000)
+        self.spn_frame_stride.setValue(1)
+        self.spn_frame_stride.setSuffix(" frame(s)")
+        self.spn_frame_stride.setEnabled(False)
+        self.chk_save_frames.toggled.connect(self.spn_frame_stride.setEnabled)
+        save_frames_row.addWidget(self.chk_save_frames)
+        save_frames_row.addWidget(self.spn_frame_stride)
+        scos_layout.addLayout(save_frames_row)
+
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
         scos_layout.addWidget(self.btn_save)
@@ -382,12 +406,21 @@ class MainWindow(QMainWindow):
             "window_size":     lambda v: self.spn_window.setValue(int(v)),
             "n_dark_frames":   lambda v: self.spn_n1.setValue(int(v)),
             "n_bright_frames": lambda v: self.spn_n2.setValue(int(v)),
+            "norm_seconds":    lambda v: setattr(self, "_norm_seconds", float(v)),
         }.items():
             if key in cfg:
                 try:
                     apply_fn(cfg[key])
                 except (ValueError, TypeError):
                     pass
+
+    # ------------------------------------------------------------------
+    # State machine
+    # ------------------------------------------------------------------
+
+    def _set_state(self, new_state: State) -> None:
+        self._state = new_state
+        self._state_label.setText(new_state.name)
 
     # ------------------------------------------------------------------
     # Signal connections
@@ -463,6 +496,7 @@ class MainWindow(QMainWindow):
                 self.btn_dark_cal.setEnabled(True)
                 self.btn_bright_cal.setEnabled(True)
                 self.status.showMessage("Video running")
+                self._set_state(State.PREVIEW)
                 # Read back actual camera params and update spinboxes
                 self._sync_params_from_camera()
                 # Auto-load calibration when replaying a real recording folder
@@ -478,24 +512,24 @@ class MainWindow(QMainWindow):
                 self.btn_start_video.setChecked(False)
                 QMessageBox.critical(self, "Camera Error", str(e))
         else:
-            self._scos_active = False
             self.btn_start_scos.setChecked(False)
             self.btn_start_scos.setEnabled(False)
             self.btn_dark_cal.setEnabled(False)
             self.btn_bright_cal.setEnabled(False)
             self.chk_trigger.setEnabled(True)   # re-enable in case it was disabled for mock-folder
             # Cancel any in-progress calibration gracefully
-            if self._dark_cal_collector is not None:
+            if self._state == State.DARK_CAL:
                 self._dark_cal_collector = None
                 self.btn_dark_cal.setText("Dark Calibration")
                 self._calib_label.setText("Dark cal cancelled")
-            if self._bright_cal_collector is not None:
+            elif self._state == State.BRIGHT_CAL:
                 self._bright_cal_collector = None
                 self.btn_bright_cal.setText("Bright Calibration")
                 self._calib_label.setText("Bright cal cancelled")
             self.camera.stop()
             self.btn_start_video.setText("Start Video")
             self.status.showMessage("Video stopped")
+            self._set_state(State.IDLE)
 
     def _toggle_video_h5(self, checked: bool):
         """Start/stop HDF5 replay — no camera, no processor."""
@@ -505,9 +539,14 @@ class MainWindow(QMainWindow):
             self.spn_exposure.setValue(meta.get("exposure_ms", 8.0))
             self.spn_gain.setValue(meta.get("gain_db", 8.0))
             self._start_time  = time.time()
-            self._scos_active = True
+            self._bfi_norm        = None
+            self._bfi_norm_buffer = []
             self.plot_widget.reset()
+            # Show a placeholder so the image panel isn't empty (no frames in HDF5)
+            placeholder = np.full((700, 700), 512, dtype=np.uint16)
+            self.image_widget.update_frame(placeholder)
             self._h5_replay.start_replay()
+            self._set_state(State.MEASURING_INIT)
             self.btn_start_video.setText("Stop Replay")
             self.btn_start_scos.setEnabled(False)   # replay drives results directly
             self.btn_dark_cal.setEnabled(False)
@@ -515,23 +554,26 @@ class MainWindow(QMainWindow):
             self.chk_trigger.setEnabled(False)
             self.status.showMessage(f"Replaying: {self._h5_replay._path.name}")
         else:
-            self._scos_active = False
             self._h5_replay.stop()
             self.btn_start_video.setText("Start Replay")
             self.status.showMessage("Replay stopped")
+            self._set_state(State.IDLE)
 
     def _on_h5_replay_finished(self):
         """Called when H5ReplayThread exhausts the file (non-loop mode)."""
-        self._scos_active = False
         self.btn_start_video.setChecked(False)
         self.btn_start_video.setText("Start Replay")
         self.status.showMessage("Replay finished")
+        self._set_state(State.FINISHED)
 
     def _toggle_scos(self, checked: bool):
         if checked:
-            self._scos_active = True
-            self._start_time  = time.time()
+            self._start_time      = time.time()
+            self._bfi_norm        = None
+            self._bfi_norm_buffer = []
+            self._frame_save_count = 0
             self.plot_widget.reset()
+            self._set_state(State.MEASURING_INIT)
             self.btn_start_scos.setText("Stop SCOS")
             self.btn_save.setEnabled(False)
             self.btn_dark_cal.setEnabled(False)
@@ -542,12 +584,12 @@ class MainWindow(QMainWindow):
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
             self._start_recorder()
         else:
-            self._scos_active = False
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
             self.btn_dark_cal.setEnabled(True)
             self.btn_bright_cal.setEnabled(True)
             self._stop_recorder()
+            self._set_state(State.PREVIEW)
 
     def _start_recorder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -569,6 +611,12 @@ class MainWindow(QMainWindow):
             "sat_capacity_e": float(self.processor.sat_capacity),
         }
         self._recorder = HDF5Recorder(path, meta)
+        self._recorder.save_calibration(
+            mean_dark  = self.processor.dark_mean,
+            var_dark   = self.processor.dark_var,
+            var_bright = self.processor.bright_var,
+            mask       = self._mask,
+        )
         self.status.showMessage(f"Recording → {path}")
 
     def _stop_recorder(self) -> None:
@@ -628,6 +676,7 @@ class MainWindow(QMainWindow):
         self.btn_dark_cal.setText(f"Dark Cal: 0 / {n1}")
         self.btn_dark_cal.setEnabled(False)
         self.btn_start_scos.setEnabled(False)
+        self._set_state(State.DARK_CAL)
 
     def _finish_dark_cal(self):
         """
@@ -642,6 +691,7 @@ class MainWindow(QMainWindow):
             self._dark_cal_collector = None
             self.btn_dark_cal.setEnabled(True)
             self.btn_start_scos.setEnabled(True)
+            self._set_state(State.PREVIEW)
             return
 
         # Store in processor and rebuild float32 crops used in process()
@@ -673,6 +723,7 @@ class MainWindow(QMainWindow):
 
         self._dark_cal_collector = None
         self._restore_cal_buttons()
+        self._set_state(State.PREVIEW)
         QMessageBox.information(
             self, "Dark Calibration Complete",
             f"Dark calibration complete — {n_collected} frames collected.\n\n"
@@ -732,6 +783,7 @@ class MainWindow(QMainWindow):
         self.btn_bright_cal.setEnabled(False)
         self.btn_dark_cal.setEnabled(False)
         self.btn_start_scos.setEnabled(False)
+        self._set_state(State.BRIGHT_CAL)
 
     def _finish_bright_cal(self):
         """
@@ -747,6 +799,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Bright Calibration Error", str(exc))
             self._bright_cal_collector = None
             self._restore_cal_buttons()
+            self._set_state(State.PREVIEW)
             return
 
         self.processor.bright_var = bright_var
@@ -771,6 +824,7 @@ class MainWindow(QMainWindow):
 
         self._bright_cal_collector = None
         self._restore_cal_buttons()
+        self._set_state(State.PREVIEW)
         QMessageBox.information(
             self, "Bright Calibration Complete",
             f"Bright calibration complete — {n_collected} frames collected.\n\n"
@@ -847,7 +901,7 @@ class MainWindow(QMainWindow):
 
     def _on_display_frame(self, frame: np.ndarray):
         """Runs at ≤30 FPS — only updates the image widget."""
-        if self._scos_active:
+        if self._state in (State.MEASURING_INIT, State.MEASURING):
             now = time.time()
             if now - self._last_display_time < 2.5:
                 return
@@ -894,7 +948,7 @@ class MainWindow(QMainWindow):
         # before the rate-limiter (every frame must be counted).
         # Progress is shown in the button text, not the status bar, because
         # _on_display_frame overwrites the status bar at 30 FPS.
-        if self._dark_cal_collector is not None:
+        if self._state == State.DARK_CAL:
             self._dark_cal_collector.add_frame(frame)
             n       = self._dark_cal_collector.n_collected
             n_total = self._dark_cal_collector.n_target
@@ -903,7 +957,7 @@ class MainWindow(QMainWindow):
                 self._finish_dark_cal()
             return
 
-        if self._bright_cal_collector is not None:
+        if self._state == State.BRIGHT_CAL:
             self._bright_cal_collector.add_frame(frame)
             n       = self._bright_cal_collector.n_collected
             n_total = self._bright_cal_collector.n_target
@@ -912,7 +966,7 @@ class MainWindow(QMainWindow):
                 self._finish_bright_cal()
             return
 
-        if not self._scos_active or self._mask is None:
+        if self._state not in (State.MEASURING_INIT, State.MEASURING) or self._mask is None:
             return
 
         # Hand the frame off to the worker thread.  The worker keeps a 1-frame
@@ -920,10 +974,17 @@ class MainWindow(QMainWindow):
         t = time.time() - self._start_time
         self._scos_worker.submit(frame, self._mask, t)
 
+        # Save raw frame to HDF5 if checkbox is enabled
+        if self._recorder is not None and self.chk_save_frames.isChecked():
+            self._frame_save_count += 1
+            if self._frame_save_count >= self.spn_frame_stride.value():
+                self._recorder.append_frame(frame)
+                self._frame_save_count = 0
+
     def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float,
                         mean_i: float, proc_ms: float):
         """Receives SCOS result from the worker thread — runs on the GUI thread."""
-        if not self._scos_active:
+        if self._state not in (State.MEASURING_INIT, State.MEASURING):
             return
 
         self._proc_times.append(proc_ms)
@@ -936,9 +997,21 @@ class MainWindow(QMainWindow):
             self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
             self._last_proc_label_time = now
 
-        self.plot_widget.append(t, k2_corr)
+        bfi_raw = 1.0 / k2_corr if k2_corr > 0 else None
+        if bfi_raw is not None:
+            if self._state == State.MEASURING_INIT:
+                self._bfi_norm_buffer.append(bfi_raw)
+                self.plot_widget.append(t, bfi_raw)   # raw during baseline window
+                if t >= self._norm_seconds and self._bfi_norm_buffer:
+                    self._bfi_norm = float(np.mean(self._bfi_norm_buffer))
+                    self._set_state(State.MEASURING)
+            elif self._state == State.MEASURING:
+                self.plot_widget.append(t, bfi_raw / self._bfi_norm)
+            else:
+                self.plot_widget.append(t, bfi_raw)   # fallback (e.g. h5 replay edge case)
+
         self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
-        self.lbl_bfi.setText(f"1/κ² : {1/k2_corr:.2f}" if k2_corr > 0 else "1/κ²: --")
+        self.lbl_bfi.setText(f"1/κ² : {bfi_raw:.2f}" if bfi_raw else "1/κ²: --")
         if self._recorder is not None:
             self._recorder.append(t, k2_raw, k2_corr, mean_i)
 

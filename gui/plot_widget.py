@@ -51,14 +51,12 @@ class PlotWidget(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def append(self, time_sec: float, kappa2_corr: float):
-        """Add one data point. time_sec is elapsed seconds since start."""
-        # Reject non-positive, NaN, and inf — nan <= 0 is False in Python so
-        # the explicit isfinite check is necessary to block NaN from slipping through.
-        if not (math.isfinite(kappa2_corr) and kappa2_corr > 0):
+    def append(self, time_sec: float, bfi: float):
+        """Add one data point (bfi = 1/κ², already computed). time_sec is elapsed seconds."""
+        if not (math.isfinite(bfi) and bfi > 0):
             return
         self._time.append(time_sec / 60.0)   # convert to minutes
-        self._bfi.append(1.0 / kappa2_corr)
+        self._bfi.append(bfi)
         self._dirty = True
 
     def _refresh(self):

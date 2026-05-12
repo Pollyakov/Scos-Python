@@ -106,3 +106,32 @@ def test_path_property(tmp_path):
     rec = _make_recorder(tmp_path)
     assert rec.path == tmp_path / "scos_test.h5"
     rec.close()
+
+
+def test_save_calibration(tmp_path):
+    """Calibration arrays are stored in the 'calibration' group."""
+    rec = _make_recorder(tmp_path)
+    mean_dark  = np.full((10, 10), 42.0,  dtype=np.float64)
+    var_dark   = np.full((10, 10), 0.5,   dtype=np.float64)
+    var_bright = np.full((10, 10), 1.2,   dtype=np.float64)
+    mask       = np.ones((10, 10), dtype=bool)
+    rec.save_calibration(mean_dark, var_dark, var_bright, mask)
+    rec.close()
+
+    with h5py.File(tmp_path / "scos_test.h5", "r") as f:
+        assert "calibration" in f
+        np.testing.assert_allclose(f["calibration/mean_dark"][:],  42.0,  atol=1e-5)
+        np.testing.assert_allclose(f["calibration/var_dark"][:],   0.5,   atol=1e-5)
+        np.testing.assert_allclose(f["calibration/var_bright"][:], 1.2,   atol=1e-5)
+        assert f["calibration/mask"].shape == (10, 10)
+
+
+def test_save_calibration_none_arrays_skipped(tmp_path):
+    """None arrays are silently skipped — no crash when calibration wasn't run."""
+    rec = _make_recorder(tmp_path)
+    rec.save_calibration(None, None, None, None)
+    rec.close()
+
+    with h5py.File(tmp_path / "scos_test.h5", "r") as f:
+        assert "calibration" in f
+        assert len(f["calibration"]) == 0   # empty group, no datasets
