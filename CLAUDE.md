@@ -1,5 +1,12 @@
 # CLAUDE.md
 
+## Scientific Priority — Non-Negotiable
+
+**`docs/SCOS_protocol.md` is the absolute source of truth for this project.**
+The purpose of SCOS is to measure cerebral blood flow as accurately as possible.
+No code change — refactoring, performance optimization, UI improvement, or architectural cleanup — may reduce measurement accuracy or deviate from the protocol.
+When in doubt between correctness and convenience, always choose correctness.
+
 ## Purpose
 
 SCOS (Speckle Contrast Optical Spectroscopy) — real-time GUI app that acquires frames from a Basler camera, computes speckle contrast (κ²) with noise correction, and plots blood flow (1/κ²) over time. Translated from MATLAB (SCOSvsTime_WithNoiseSubtraction_Ver2.m). Used in the Optical Neuroimaging Lab at Bar-Ilan University.
