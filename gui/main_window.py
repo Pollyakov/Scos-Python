@@ -5,7 +5,6 @@ Combines: live image, SCOS time-series plot, camera controls panel.
 
 import datetime
 import json
-import queue
 import time
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError
 from core.session   import BrightCalCollector, DarkCalCollector, State
 from core.recorder  import HDF5Recorder
+from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 
@@ -85,65 +85,11 @@ class _ArduinoUploadThread(QThread):
         self.done.emit(ok, msg)
 
 
-class _SCOSWorkerThread(QThread):
-    """
-    Runs SCOSProcessor.process() off the GUI thread.
-
-    Holds a 1-frame queue.  If a new frame arrives before the previous one has
-    been processed, the pending frame is replaced — this thread always processes
-    the most recent frame and never falls behind.
-    """
-    result_ready   = pyqtSignal(float, float, float, float, float)  # t, k2_raw, k2_corr, mean_i, proc_ms
-    error_occurred = pyqtSignal(str)                          # GainTableError message
-
-    def __init__(self, processor, parent=None):
-        super().__init__(parent)
-        self._processor = processor
-        self._q: queue.Queue = queue.Queue(maxsize=1)
-
-    def submit(self, frame: np.ndarray, mask: np.ndarray, t: float) -> None:
-        """Enqueue a frame, dropping any unprocessed pending frame."""
-        try:
-            self._q.get_nowait()        # discard stale frame
-        except queue.Empty:
-            pass
-        try:
-            self._q.put_nowait((frame, mask, t))
-        except queue.Full:
-            pass                        # defensive — should not happen
-
-    def stop(self) -> None:
-        """Drain the queue and send a sentinel so run() exits cleanly."""
-        try:
-            self._q.get_nowait()
-        except queue.Empty:
-            pass
-        self._q.put_nowait(None)
-
-    def run(self) -> None:
-        while True:
-            item = self._q.get()        # blocks until frame or sentinel
-            if item is None:
-                break
-            frame, mask, t = item
-            t0 = time.perf_counter()
-            try:
-                k2_raw, k2_corr, mean_i = self._processor.process(frame, mask)
-            except GainTableError as e:
-                self.error_occurred.emit(str(e))
-                continue
-            except Exception:
-                continue
-            proc_ms = (time.perf_counter() - t0) * 1000
-            self.result_ready.emit(t, k2_raw, k2_corr, mean_i, proc_ms)
-
 
 class MainWindow(QMainWindow):
     def __init__(self, camera=None, h5_replay=None):
         super().__init__()
         self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1400, screen.width() - 20), screen.height() - 10)
 
         # State
         self._mask        = None
@@ -178,7 +124,7 @@ class MainWindow(QMainWindow):
         self.camera    = camera if camera is not None else CameraThread()
         self.processor = SCOSProcessor()
         self._h5_replay = h5_replay          # not None → HDF5 replay mode
-        self._scos_worker = _SCOSWorkerThread(self.processor, parent=self)
+        self._scos_worker = RealtimePipeline(self.processor, n_workers=3, parent=self)
         self._scos_worker.start()
 
         self._build_ui()
