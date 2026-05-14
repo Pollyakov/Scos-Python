@@ -66,7 +66,7 @@ def main():
         from camera import CameraThread
         camera = CameraThread()
         window = MainWindow(camera=camera)
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 
