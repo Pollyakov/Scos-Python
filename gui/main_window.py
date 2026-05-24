@@ -229,13 +229,13 @@ class MainWindow(QMainWindow):
             scos_layout, "Window Size:", 3, 51, 7, step=2
         )
         self.spn_n1 = self._labeled_int_spin(
-            scos_layout, "Dark Frames (N1):", 10, 3000, 600, step=50
+            scos_layout, "Dark Frames:", 10, 3000, 600, step=50
         )
         self.spn_n2 = self._labeled_int_spin(
-            scos_layout, "Bright Frames (N2):", 10, 3000, 600, step=50
+            scos_layout, "Bright Frames:", 10, 3000, 600, step=50
         )
         self.spn_duration = self._labeled_spin(
-            scos_layout, "Duration (min):", 0.0, 240.0, 0.0, 1, step=1.0
+            scos_layout, "Measuring duration (in minutes):", 0.0, 240.0, 0.0, 1, step=1.0
         )
         self.spn_duration.setSpecialValueText("∞")
         self.spn_duration.setToolTip(
@@ -256,6 +256,9 @@ class MainWindow(QMainWindow):
         norm_row.addWidget(self.spn_norm_seconds)
         scos_layout.addLayout(norm_row)
 
+        layout.addWidget(self.scos_group)
+
+        # --- Action buttons (outside scos_group so they are never locked) ---
         self.btn_start_scos = QPushButton("Start SCOS")
         self.btn_start_scos.setCheckable(True)
         self.btn_start_scos.setEnabled(False)
@@ -265,16 +268,15 @@ class MainWindow(QMainWindow):
             QPushButton:checked  { background:#7a2a2a; }
             QPushButton:disabled { background:#444; color:#888; font-weight:normal; }
         """)
-        scos_layout.addWidget(self.btn_start_scos)
+        layout.addWidget(self.btn_start_scos)
 
         self.chk_save_frames = QCheckBox("Save Frames")
         self.chk_save_frames.setChecked(False)
-        scos_layout.addWidget(self.chk_save_frames)
+        layout.addWidget(self.chk_save_frames)
 
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
-        scos_layout.addWidget(self.btn_save)
-        layout.addWidget(self.scos_group)
+        layout.addWidget(self.btn_save)
 
         # --- Status indicator ---
         status_group = QGroupBox("Status")
@@ -303,6 +305,7 @@ class MainWindow(QMainWindow):
         # Second row: calibration / normalization progress
         self._calib_label = QLabel("")
         self._calib_label.setWordWrap(True)
+        self._calib_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._calib_label.setStyleSheet("font-size: 11px; color: #aaaaaa;")
         status_layout.addWidget(self._calib_label)
         layout.addWidget(status_group)
