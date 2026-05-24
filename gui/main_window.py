@@ -109,10 +109,11 @@ class MainWindow(QMainWindow):
 
         # Session state machine
         self._state:           State       = State.IDLE
-        self._bfi_norm:        float | None = None   # mean BFI over baseline window
-        self._bfi_norm_buffer: list[float] = []      # raw BFI during MEASURING_INIT
-        self._norm_seconds:          float = 5.0           # baseline window length (SessionConfig default)
-        self._measurement_duration_s: float = float('inf')  # ∞ = run until Stop SCOS
+        self._bfi_norm:        float | None = None              # mean BFI over baseline window
+        self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
+        self._norm_seconds:           float       = 5.0          # baseline window length (SessionConfig default)
+        self._measurement_duration_s: float       = float('inf') # ∞ = run until Stop SCOS
+        self._measuring_start_time:   float | None = None         # set when normalization ends
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -547,6 +548,7 @@ class MainWindow(QMainWindow):
             self._start_dark_cal()
         else:
             logger.info("Stop SCOS")
+            self._measuring_start_time = None
             self._time_left_label.hide()
             # Cancel any in-progress calibration
             if self._state == State.DARK_CAL:
@@ -792,10 +794,11 @@ class MainWindow(QMainWindow):
         # the dialog go to the SCOS branch instead of the BRIGHT_CAL branch
         # with a None collector.
         logger.info("Starting SCOS measurement after calibration")
-        self._start_time       = time.time()
-        self._bfi_norm         = None
-        self._bfi_norm_buffer  = []
-        self._frame_save_count = 0
+        self._start_time          = time.time()
+        self._bfi_norm            = None
+        self._bfi_norm_buffer     = []
+        self._frame_save_count    = 0
+        self._measuring_start_time = None  # set later when normalization ends
         self.plot_widget.reset()
         self._set_state(State.MEASURING_INIT)
         self._start_recorder()
@@ -965,8 +968,14 @@ class MainWindow(QMainWindow):
         if self._state not in (State.MEASURING_INIT, State.MEASURING):
             return
 
-        # Auto-stop when user-set duration is reached (t >= inf is always False → no cost)
-        if t >= self._measurement_duration_s:
+        # Elapsed time since normalization ended (None while still in MEASURING_INIT)
+        elapsed_measuring = (
+            time.time() - self._measuring_start_time
+            if self._measuring_start_time is not None else None
+        )
+
+        # Auto-stop when user-set duration is reached (only after normalization)
+        if elapsed_measuring is not None and elapsed_measuring >= self._measurement_duration_s:
             logger.info("Measurement duration reached (%.1f min) — auto-stopping",
                         self._measurement_duration_s / 60.0)
             self.btn_start_scos.setChecked(False)   # triggers _toggle_scos(False)
@@ -981,9 +990,9 @@ class MainWindow(QMainWindow):
             avg_ms = sum(self._proc_times) / len(self._proc_times)
             self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
             self._last_proc_label_time = now
-            # Time-remaining indicator (only when duration is finite)
-            if self._measurement_duration_s < float('inf'):
-                remaining_s = max(0.0, self._measurement_duration_s - t)
+            # Time-remaining indicator — only after normalization ends and duration is finite
+            if self._measurement_duration_s < float('inf') and elapsed_measuring is not None:
+                remaining_s = max(0.0, self._measurement_duration_s - elapsed_measuring)
                 mins = int(remaining_s // 60)
                 secs = int(remaining_s % 60)
                 self._time_left_label.setText(f"⏱ {mins}:{secs:02d} remaining")
@@ -992,10 +1001,20 @@ class MainWindow(QMainWindow):
         bfi_raw = 1.0 / k2_corr if k2_corr > 0 else None
         if bfi_raw is not None:
             if self._state == State.MEASURING_INIT:
-                self._bfi_norm_buffer.append(bfi_raw)
-                self.plot_widget.append(t, bfi_raw)   # raw during baseline window
+                self._bfi_norm_buffer.append((t, bfi_raw))   # collect; don't plot yet
+                # Live countdown in the status-bar permanent label
+                remaining = max(0.0, self._norm_seconds - t)
+                self._calib_label.setText(
+                    f"Normalizing — {t:.1f} / {self._norm_seconds:.0f} s  ({remaining:.1f} s left)"
+                )
                 if t >= self._norm_seconds and self._bfi_norm_buffer:
-                    self._bfi_norm = float(np.mean(self._bfi_norm_buffer))
+                    bfi_values = [b for _, b in self._bfi_norm_buffer]
+                    self._bfi_norm             = float(np.mean(bfi_values))
+                    self._measuring_start_time = time.time()   # timer starts here
+                    # Add normalization window to plot retroactively, already normalized
+                    for t_buf, bfi_buf in self._bfi_norm_buffer:
+                        self.plot_widget.append(t_buf, bfi_buf / self._bfi_norm)
+                    self._calib_label.setText("Normalized ✓")
                     self._set_state(State.MEASURING)
             elif self._state == State.MEASURING:
                 self.plot_widget.append(t, bfi_raw / self._bfi_norm)
