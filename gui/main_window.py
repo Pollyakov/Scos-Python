@@ -267,6 +267,10 @@ class MainWindow(QMainWindow):
         """)
         scos_layout.addWidget(self.btn_start_scos)
 
+        self.chk_save_frames = QCheckBox("Save Frames")
+        self.chk_save_frames.setChecked(False)
+        scos_layout.addWidget(self.chk_save_frames)
+
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
         scos_layout.addWidget(self.btn_save)
@@ -1063,6 +1067,10 @@ class MainWindow(QMainWindow):
         # queue so it always processes the latest frame and never falls behind.
         t = time.time() - self._start_time
         self._scos_worker.submit(frame, self._mask, t)
+
+        # Save raw frame to HDF5 if requested
+        if self._recorder is not None and self.chk_save_frames.isChecked():
+            self._recorder.append_frame(frame)
 
     def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float,
                         mean_i: float, proc_ms: float):
