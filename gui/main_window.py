@@ -651,6 +651,7 @@ class MainWindow(QMainWindow):
             self._set_state(State.PREVIEW)
             return
 
+        n_collected = self._dark_cal_collector.n_collected
         logger.info("Dark calibration complete — %d frames collected", n_collected)
         # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
@@ -659,7 +660,6 @@ class MainWindow(QMainWindow):
             self.processor.set_roi(self._mask)
 
         # Save .mat — keys match the names used throughout processor.py and MATLAB
-        n_collected = self._dark_cal_collector.n_collected
         if self._cal_output_folder is not None:
             ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             mat_path = self._cal_output_folder / f"dark_cal_{ts}.mat"
@@ -679,6 +679,10 @@ class MainWindow(QMainWindow):
         if self._dark_cal_trigger_was_on:
             self.camera.set_trigger(True, self.spn_trigger_delay.value())
 
+        # Change state to PREVIEW *before* nulling the collector and before
+        # _start_bright_cal() shows its dialog — otherwise frames arriving
+        # during the dialog hit the DARK_CAL branch with a None collector.
+        self._set_state(State.PREVIEW)
         self._dark_cal_collector = None
         # Automatically move to bright calibration
         self._start_bright_cal()
@@ -761,15 +765,18 @@ class MainWindow(QMainWindow):
 
         self._bright_cal_collector = None
 
-        # Calibration complete — start measurement immediately
+        # Calibration complete — initialise measurement state *before*
+        # _start_recorder() shows its file dialog, so frames arriving during
+        # the dialog go to the SCOS branch instead of the BRIGHT_CAL branch
+        # with a None collector.
         logger.info("Starting SCOS measurement after calibration")
         self._start_time       = time.time()
         self._bfi_norm         = None
         self._bfi_norm_buffer  = []
         self._frame_save_count = 0
         self.plot_widget.reset()
-        self._start_recorder()
         self._set_state(State.MEASURING_INIT)
+        self._start_recorder()
 
     def keyPressEvent(self, event):
         """Press 'v' to toggle External Trigger (and trigger Arduino upload)."""
@@ -888,6 +895,8 @@ class MainWindow(QMainWindow):
         # Progress is shown in the button text, not the status bar, because
         # _on_display_frame overwrites the status bar at 30 FPS.
         if self._state == State.DARK_CAL:
+            if self._dark_cal_collector is None:
+                return   # guard: frame arrived during state transition
             self._dark_cal_collector.add_frame(frame)
             n       = self._dark_cal_collector.n_collected
             n_total = self._dark_cal_collector.n_target
@@ -897,6 +906,8 @@ class MainWindow(QMainWindow):
             return
 
         if self._state == State.BRIGHT_CAL:
+            if self._bright_cal_collector is None:
+                return   # guard: frame arrived during state transition
             self._bright_cal_collector.add_frame(frame)
             n       = self._bright_cal_collector.n_collected
             n_total = self._bright_cal_collector.n_target
