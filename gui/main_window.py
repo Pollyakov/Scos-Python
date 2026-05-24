@@ -111,7 +111,8 @@ class MainWindow(QMainWindow):
         self._state:           State       = State.IDLE
         self._bfi_norm:        float | None = None   # mean BFI over baseline window
         self._bfi_norm_buffer: list[float] = []      # raw BFI during MEASURING_INIT
-        self._norm_seconds:    float        = 5.0    # baseline window length (SessionConfig default)
+        self._norm_seconds:          float = 5.0           # baseline window length (SessionConfig default)
+        self._measurement_duration_s: float = float('inf')  # ∞ = run until Stop SCOS
         self._arduino_debounce = QTimer(self)
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
@@ -239,6 +240,13 @@ class MainWindow(QMainWindow):
         self.spn_n2 = self._labeled_int_spin(
             scos_layout, "Bright Frames (N2):", 10, 3000, 600, step=50
         )
+        self.spn_duration = self._labeled_spin(
+            scos_layout, "Duration (min):", 0.0, 240.0, 0.0, 1, step=1.0
+        )
+        self.spn_duration.setSpecialValueText("∞")
+        self.spn_duration.setToolTip(
+            "0 = run until Stop SCOS is clicked  |  max 240 min (4 h)"
+        )
 
         self.btn_start_scos = QPushButton("Start SCOS")
         self.btn_start_scos.setCheckable(True)
@@ -349,6 +357,7 @@ class MainWindow(QMainWindow):
             "n_dark_frames":   lambda v: self.spn_n1.setValue(int(v)),
             "n_bright_frames": lambda v: self.spn_n2.setValue(int(v)),
             "norm_seconds":    lambda v: setattr(self, "_norm_seconds", float(v)),
+            "measurement_duration_min": lambda v: self.spn_duration.setValue(float(v)),
         }.items():
             if key in cfg:
                 try:
@@ -408,6 +417,9 @@ class MainWindow(QMainWindow):
         # Window size → processor
         self.spn_window.valueChanged.connect(
             lambda v: setattr(self.processor, 'window_size', v))
+
+        # Measurement duration
+        self.spn_duration.valueChanged.connect(self._on_duration_changed)
 
         # Save
         self.btn_save.clicked.connect(self._save_data)
@@ -785,6 +797,12 @@ class MainWindow(QMainWindow):
         else:
             super().keyPressEvent(event)
 
+    def _on_duration_changed(self, minutes: float) -> None:
+        """Convert spinbox value (minutes) to internal seconds; 0 means infinite."""
+        self._measurement_duration_s = float('inf') if minutes == 0.0 else minutes * 60.0
+        logger.debug("Measurement duration → %s",
+                     "∞" if minutes == 0.0 else f"{minutes:.1f} min")
+
     def _on_trigger_toggled(self, on: bool):
         """Handle External Trigger checkbox toggle."""
         if on:
@@ -935,6 +953,13 @@ class MainWindow(QMainWindow):
                         mean_i: float, proc_ms: float):
         """Receives SCOS result from the worker thread — runs on the GUI thread."""
         if self._state not in (State.MEASURING_INIT, State.MEASURING):
+            return
+
+        # Auto-stop when user-set duration is reached (t >= inf is always False → no cost)
+        if t >= self._measurement_duration_s:
+            logger.info("Measurement duration reached (%.1f min) — auto-stopping",
+                        self._measurement_duration_s / 60.0)
+            self.btn_start_scos.setChecked(False)   # triggers _toggle_scos(False)
             return
 
         self._proc_times.append(proc_ms)
