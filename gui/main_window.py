@@ -178,8 +178,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(4, 4, 4, 4)
 
         # --- Camera Controls ---
-        cam_group = QGroupBox("Camera")
-        cam_layout = QVBoxLayout(cam_group)
+        self.cam_group = QGroupBox("Camera")
+        cam_layout = QVBoxLayout(self.cam_group)
         cam_layout.setSpacing(2)
         cam_layout.setContentsMargins(4, 8, 4, 4)
 
@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         )
         self.chk_trigger = QCheckBox("External Trigger")
         cam_layout.addWidget(self.chk_trigger)
-        layout.addWidget(cam_group)
+        layout.addWidget(self.cam_group)
 
         # --- Video Controls ---
         vid_group = QGroupBox("Acquisition")
@@ -220,8 +220,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(vid_group)
 
         # --- SCOS Controls ---
-        scos_group = QGroupBox("SCOS")
-        scos_layout = QVBoxLayout(scos_group)
+        self.scos_group = QGroupBox("SCOS")
+        scos_layout = QVBoxLayout(self.scos_group)
         scos_layout.setSpacing(2)
         scos_layout.setContentsMargins(4, 8, 4, 4)
 
@@ -270,7 +270,7 @@ class MainWindow(QMainWindow):
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
         scos_layout.addWidget(self.btn_save)
-        layout.addWidget(scos_group)
+        layout.addWidget(self.scos_group)
 
         # --- Status indicator ---
         status_group = QGroupBox("Status")
@@ -568,8 +568,32 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Replay finished")
         self._set_state(State.FINISHED)
 
+    # Stylesheet applied to the Camera / SCOS group boxes while SCOS is running.
+    # Qt's built-in disabled appearance is too subtle in dark themes, so we set
+    # explicit colors that are unmistakably different from the active state.
+    _LOCKED_GROUP_STYLE = """
+        QGroupBox {
+            color: #555555;
+            border: 1px solid #333333;
+        }
+        QGroupBox::title { color: #555555; }
+        QDoubleSpinBox, QDoubleSpinBox:disabled,
+        QSpinBox,       QSpinBox:disabled {
+            color: #484848;
+            background-color: #1c1c1c;
+            border: 1px solid #2e2e2e;
+        }
+        QComboBox, QComboBox:disabled {
+            color: #484848;
+            background-color: #1c1c1c;
+            border: 1px solid #2e2e2e;
+        }
+        QCheckBox, QCheckBox:disabled { color: #484848; }
+        QLabel                        { color: #505050; }
+    """
+
     def _set_params_enabled(self, enabled: bool) -> None:
-        """Gray out / restore all parameter inputs while SCOS is running."""
+        """Lock / unlock all Camera and SCOS parameter inputs during a session."""
         for widget in (
             self.cmb_format,
             self.spn_exposure,
@@ -585,6 +609,12 @@ class MainWindow(QMainWindow):
             self.spn_norm_seconds,
         ):
             widget.setEnabled(enabled)
+
+        # Apply / remove the explicit locked stylesheet so the visual change is
+        # obvious even in dark themes where Qt's default disabled look is subtle.
+        locked_ss = "" if enabled else self._LOCKED_GROUP_STYLE
+        self.cam_group.setStyleSheet(locked_ss)
+        self.scos_group.setStyleSheet(locked_ss)
 
     def _toggle_scos(self, checked: bool):
         if checked:
