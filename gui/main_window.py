@@ -303,6 +303,15 @@ class MainWindow(QMainWindow):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
 
+        # Time-remaining indicator — visible only during a finite-duration measurement
+        self._time_left_label = QLabel("")
+        self._time_left_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._time_left_label.setStyleSheet(
+            "font-weight: bold; font-size: 14px; color: #00aaff; padding: 4px;"
+        )
+        self._time_left_label.hide()
+        layout.addWidget(self._time_left_label)
+
         layout.addStretch()
         return panel
 
@@ -538,6 +547,7 @@ class MainWindow(QMainWindow):
             self._start_dark_cal()
         else:
             logger.info("Stop SCOS")
+            self._time_left_label.hide()
             # Cancel any in-progress calibration
             if self._state == State.DARK_CAL:
                 self._dark_cal_collector = None
@@ -971,6 +981,13 @@ class MainWindow(QMainWindow):
             avg_ms = sum(self._proc_times) / len(self._proc_times)
             self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
             self._last_proc_label_time = now
+            # Time-remaining indicator (only when duration is finite)
+            if self._measurement_duration_s < float('inf'):
+                remaining_s = max(0.0, self._measurement_duration_s - t)
+                mins = int(remaining_s // 60)
+                secs = int(remaining_s % 60)
+                self._time_left_label.setText(f"⏱ {mins}:{secs:02d} remaining")
+                self._time_left_label.show()
 
         bfi_raw = 1.0 / k2_corr if k2_corr > 0 else None
         if bfi_raw is not None:
