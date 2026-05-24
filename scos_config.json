@@ -6,5 +6,7 @@
     "trigger_delay_us": 0.0,
     "external_trigger": false,
     "window_size": 7,
-    "measurement_duration_min": 0
+    "measurement_duration_min": 0,
+    "norm_type": "seconds",
+    "norm_seconds": 5
 }

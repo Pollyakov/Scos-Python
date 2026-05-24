@@ -111,7 +111,8 @@ class MainWindow(QMainWindow):
         self._state:           State       = State.IDLE
         self._bfi_norm:        float | None = None              # mean BFI over baseline window
         self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
-        self._norm_seconds:           float       = 5.0          # baseline window length (SessionConfig default)
+        self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
+        self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
         self._measurement_duration_s: float       = float('inf') # ∞ = run until Stop SCOS
         self._measuring_start_time:   float | None = None         # set when normalization ends
         self._arduino_debounce = QTimer(self)
@@ -168,14 +169,6 @@ class MainWindow(QMainWindow):
         self._last_fps_time = time.time()
         self._fps_count = 0
 
-        # Calibration status — permanent so per-frame messages don't overwrite it
-        self._calib_label = QLabel("")
-        self.status.addPermanentWidget(self._calib_label)
-
-        # Session state indicator
-        self._state_label = QLabel("IDLE")
-        self._state_label.setStyleSheet("color: #888; font-style: italic; margin-left: 8px;")
-        self.status.addPermanentWidget(self._state_label)
 
     def _build_controls(self) -> QWidget:
         panel = QWidget()
@@ -249,6 +242,20 @@ class MainWindow(QMainWindow):
             "0 = run until Stop SCOS is clicked  |  max 240 min (4 h)"
         )
 
+        # Normalization type row
+        norm_row = QHBoxLayout()
+        norm_row.setContentsMargins(0, 0, 0, 0)
+        norm_row.addWidget(QLabel("Norm. type:"))
+        self.cmb_norm_type = QComboBox()
+        self.cmb_norm_type.addItems(["Number of seconds", "Pulsation lower level"])
+        norm_row.addWidget(self.cmb_norm_type)
+        self.spn_norm_seconds = QSpinBox()
+        self.spn_norm_seconds.setRange(1, 60)
+        self.spn_norm_seconds.setValue(5)
+        self.spn_norm_seconds.setSuffix(" s")
+        norm_row.addWidget(self.spn_norm_seconds)
+        scos_layout.addLayout(norm_row)
+
         self.btn_start_scos = QPushButton("Start SCOS")
         self.btn_start_scos.setCheckable(True)
         self.btn_start_scos.setEnabled(False)
@@ -260,24 +267,41 @@ class MainWindow(QMainWindow):
         """)
         scos_layout.addWidget(self.btn_start_scos)
 
-        # Save frames row
-        save_frames_row = QHBoxLayout()
-        self.chk_save_frames = QCheckBox("Save frames every")
-        self.chk_save_frames.setChecked(False)
-        self.spn_frame_stride = QSpinBox()
-        self.spn_frame_stride.setRange(1, 1000)
-        self.spn_frame_stride.setValue(1)
-        self.spn_frame_stride.setSuffix(" frame(s)")
-        self.spn_frame_stride.setEnabled(False)
-        self.chk_save_frames.toggled.connect(self.spn_frame_stride.setEnabled)
-        save_frames_row.addWidget(self.chk_save_frames)
-        save_frames_row.addWidget(self.spn_frame_stride)
-        scos_layout.addLayout(save_frames_row)
-
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
         scos_layout.addWidget(self.btn_save)
         layout.addWidget(scos_group)
+
+        # --- Status indicator ---
+        status_group = QGroupBox("Status")
+        status_layout = QVBoxLayout(status_group)
+        status_layout.setSpacing(2)
+        status_layout.setContentsMargins(4, 8, 4, 4)
+
+        # Top row: state name (left) + time remaining (right)
+        state_row = QHBoxLayout()
+        self._state_label = QLabel("IDLE")
+        self._state_label.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #888888;"
+        )
+        self._time_left_label = QLabel("")
+        self._time_left_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._time_left_label.setStyleSheet(
+            "font-size: 13px; font-weight: bold; color: #00aaff;"
+        )
+        self._time_left_label.hide()
+        state_row.addWidget(self._state_label)
+        state_row.addWidget(self._time_left_label)
+        status_layout.addLayout(state_row)
+
+        # Second row: calibration / normalization progress
+        self._calib_label = QLabel("")
+        self._calib_label.setWordWrap(True)
+        self._calib_label.setStyleSheet("font-size: 11px; color: #aaaaaa;")
+        status_layout.addWidget(self._calib_label)
+        layout.addWidget(status_group)
 
         # --- Info labels ---
         info_group = QGroupBox("Info")
@@ -303,15 +327,6 @@ class MainWindow(QMainWindow):
                     self.lbl_kappa, self.lbl_bfi, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
-
-        # Time-remaining indicator — visible only during a finite-duration measurement
-        self._time_left_label = QLabel("")
-        self._time_left_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._time_left_label.setStyleSheet(
-            "font-weight: bold; font-size: 14px; color: #00aaff; padding: 4px;"
-        )
-        self._time_left_label.hide()
-        layout.addWidget(self._time_left_label)
 
         layout.addStretch()
         return panel
@@ -366,7 +381,9 @@ class MainWindow(QMainWindow):
             "window_size":     lambda v: self.spn_window.setValue(int(v)),
             "n_dark_frames":   lambda v: self.spn_n1.setValue(int(v)),
             "n_bright_frames": lambda v: self.spn_n2.setValue(int(v)),
-            "norm_seconds":    lambda v: setattr(self, "_norm_seconds", float(v)),
+            "norm_seconds":    lambda v: self.spn_norm_seconds.setValue(int(float(v))),
+            "norm_type":       lambda v: self.cmb_norm_type.setCurrentIndex(
+                                   0 if str(v) == "seconds" else 1),
             "measurement_duration_min": lambda v: self.spn_duration.setValue(float(v)),
         }.items():
             if key in cfg:
@@ -379,10 +396,25 @@ class MainWindow(QMainWindow):
     # State machine
     # ------------------------------------------------------------------
 
+    _STATE_COLORS = {
+        State.IDLE:           "#888888",
+        State.PREVIEW:        "#aabbcc",
+        State.DARK_CAL:       "#ffaa00",
+        State.BRIGHT_CAL:     "#ffaa00",
+        State.MEASURING_INIT: "#ffdd00",
+        State.MEASURING:      "#00cc44",
+        State.FINISHED:       "#00aaff",
+        State.ERROR:          "#ff4444",
+    }
+
     def _set_state(self, new_state: State) -> None:
         logger.info("State: %s → %s", self._state.name, new_state.name)
         self._state = new_state
-        self._state_label.setText(new_state.name)
+        color = self._STATE_COLORS.get(new_state, "#888888")
+        self._state_label.setStyleSheet(
+            f"font-size: 15px; font-weight: bold; color: {color}; padding: 2px;"
+        )
+        self._state_label.setText(new_state.name.replace("_", " "))
 
     # ------------------------------------------------------------------
     # Signal connections
@@ -430,6 +462,12 @@ class MainWindow(QMainWindow):
 
         # Measurement duration
         self.spn_duration.valueChanged.connect(self._on_duration_changed)
+
+        # Normalization type + seconds
+        self.cmb_norm_type.currentIndexChanged.connect(self._on_norm_type_changed)
+        self.spn_norm_seconds.valueChanged.connect(
+            lambda v: setattr(self, "_norm_seconds", float(v))
+        )
 
         # Save
         self.btn_save.clicked.connect(self._save_data)
@@ -530,6 +568,24 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Replay finished")
         self._set_state(State.FINISHED)
 
+    def _set_params_enabled(self, enabled: bool) -> None:
+        """Gray out / restore all parameter inputs while SCOS is running."""
+        for widget in (
+            self.cmb_format,
+            self.spn_exposure,
+            self.spn_gain,
+            self.spn_fps,
+            self.spn_trigger_delay,
+            self.chk_trigger,
+            self.spn_window,
+            self.spn_n1,
+            self.spn_n2,
+            self.spn_duration,
+            self.cmb_norm_type,
+            self.spn_norm_seconds,
+        ):
+            widget.setEnabled(enabled)
+
     def _toggle_scos(self, checked: bool):
         if checked:
             logger.info(
@@ -539,6 +595,7 @@ class MainWindow(QMainWindow):
             )
             self.btn_start_scos.setText("Stop SCOS")
             self.btn_save.setEnabled(False)
+            self._set_params_enabled(False)   # lock all parameter inputs
             # Set processor params now so they're ready when measurement begins
             self.processor.window_size = self.spn_window.value()
             self.processor.gain_db     = self.spn_gain.value()
@@ -562,6 +619,7 @@ class MainWindow(QMainWindow):
                 self._calib_label.setText("Bright cal cancelled")
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
+            self._set_params_enabled(True)    # restore all parameter inputs
             self._stop_recorder()
             self._set_state(State.PREVIEW)
 
@@ -797,7 +855,6 @@ class MainWindow(QMainWindow):
         self._start_time          = time.time()
         self._bfi_norm            = None
         self._bfi_norm_buffer     = []
-        self._frame_save_count    = 0
         self._measuring_start_time = None  # set later when normalization ends
         self.plot_widget.reset()
         self._set_state(State.MEASURING_INIT)
@@ -815,6 +872,28 @@ class MainWindow(QMainWindow):
         self._measurement_duration_s = float('inf') if minutes == 0.0 else minutes * 60.0
         logger.debug("Measurement duration → %s",
                      "∞" if minutes == 0.0 else f"{minutes:.1f} min")
+
+        # Protocol rule: short recordings (≤ 1 min) should use pulsation lower level.
+        # Only prompt if currently on "Number of seconds" and duration is finite and short.
+        if 0.0 < minutes <= 1.0 and self._norm_type == "seconds":
+            reply = QMessageBox.question(
+                self,
+                "Short Recording Detected",
+                "The recording duration is 1 minute or less.\n\n"
+                "The protocol recommends using \"Pulsation lower level\" "
+                "normalization for short recordings.\n\n"
+                "Switch to \"Pulsation lower level\"?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.cmb_norm_type.setCurrentIndex(1)   # triggers _on_norm_type_changed
+
+    def _on_norm_type_changed(self, index: int) -> None:
+        """Show/hide the seconds spinbox based on normalization type selection."""
+        is_seconds = (index == 0)
+        self.spn_norm_seconds.setVisible(is_seconds)
+        self._norm_type = "seconds" if is_seconds else "pulsation"
+        logger.debug("Normalization type → %s", self._norm_type)
 
     def _on_trigger_toggled(self, on: bool):
         """Handle External Trigger checkbox toggle."""
@@ -955,13 +1034,6 @@ class MainWindow(QMainWindow):
         t = time.time() - self._start_time
         self._scos_worker.submit(frame, self._mask, t)
 
-        # Save raw frame to HDF5 if checkbox is enabled
-        if self._recorder is not None and self.chk_save_frames.isChecked():
-            self._frame_save_count += 1
-            if self._frame_save_count >= self.spn_frame_stride.value():
-                self._recorder.append_frame(frame)
-                self._frame_save_count = 0
-
     def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float,
                         mean_i: float, proc_ms: float):
         """Receives SCOS result from the worker thread — runs on the GUI thread."""
@@ -1008,6 +1080,11 @@ class MainWindow(QMainWindow):
                     f"Normalizing — {t:.1f} / {self._norm_seconds:.0f} s  ({remaining:.1f} s left)"
                 )
                 if t >= self._norm_seconds and self._bfi_norm_buffer:
+                    if self._norm_type == "pulsation":
+                        logger.info(
+                            "Pulsation lower level normalization not yet implemented — "
+                            "falling back to mean of first %.0f s", self._norm_seconds
+                        )
                     bfi_values = [b for _, b in self._bfi_norm_buffer]
                     self._bfi_norm             = float(np.mean(bfi_values))
                     self._measuring_start_time = time.time()   # timer starts here
