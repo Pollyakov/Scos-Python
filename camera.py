@@ -3,11 +3,14 @@ Camera acquisition thread.
 Grabs frames from Basler camera continuously and emits them via a Qt signal.
 """
 
+import logging
 import time
 import threading
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from pypylon import pylon, genicam
+
+logger = logging.getLogger(__name__)
 
 
 class CameraThread(QThread):
@@ -43,9 +46,13 @@ class CameraThread(QThread):
         factory = pylon.TlFactory.GetInstance()
         devices = factory.EnumerateDevices()
         if not devices:
+            logger.error("No Basler camera found")
             raise RuntimeError("No Basler camera found. Check cable / Pylon SDK.")
         self.camera = pylon.InstantCamera(factory.CreateFirstDevice())
         self.camera.Open()
+        info = self.camera.GetDeviceInfo()
+        logger.info("Camera opened — model=%s  SN=%s",
+                    info.GetModelName(), info.GetSerialNumber())
 
     def close(self):
         self.stop()
@@ -56,10 +63,17 @@ class CameraThread(QThread):
         if not self.camera or not self.camera.IsOpen():
             self.open()
         self._apply_params()
+        logger.info(
+            "Capture starting — format=%s  exposure=%.1f µs  gain=%.1f dB  "
+            "fps=%.1f Hz  trigger=%s",
+            self.pixel_format, self.exposure_us, self.gain_db,
+            self.frame_rate, self.trigger_mode,
+        )
         self._running = True
         self.start()   # starts QThread.run()
 
     def stop(self):
+        logger.info("Camera capture stopping")
         self._running = False
         self.wait()
 
@@ -82,6 +96,7 @@ class CameraThread(QThread):
     def set_trigger(self, enabled: bool, delay_us: float = 0.0):
         self.trigger_mode  = "On" if enabled else "Off"
         self.trigger_delay = delay_us
+        logger.info("Trigger mode → %s  delay=%.0f µs", self.trigger_mode, delay_us)
         # Full restart needed to change trigger mode
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.StopGrabbing()
@@ -90,6 +105,7 @@ class CameraThread(QThread):
 
     def set_pixel_format(self, fmt: str):
         """fmt: 'Mono8', 'Mono10', or 'Mono12'"""
+        logger.info("Pixel format → %s", fmt)
         self.pixel_format = fmt
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.StopGrabbing()
@@ -183,11 +199,13 @@ class CameraThread(QThread):
                         # Timeout — no frame arrived within 2 s
                         consecutive_timeouts += 1
                         if consecutive_timeouts >= self._MAX_CONSECUTIVE_TIMEOUTS:
-                            self.error.emit(
+                            msg = (
                                 f"No frames received for "
                                 f"{consecutive_timeouts * 2} s — "
                                 "camera stopped or trigger lost."
                             )
+                            logger.error(msg)
+                            self.error.emit(msg)
                             break
                         continue
                     consecutive_timeouts = 0
@@ -200,7 +218,9 @@ class CameraThread(QThread):
                             self._last_display = now
                     result.Release()
         except Exception as e:
+            logger.exception("Camera acquisition error: %s", e)
             self.error.emit(str(e))
         finally:
             if self.camera.IsGrabbing():
                 self.camera.StopGrabbing()
+            logger.info("Camera acquisition loop ended")

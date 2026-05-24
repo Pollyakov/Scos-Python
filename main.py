@@ -13,9 +13,23 @@ Run with the real Basler camera (default):
 
 import sys
 import argparse
+import logging
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
+
+# ---------------------------------------------------------------------------
+# Logging — writes to app.log AND the terminal
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    handlers=[
+        logging.FileHandler("app.log", mode="w", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 # Dark theme for pyqtgraph
 pg.setConfigOption('background', '#1e1e1e')
@@ -23,6 +37,7 @@ pg.setConfigOption('foreground', '#cccccc')
 
 
 def main():
+    logger.info("SCOS app starting")
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--mock-tiff", type=str, default=None,
                         help="Replay a multipage TIFF stack (synthetic data).")
@@ -51,18 +66,22 @@ def main():
     app.setPalette(palette)
 
     if args.mock_h5:
+        logger.info("Mode: HDF5 replay — %s", args.mock_h5)
         from h5_replay import H5ReplayThread, _NullCamera
         camera = _NullCamera()
         window = MainWindow(camera=camera, h5_replay=H5ReplayThread(args.mock_h5, loop=True))
     elif args.mock_folder:
+        logger.info("Mode: folder mock camera — %s", args.mock_folder)
         from folder_camera import FolderMockCamera
         camera = FolderMockCamera(args.mock_folder)
         window = MainWindow(camera=camera)
     elif args.mock_tiff:
+        logger.info("Mode: TIFF mock camera — %s", args.mock_tiff)
         from mock_camera import MockCameraThread
         camera = MockCameraThread(args.mock_tiff)
         window = MainWindow(camera=camera)
     else:
+        logger.info("Mode: real Basler camera")
         from camera import CameraThread
         camera = CameraThread()
         window = MainWindow(camera=camera)

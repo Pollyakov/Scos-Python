@@ -5,8 +5,11 @@ Combines: live image, SCOS time-series plot, camera controls panel.
 
 import datetime
 import json
+import logging
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -365,6 +368,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_state(self, new_state: State) -> None:
+        logger.info("State: %s → %s", self._state.name, new_state.name)
         self._state = new_state
         self._state_label.setText(new_state.name)
 
@@ -436,6 +440,15 @@ class MainWindow(QMainWindow):
                 self.camera.frame_rate    = self.spn_fps.value()
                 self.camera.trigger_mode  = "On" if self.chk_trigger.isChecked() else "Off"
                 self.camera.trigger_delay = self.spn_trigger_delay.value()
+                logger.info(
+                    "Start Video — format=%s  exposure=%.1f ms  gain=%.1f dB  "
+                    "fps=%.1f Hz  trigger=%s",
+                    self.camera.pixel_format,
+                    self.spn_exposure.value(),
+                    self.camera.gain_db,
+                    self.camera.frame_rate,
+                    self.camera.trigger_mode,
+                )
                 self.camera.start_capture()
                 self.btn_start_video.setText("Stop Video")
                 self.btn_start_scos.setEnabled(True)
@@ -455,9 +468,11 @@ class MainWindow(QMainWindow):
                     self.chk_trigger.blockSignals(False)
                     self._auto_load_folder_calibration()
             except Exception as e:
+                logger.exception("Failed to start video: %s", e)
                 self.btn_start_video.setChecked(False)
                 QMessageBox.critical(self, "Camera Error", str(e))
         else:
+            logger.info("Stop Video")
             self.btn_start_scos.setChecked(False)
             self.btn_start_scos.setEnabled(False)
             self.btn_dark_cal.setEnabled(False)
@@ -514,6 +529,11 @@ class MainWindow(QMainWindow):
 
     def _toggle_scos(self, checked: bool):
         if checked:
+            logger.info(
+                "Start SCOS — window=%d  gain=%.1f dB  format=%s  fps=%.1f Hz",
+                self.spn_window.value(), self.spn_gain.value(),
+                self.cmb_format.currentText(), self.spn_fps.value(),
+            )
             self._start_time      = time.time()
             self._bfi_norm        = None
             self._bfi_norm_buffer = []
@@ -530,6 +550,7 @@ class MainWindow(QMainWindow):
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
             self._start_recorder()
         else:
+            logger.info("Stop SCOS")
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
             self.btn_dark_cal.setEnabled(True)
@@ -640,6 +661,7 @@ class MainWindow(QMainWindow):
             self._set_state(State.PREVIEW)
             return
 
+        logger.info("Dark calibration complete — %d frames collected", n_collected)
         # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
         self.processor.dark_var  = dark_var
@@ -748,6 +770,7 @@ class MainWindow(QMainWindow):
             self._set_state(State.PREVIEW)
             return
 
+        logger.info("Bright calibration complete — %d frames collected", n_collected)
         self.processor.bright_var = bright_var
         if self._mask is not None:
             self.processor.set_roi(self._mask)
@@ -816,7 +839,10 @@ class MainWindow(QMainWindow):
 
         exposure_ms   = self.spn_exposure.value()          # already in ms
         frame_rate_hz = self.spn_fps.value()
-
+        logger.info(
+            "Scheduling Arduino upload — exposure=%.1f ms  fps=%.1f Hz",
+            exposure_ms, frame_rate_hz,
+        )
         self._arduino_thread = _ArduinoUploadThread(exposure_ms, frame_rate_hz, self)
         self._arduino_thread.progress.connect(self.status.showMessage)
         self._arduino_thread.done.connect(self._on_arduino_done)
@@ -825,6 +851,10 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Arduino: connecting…")
 
     def _on_arduino_done(self, ok: bool, msg: str):
+        if ok:
+            logger.info("Arduino upload succeeded: %s", msg)
+        else:
+            logger.error("Arduino upload failed: %s", msg)
         self.chk_trigger.setEnabled(True)
         if ok:
             exp = self.spn_exposure.value()
@@ -984,6 +1014,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Camera Warning", msg)
 
     def _on_camera_error(self, msg: str):
+        logger.error("Camera error: %s", msg)
         # pypylon reports "device removed" on GigE timeout even when the camera
         # is physically present — rewrite to avoid confusing the user.
         if "removed" in msg.lower() or "disconnect" in msg.lower():

@@ -9,11 +9,18 @@ Pin 7  → camera trigger (Line2)
 Pin 12 → laser enable
 """
 
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
 from typing import Callable, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Pin assignments (hard-coded in the sketch template below)
+CAMERA_TRIGGER_PIN = 7   # Arduino pin → Basler Line2
+LASER_ENABLE_PIN   = 12  # Arduino pin → laser enable
 
 try:
     import serial.tools.list_ports as _list_ports
@@ -75,19 +82,29 @@ def find_arduino_cli() -> Optional[str]:
 def find_arduino_port() -> Optional[str]:
     """Return the first COM port that looks like an Arduino."""
     if not _SERIAL_OK:
+        logger.warning("pyserial not available — cannot auto-detect Arduino port")
         return None
-    for port in _list_ports.comports():
+    all_ports = list(_list_ports.comports())
+    logger.debug("Scanning %d COM port(s) for Arduino", len(all_ports))
+    for port in all_ports:
         desc = (port.description or "").lower()
         mfr  = (port.manufacturer or "").lower()
+        logger.debug("  %s — desc=%r  mfr=%r  vid=0x%04X",
+                     port.device, port.description, port.manufacturer,
+                     port.vid or 0)
         # Official Arduino boards (VID 0x2341)
         if port.vid == 0x2341:
+            logger.info("Arduino found (official VID) on %s", port.device)
             return port.device
         # Name-based fallback
         if "arduino" in desc or "arduino" in mfr:
+            logger.info("Arduino found (name match) on %s", port.device)
             return port.device
         # CH340/CH341/CH9102 — common clones
         if any(x in desc for x in ("ch340", "ch341", "ch9102")):
+            logger.info("Arduino clone (%s) found on %s", port.description, port.device)
             return port.device
+    logger.warning("No Arduino detected on any COM port")
     return None
 
 
@@ -120,24 +137,37 @@ def upload_sketch(
     high_time_ms = max(1, round(exposure_ms))
     period_ms    = max(high_time_ms + 1, round(1000.0 / frame_rate_hz))
 
+    logger.info(
+        "Arduino upload — exposure=%.1f ms  frame_rate=%.1f Hz  "
+        "high_time=%d ms  period=%d ms  "
+        "camera→pin%d  laser→pin%d",
+        exposure_ms, frame_rate_hz, high_time_ms, period_ms,
+        CAMERA_TRIGGER_PIN, LASER_ENABLE_PIN,
+    )
+
     def log(msg: str):
+        logger.info("Arduino: %s", msg)
         if on_progress:
             on_progress(msg)
 
     # --- locate arduino-cli ---
     cli = find_arduino_cli()
     if not cli:
+        logger.error("arduino-cli not found")
         return False, (
             "arduino-cli not found.\n"
             "Install Arduino IDE 2 or download arduino-cli from "
             "https://arduino.github.io/arduino-cli"
         )
+    logger.debug("arduino-cli path: %s", cli)
 
     # --- locate board port ---
     if port is None:
         port = find_arduino_port()
     if port is None:
+        logger.error("Arduino not detected on any COM port")
         return False, "No Arduino detected on any COM port. Check USB connection."
+    logger.info("Using Arduino port: %s", port)
 
     # --- write sketch to temp directory ---
     sketch_src  = _TEMPLATE.format(high_time_ms=high_time_ms, period_ms=period_ms)
@@ -156,7 +186,10 @@ def upload_sketch(
             capture_output=True, text=True, timeout=120,
         )
         if r.returncode != 0:
-            return False, f"Compile error:\n{(r.stderr or r.stdout).strip()}"
+            err = (r.stderr or r.stdout).strip()
+            logger.error("Compile failed: %s", err)
+            return False, f"Compile error:\n{err}"
+        logger.info("Sketch compiled OK")
 
         # Upload
         log(f"Uploading to Arduino on {port}…")
@@ -165,15 +198,19 @@ def upload_sketch(
             capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
-            return False, f"Upload error:\n{(r.stderr or r.stdout).strip()}"
+            err = (r.stderr or r.stdout).strip()
+            logger.error("Upload failed: %s", err)
+            return False, f"Upload error:\n{err}"
 
-        return True, (
-            f"Arduino ready — T={period_ms} ms, exposure={high_time_ms} ms on {port}"
-        )
+        msg = f"Arduino ready — T={period_ms} ms, exposure={high_time_ms} ms on {port}"
+        logger.info(msg)
+        return True, msg
 
     except subprocess.TimeoutExpired:
+        logger.error("Arduino operation timed out")
         return False, "Arduino operation timed out."
     except Exception as exc:
+        logger.exception("Unexpected error during Arduino upload: %s", exc)
         return False, str(exc)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
