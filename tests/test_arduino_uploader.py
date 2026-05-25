@@ -42,7 +42,7 @@ class TestSketchTemplate:
 
     def test_template_has_laser_pin(self):
         assert "laserPin" in _TEMPLATE
-        assert "laserPin  = 12" in _TEMPLATE
+        assert "laserPin  = 13" in _TEMPLATE
 
 
 # ======================================================================

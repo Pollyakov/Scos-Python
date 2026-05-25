@@ -6,7 +6,7 @@ Each Arduino loop() = one camera frame:
   T         (ms) = 1000 / frame_rate   (period)
 
 Pin 7  → camera trigger (Line2)
-Pin 12 → laser enable
+Pin 13 → laser enable
 """
 
 import logging
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Pin assignments (hard-coded in the sketch template below)
 CAMERA_TRIGGER_PIN = 7   # Arduino pin → Basler Line2
-LASER_ENABLE_PIN   = 12  # Arduino pin → laser enable
+LASER_ENABLE_PIN   = 13  # Arduino pin → laser enable
 
 try:
     import serial.tools.list_ports as _list_ports
@@ -33,7 +33,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _TEMPLATE = """\
 const int cameraPin = 7;
-const int laserPin  = 12;
+const int laserPin  = 13;
 
 int high_time = {high_time_ms};  // ms  (exposure time)
 int T         = {period_ms};     // ms  (1000 / frame_rate)
