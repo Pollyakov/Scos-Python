@@ -6,6 +6,7 @@ Combines: live image, SCOS time-series plot, camera controls panel.
 import datetime
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -256,6 +257,16 @@ class MainWindow(QMainWindow):
         norm_row.addWidget(self.spn_norm_seconds)
         scos_layout.addLayout(norm_row)
 
+        self.spn_workers = self._labeled_int_spin(
+            scos_layout, "Processing workers:", 1, 8, 3, step=1
+        )
+        _cores = os.cpu_count() or 4
+        self.spn_workers.setToolTip(
+            f"Parallel threads for κ² computation.\n"
+            f"This machine has {_cores} logical cores.\n"
+            f"Recommended: 1–{max(1, _cores - 2)}  (leave cores for GUI + camera)"
+        )
+
         layout.addWidget(self.scos_group)
 
         # --- Action buttons (outside scos_group so they are never locked) ---
@@ -392,6 +403,7 @@ class MainWindow(QMainWindow):
             "norm_type":       lambda v: self.cmb_norm_type.setCurrentIndex(
                                    0 if str(v) == "seconds" else 1),
             "measurement_duration_min": lambda v: self.spn_duration.setValue(float(v)),
+            "n_workers":               lambda v: self.spn_workers.setValue(int(v)),
         }.items():
             if key in cfg:
                 try:
@@ -614,6 +626,7 @@ class MainWindow(QMainWindow):
             self.spn_duration,
             self.cmb_norm_type,
             self.spn_norm_seconds,
+            self.spn_workers,
         ):
             widget.setEnabled(enabled)
 
@@ -638,6 +651,15 @@ class MainWindow(QMainWindow):
             self.processor.gain_db     = self.spn_gain.value()
             fmt = self.cmb_format.currentText()
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
+            # Recreate pipeline with the currently selected worker count
+            self._scos_worker.stop()
+            self._scos_worker.wait(2000)
+            n_workers = self.spn_workers.value()
+            self._scos_worker = RealtimePipeline(self.processor, n_workers=n_workers, parent=self)
+            self._scos_worker.result_ready.connect(self._on_scos_result)
+            self._scos_worker.error_occurred.connect(self._on_scos_error)
+            self._scos_worker.start()
+            logger.info("Pipeline started with %d workers", n_workers)
             # Begin calibration sequence: dark cal → bright cal → measure
             self._start_dark_cal()
         else:

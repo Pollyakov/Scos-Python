@@ -33,6 +33,7 @@ class HDF5Recorder:
         self._buf_meani:  list[float] = []
         self._n_flushed = 0
 
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         self._f = h5py.File(self._path, "w")
 
         meta = self._f.create_group("metadata")
