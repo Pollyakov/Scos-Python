@@ -28,6 +28,8 @@ Last updated: 2026-06-04
 | 12 | Math bugs fixed | `bright_var` (spVar) term added; unbiased variance estimator; `dark_var` spatially smoothed; `sat_capacity` corrected to 11117 e⁻ for a2A1920-160umPRO |
 | 13 | Phase 2 — real camera partial validation | App ran on real system at 40 Hz; processing time ~13 ms per frame (~12 ms headroom). Camera + laser streaming confirmed working. |
 | 14 | Processing workers GUI control | `spn_workers` spinbox in SCOS group (range 1–8, default 3). Pipeline recreated on Start SCOS with the selected count. Tooltip shows machine core count. |
+| 15 | `shrink_mask_for_window` — ROI edge fix | `processor.shrink_mask_for_window(mask, window)` erodes the ROI by `window//2+1` px. Applied at MEASURING_INIT start; shrunk mask used for κ² only, full mask kept for display. Erosion size logged. 4 new tests. |
+| 16 | `GrabStrategy_OneByOne` + skipped-frame warning | `camera.py` now uses `OneByOne` + `MaxNumBuffer=20`. After each `RetrieveResult`, `GetNumberOfSkippedImages()` is checked and a `warning` signal emitted if > 0. Both test mocks updated. |
 
 ---
 
@@ -42,43 +44,11 @@ policy, correctness beats everything.
 
 ---
 
-#### A1 · `shrink_mask_for_window` — ROI edge contamination
-
-**Why it matters:** `uniform_filter` near the ROI boundary uses pixels *outside* the ROI.
-Those pixels are tissue + background, not pure speckle signal — their variance leaks into
-κ² for every pixel within `⌈window/2⌉ + 1` of the edge. The protocol mandates eroding the
-mask before computing κ².
-
-**Where to add it:**
-- New function in `processor.py` (or future `core/scos_math.py`):
-  ```python
-  from scipy.ndimage import binary_erosion
-  def shrink_mask_for_window(mask: np.ndarray, window: int) -> np.ndarray:
-      erosion_radius = window // 2 + 1
-      struct = np.ones((2*erosion_radius+1, 2*erosion_radius+1), dtype=bool)
-      return binary_erosion(mask, structure=struct)
-  ```
-- Call it at the start of `MEASURING_INIT` to replace `self._mask` with the shrunk version.
-- Add a test: shrunk mask is a strict subset of input; shrunk mask shape matches input.
+#### ~~A1 · `shrink_mask_for_window`~~ — ✅ DONE (see item 15 in Done table)
 
 ---
 
-#### A2 · `GrabStrategy_OneByOne` in `camera.py`
-
-**Why it matters:** `GrabStrategy_LatestImageOnly` silently discards frames when the system
-is even slightly slow. Uneven frame sampling produces a wrong pulse rate from the FFT of
-the BFI signal. The user gets a scientifically wrong answer with no warning.
-
-**Current state:** `camera.py:104, 113, 120, 192` all call
-`camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)`.
-
-**Fix:** Replace with `GrabStrategy_OneByOne` and set `MaxNumBuffer=20`:
-```python
-self.camera.MaxNumBuffer.Value = 20
-self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
-```
-After each `RetrieveResult`, check `result.GetNumberOfSkippedImages()` and emit a
-`warning` signal if > 0. This turns silent drops into visible warnings.
+#### ~~A2 · `GrabStrategy_OneByOne`~~ — ✅ DONE (see item 16 in Done table)
 
 ---
 

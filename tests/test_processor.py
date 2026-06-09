@@ -8,7 +8,7 @@ import pytest
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from processor import convert_gain, load_gain_from_table, local_variance, SCOSProcessor, GainTableError
+from processor import convert_gain, load_gain_from_table, local_variance, SCOSProcessor, GainTableError, shrink_mask_for_window
 
 
 # ======================================================================
@@ -392,3 +392,44 @@ class TestLocalVarianceEdgeCases:
         mean_im, var_im = local_variance(im, 3)
         assert mean_im.shape == (1, 1)
         assert var_im[0, 0] >= 0
+
+
+# ======================================================================
+# shrink_mask_for_window
+# ======================================================================
+
+class TestShrinkMaskForWindow:
+
+    def _circle_mask(self, size=50, radius=20):
+        """Helper: boolean circle mask centred in a square image."""
+        y, x = np.ogrid[:size, :size]
+        return (x - size // 2) ** 2 + (y - size // 2) ** 2 <= radius ** 2
+
+    def test_shrunk_is_strict_subset(self):
+        """Every True pixel in the result must also be True in the input."""
+        mask = self._circle_mask()
+        shrunk = shrink_mask_for_window(mask, window=7)
+        assert shrunk.dtype == bool
+        # shrunk ⊆ mask
+        assert np.all(mask[shrunk])
+        # at least one pixel was removed
+        assert shrunk.sum() < mask.sum()
+
+    def test_output_shape_matches_input(self):
+        """Output shape must equal input shape."""
+        mask = self._circle_mask(size=100, radius=40)
+        shrunk = shrink_mask_for_window(mask, window=7)
+        assert shrunk.shape == mask.shape
+
+    def test_erosion_radius_scales_with_window(self):
+        """Larger window → larger erosion → fewer True pixels."""
+        mask = self._circle_mask(size=100, radius=45)
+        s7  = shrink_mask_for_window(mask, window=7)   # radius 4
+        s15 = shrink_mask_for_window(mask, window=15)  # radius 8
+        assert s15.sum() < s7.sum()
+
+    def test_all_false_mask_stays_all_false(self):
+        """An empty mask should remain empty after erosion."""
+        mask = np.zeros((50, 50), dtype=bool)
+        shrunk = shrink_mask_for_window(mask, window=7)
+        assert shrunk.sum() == 0

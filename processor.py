@@ -8,7 +8,20 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import binary_erosion, uniform_filter
+
+
+def shrink_mask_for_window(mask: np.ndarray, window: int) -> np.ndarray:
+    """Erode a boolean ROI mask by ⌈window/2⌉ + 1 pixels on all sides.
+
+    uniform_filter near the ROI boundary reads pixels outside the ROI, so
+    the border strip of width (window//2 + 1) produces contaminated κ² values.
+    Eroding the mask by that amount keeps only pixels whose full filter
+    neighbourhood lies entirely inside the ROI.
+    """
+    erosion_radius = window // 2 + 1
+    struct = np.ones((2 * erosion_radius + 1, 2 * erosion_radius + 1), dtype=bool)
+    return binary_erosion(mask, structure=struct)
 
 
 class GainTableError(ValueError):

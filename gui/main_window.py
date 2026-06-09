@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 import scipy.io
 
 from camera    import CameraThread
-from processor import SCOSProcessor, GainTableError
+from processor import SCOSProcessor, GainTableError, shrink_mask_for_window
 from core.session   import BrightCalCollector, DarkCalCollector, State
 from core.recorder  import HDF5Recorder
 from core.pipeline  import RealtimePipeline
@@ -96,7 +96,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
 
         # State
-        self._mask        = None
+        self._mask        = None   # full ROI circle — used for display and calibration
+        self._scos_mask   = None   # shrunk by window//2+1 — used for κ² processing only
         self._start_time  = None
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
@@ -664,6 +665,7 @@ class MainWindow(QMainWindow):
             self._start_dark_cal()
         else:
             logger.info("Stop SCOS")
+            self._scos_mask            = None
             self._measuring_start_time = None
             self._time_left_label.hide()
             # Cancel any in-progress calibration
@@ -915,6 +917,19 @@ class MainWindow(QMainWindow):
         self._bfi_norm            = None
         self._bfi_norm_buffer     = []
         self._measuring_start_time = None  # set later when normalization ends
+
+        # Shrink the ROI mask so no κ² pixel has its filter window straddle the
+        # ROI boundary.  Keep self._mask intact for display and intensity stats.
+        w = self.spn_window.value()
+        if self._mask is not None:
+            self._scos_mask = shrink_mask_for_window(self._mask, w)
+            removed = int(self._mask.sum()) - int(self._scos_mask.sum())
+            logger.info("ROI mask shrunk by %d px (window=%d) — %d px removed from edge",
+                        w // 2 + 1, w, removed)
+            self.processor.set_roi(self._scos_mask)
+        else:
+            self._scos_mask = None
+
         self.plot_widget.reset()
         self._set_state(State.MEASURING_INIT)
         self._start_recorder()
@@ -1091,7 +1106,8 @@ class MainWindow(QMainWindow):
         # Hand the frame off to the worker thread.  The worker keeps a 1-frame
         # queue so it always processes the latest frame and never falls behind.
         t = time.time() - self._start_time
-        self._scos_worker.submit(frame, self._mask, t)
+        mask = self._scos_mask if self._scos_mask is not None else self._mask
+        self._scos_worker.submit(frame, mask, t)
 
         # Save raw frame to HDF5 if requested
         if self._recorder is not None and self.chk_save_frames.isChecked():
