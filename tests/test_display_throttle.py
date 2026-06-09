@@ -24,6 +24,7 @@ _mock_pylon = types.ModuleType("pylon")
 _mock_pylon.TlFactory = type("TlFactory", (), {"GetInstance": staticmethod(lambda: None)})
 _mock_pylon.InstantCamera = type("InstantCamera", (), {})
 _mock_pylon.GrabStrategy_LatestImageOnly = 0
+_mock_pylon.GrabStrategy_OneByOne = 1
 _mock_pylon.TimeoutHandling_ThrowException = 0
 _mock_genicam = types.ModuleType("genicam")
 _mock_genicam.IsWritable = lambda x: True

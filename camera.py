@@ -101,7 +101,8 @@ class CameraThread(QThread):
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.StopGrabbing()
             self._apply_params()
-            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            self.camera.MaxNumBuffer.Value = 20
+            self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
 
     def set_pixel_format(self, fmt: str):
         """fmt: 'Mono8', 'Mono10', or 'Mono12'"""
@@ -110,14 +111,16 @@ class CameraThread(QThread):
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.StopGrabbing()
             self._apply_params()
-            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            self.camera.MaxNumBuffer.Value = 20
+            self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
 
     def set_roi(self, x: int, y: int, w: int, h: int):
         self.roi_position = (x, y, w, h)
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.StopGrabbing()
             self._apply_params()
-            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            self.camera.MaxNumBuffer.Value = 20
+            self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
 
     def get_info(self) -> dict:
         if not self.camera or not self.camera.IsOpen():
@@ -189,7 +192,8 @@ class CameraThread(QThread):
         """Main acquisition loop — runs in a separate thread."""
         consecutive_timeouts = 0
         try:
-            self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            self.camera.MaxNumBuffer.Value = 20
+            self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
             while self._running:
                 if self.camera.IsGrabbing():
                     result = self.camera.RetrieveResult(
@@ -209,6 +213,11 @@ class CameraThread(QThread):
                             break
                         continue
                     consecutive_timeouts = 0
+                    skipped = result.GetNumberOfSkippedImages()
+                    if skipped > 0:
+                        msg = f"Camera: {skipped} frame(s) dropped (buffer overflow)"
+                        logger.warning(msg)
+                        self.warning.emit(msg)
                     if result.GrabSucceeded():
                         frame = result.Array.copy()
                         self.frame_ready.emit(frame)   # always — for SCOS
