@@ -191,3 +191,36 @@ class TestRealtimePipeline:
         for i in range(25):   # maxsize=20, so 5 should be dropped
             q.put((None, None, float(i)))
         assert q.dropped_count == 5
+
+    def test_inflight_capped_under_sustained_overload(self):
+        """Regression test: submitting far faster than the workers can drain
+        must not let in-flight work grow without bound.
+
+        Before the in-flight semaphore was added, the ThreadPoolExecutor's
+        internal queue and the `_inflight` deque had no size limit — a slow
+        patch could grow them to hundreds of items (tens of GB over an hour)
+        while `dropped_count` (on the separate, bounded `_input_q`) still
+        read zero. This asserts `_inflight` now stays near the semaphore's
+        cap regardless of how large the backlog gets.
+        """
+        n_workers = 2
+        cap = 2 * n_workers   # RealtimePipeline's default max_inflight
+        proc = _MockProcessor(sleep_range=(0.05, 0.05))   # much slower than submission
+        pipeline = RealtimePipeline(proc, n_workers=n_workers)
+        pipeline.start()
+
+        max_seen = 0
+        for frame, mask, t in _make_frames(80):
+            pipeline.submit(frame, mask, t)
+            max_seen = max(max_seen, len(pipeline._inflight))
+            time.sleep(0.002)   # submission rate >> 1 frame / 50 ms per worker
+        time.sleep(0.2)
+        max_seen = max(max_seen, len(pipeline._inflight))
+
+        pipeline.stop()
+        pipeline.wait(15000)
+
+        assert max_seen <= cap + 1, (
+            f"in-flight work grew to {max_seen}, expected <= {cap + 1} "
+            f"(cap={cap}) — the in-flight semaphore is not bounding memory"
+        )

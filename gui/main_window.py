@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self._frame_count = 0
         self._proc_times  = []   # rolling window of process() durations (ms)
         self._last_proc_label_time = 0.0
+        self._last_logged_dropped_count = 0   # for change-triggered app.log warnings
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
         self._calib_thread:   _CalibrationLoaderThread | None = None
@@ -334,6 +335,9 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet("font-weight: bold; color: #00cc44;")
         self._proc_label.setStyleSheet("font-weight: bold; color: #ffaa00;")
 
+        self.lbl_dropped = QLabel("Dropped: 0")
+        self.lbl_dropped.setStyleSheet("font-weight: bold; color: #ff5555;")
+
         self.lbl_size   = QLabel("Size : --")
         self.lbl_mean_i = QLabel("⟨I⟩  : --")
         self.lbl_p5     = QLabel("p5   : --")
@@ -341,8 +345,8 @@ class MainWindow(QMainWindow):
         self.lbl_kappa  = QLabel("κ²   : --")
         self.lbl_bfi    = QLabel("1/κ² : --")
         self.lbl_roi    = QLabel("ROI  : full frame")
-        for lbl in (self._fps_label, self._proc_label, self.lbl_size,
-                    self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
+        for lbl in (self._fps_label, self._proc_label, self.lbl_dropped,
+                    self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
                     self.lbl_kappa, self.lbl_bfi, self.lbl_roi):
             info_layout.addWidget(lbl)
         layout.addWidget(info_group)
@@ -660,6 +664,8 @@ class MainWindow(QMainWindow):
             self._scos_worker.result_ready.connect(self._on_scos_result)
             self._scos_worker.error_occurred.connect(self._on_scos_error)
             self._scos_worker.start()
+            self._last_logged_dropped_count = 0
+            self.lbl_dropped.setText("Dropped: 0")
             logger.info("Pipeline started with %d workers", n_workers)
             # Begin calibration sequence: dark cal → bright cal → measure
             self._start_dark_cal()
@@ -1141,6 +1147,17 @@ class MainWindow(QMainWindow):
             avg_ms = sum(self._proc_times) / len(self._proc_times)
             self._proc_label.setText(f"Proc: {avg_ms:.0f} ms (last: {proc_ms:.0f} ms)")
             self._last_proc_label_time = now
+            # Dropped-frame counter — visible in the GUI at all times; a new
+            # log warning is only emitted when the count actually changes, so
+            # a stalled pipeline doesn't spam app.log once per second.
+            dropped = self._scos_worker.dropped_count
+            self.lbl_dropped.setText(f"Dropped: {dropped}")
+            if dropped != self._last_logged_dropped_count:
+                logger.warning(
+                    "SCOS pipeline overloaded — %d frame(s) dropped from the "
+                    "input queue so far", dropped,
+                )
+                self._last_logged_dropped_count = dropped
             # Time-remaining indicator — only after normalization ends and duration is finite
             if self._measurement_duration_s < float('inf') and elapsed_measuring is not None:
                 remaining_s = max(0.0, self._measurement_duration_s - elapsed_measuring)

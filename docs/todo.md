@@ -20,7 +20,7 @@ Last updated: 2026-06-04
 | 4 | Metadata saved with session | fps, gain, exposure, window, ROI, sat_capacity → HDF5 `metadata` group |
 | 5 | rBFI normalization — "seconds" mode | `MEASURING_INIT` collects `norm_seconds` of BFI, computes mean, divides all subsequent values. **"Pulsation lower level" mode logs a warning and falls back to mean — see E1 below.** |
 | 6 | Full state machine | `State` enum (IDLE → PREVIEW → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING → FINISHED/ERROR) wired in `gui/main_window.py` via `_set_state()`. Colored status indicator in GUI. |
-| 7 | `core/pipeline.py` | `RealtimePipeline`: drop-oldest 20-frame queue + `ThreadPoolExecutor` (configurable workers) for parallel processing. Results emitted in submission order. **See item A3 below — silent drop must still be fixed.** |
+| 7 | `core/pipeline.py` | `RealtimePipeline`: drop-oldest 20-frame `_input_q` + `ThreadPoolExecutor` (configurable workers) for parallel processing, with an `_inflight_sem` semaphore capping in-flight work so a slow patch can't grow memory without bound. Results emitted in submission order. `dropped_count` now shown in the GUI Info panel and logged on change. **See item A3 below — moving intake off the GUI thread is still open.** |
 | 8 | `core/session.py` | `State` enum, `SessionConfig` dataclass, `DarkCalCollector` (Welford online stats), `BrightCalCollector` |
 | 9 | Phase 1 — mock cameras | `mock_camera.py` (TIFF stack), `folder_camera.py` (real lab folder, auto-loads calibration), `h5_replay.py` (replays saved HDF5). CLI flags: `--mock-tiff`, `--mock-folder`, `--mock-h5` |
 | 10 | `tools/synth_tiff.py` | Generates synthetic Rayleigh-distributed TIFF stacks for offline development |
@@ -52,15 +52,33 @@ policy, correctness beats everything.
 
 ---
 
-#### A3 · Replace `_DropOldestQueue` with blocking bounded queue
+#### A3 · Cap in-flight work; don't just block `put()`
 
-**Why it matters:** `_DropOldestQueue` (in `core/pipeline.py:50-80`) silently evicts the
-oldest frame when full. `Implementation_Plan.md §2` explicitly requires "block until there
-is space — never drop silently."
+**Why it matters:** `_DropOldestQueue` (in `core/pipeline.py`) is bounded and its drops are
+counted — but that was never the actual leak. The `ThreadPoolExecutor`'s internal queue and
+the `_inflight` deque behind it (`core/pipeline.py`, dispatcher loop) had **no size limit at
+all**. A sustained processing slowdown grew those two without bound while `dropped_count`
+kept reading zero — over an hour that is an out-of-memory crash that loses the whole
+session, with no warning. Reproduced experimentally in `Review_Findings_B.md`.
 
-**Fix:** Replace `_DropOldestQueue` with `queue.Queue(maxsize=20)`. The capture side calls
-`put(frame)` (blocking). If it blocks for more than ~1 s without progress, emit
-`overload_detected` (see B1).
+**This doc previously said** "replace `_DropOldestQueue` with a blocking `queue.Queue(20)`."
+**That fix is insufficient on its own** — a fast dispatcher empties a blocking `queue.Queue`
+into the still-unbounded executor queue just as fast as a drop-oldest one. It also can't run
+on the GUI thread (a full blocking queue would freeze the UI, since intake currently happens
+in `_on_scos_frame`); moving intake off the GUI thread is tracked separately (see
+`Implementation_Plan.md §2` and the pipeline docstring in `core/pipeline.py`).
+
+**Fix implemented:** a `threading.Semaphore` (`_inflight_sem`, default `2 * n_workers`)
+caps how many frames may be submitted-but-not-yet-collected at once. The dispatcher thread
+(not the GUI thread) blocks on this semaphore before calling `pool.submit()`; the emitter
+releases it after each future resolves. While the dispatcher is blocked, new frames still
+land in `_input_q`, whose bounded drop-oldest behavior (and `dropped_count`) absorbs the
+backlog visibly instead of letting it grow silently downstream. `dropped_count` is now
+surfaced in the GUI Info panel (`Dropped: N`) and logged to `app.log` when it changes.
+
+**Still open:** moving frame intake off the GUI thread onto a real bounded `frame_queue`
+(the `Implementation_Plan §2` design), with an `overload_detected` signal at ~80 % full —
+this is the next step, not yet done.
 
 ---
 
@@ -270,6 +288,27 @@ request.
 A document that answers the open architecture questions from `Implementation_Plan.md §9`
 (rBFI normalization policy, disk-space limit policy, save-frames policy). Needs supervisor
 input before writing.
+
+---
+
+#### D5 · Verify `GrabStrategy_OneByOne` on real hardware
+
+The `GrabStrategy_OneByOne` + `GetNumberOfSkippedImages()` change in `camera.py` cannot
+be tested with mock cameras — they bypass `camera.py`'s `run()` loop entirely.
+
+**How to verify when real camera is available:**
+1. Run `python main.py` (no mock flag).
+2. Start Video at a normal FPS (40 Hz).
+3. Confirm normal streaming works — no regressions.
+4. Deliberately overload: raise FPS to a value the system cannot sustain (e.g. 150 Hz).
+5. Check `app.log` for lines like:
+   ```
+   WARNING  camera — Camera: N frame(s) dropped (buffer overflow)
+   ```
+6. Confirm the warning also appears in the GUI status bar.
+
+If no drops occur even at high FPS, the buffer is absorbing them — that is also a valid
+result (it means `MaxNumBuffer=20` is giving enough slack).
 
 ---
 

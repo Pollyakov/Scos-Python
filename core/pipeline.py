@@ -1,10 +1,20 @@
 """
-RealtimePipeline — drop-oldest 20-frame queue + ThreadPoolExecutor for parallel
-frame processing.
+RealtimePipeline — drop-oldest 20-frame input queue + ThreadPoolExecutor for
+parallel frame processing, with a bounded number of frames in flight.
 
 Replaces the old 1-frame drop-newest _SCOSWorkerThread with proper pipeline
 parallelism: N frames are in-flight concurrently (GIL released by NumPy/cv2),
 results are emitted in submission order to keep the BFI time-series monotonic.
+
+Backpressure design: `_input_q` is bounded and visible (drop-oldest, counted
+via `dropped_count`), but the ThreadPoolExecutor's internal queue and the
+`_inflight` deque behind it are not bounded by the library itself. A slow
+processing stage could previously grow those two without limit — a hidden,
+uncounted memory leak that OOMs a multi-hour session while `dropped_count`
+still reads zero. `_inflight_sem` caps how many frames may be submitted to
+the pool but not yet collected by the emitter; once that cap is reached the
+dispatcher blocks (it runs on its own QThread, not the GUI thread), so any
+further backlog is absorbed by the bounded, visible `_input_q` instead.
 """
 
 import collections
@@ -106,6 +116,8 @@ class RealtimePipeline(QThread):
         self,
         processor: SCOSProcessor,
         n_workers: int = 3,
+        *,
+        max_inflight: int | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -114,6 +126,11 @@ class RealtimePipeline(QThread):
         self._input_q   = _DropOldestQueue(maxsize=20)
         self._inflight  : collections.deque = collections.deque()
         self._inf_cond  = threading.Condition()
+        # Caps frames submitted-but-not-yet-collected. Default: enough for every
+        # worker to have one task running plus one queued, so a worker never sits
+        # idle waiting for the dispatcher — without letting the backlog grow
+        # unbounded the way the bare ThreadPoolExecutor queue would.
+        self._inflight_sem = threading.Semaphore(max_inflight or 2 * n_workers)
 
     # ------------------------------------------------------------------
     # Public API (called from GUI thread)
@@ -146,6 +163,13 @@ class RealtimePipeline(QThread):
                 if item is None:
                     break
                 frame, mask, t = item
+                # Block here (dispatcher thread only — never the GUI thread)
+                # until a slot frees up, instead of growing the pool's internal
+                # queue and _inflight without limit. While blocked, new frames
+                # keep arriving into the bounded _input_q, which drops the
+                # oldest and counts it — visible backpressure instead of a
+                # silent, unbounded memory leak.
+                self._inflight_sem.acquire()
                 fut = pool.submit(_worker_fn, frame, mask, t, self._processor)
                 with self._inf_cond:
                     self._inflight.append(fut)
@@ -171,8 +195,14 @@ class RealtimePipeline(QThread):
             try:
                 t, k2_raw, k2_corr, mean_i, proc_ms = item.result()
             except GainTableError as e:
+                self._inflight_sem.release()
                 self.error_occurred.emit(str(e))
                 continue
             except Exception:
+                # Swallowed here deliberately for now — logging/counting this
+                # path is a separate, already-planned follow-up task. Only the
+                # semaphore release is added so in-flight capacity isn't leaked.
+                self._inflight_sem.release()
                 continue
+            self._inflight_sem.release()
             self.result_ready.emit(t, k2_raw, k2_corr, mean_i, proc_ms)
