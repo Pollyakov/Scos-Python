@@ -3,6 +3,12 @@
 Appends t, k2_raw, k2_corr, bfi, mean_intensity to a single .h5 file.
 Buffered writes: data accumulates in memory and is flushed to disk every
 FLUSH_EVERY appends (or on close), so a crash loses at most FLUSH_EVERY points.
+
+Every submitted frame gets exactly one row — including frames where κ² ≤ 0
+made bfi undefined, which are kept with bfi=NaN (see n_invalid) rather than
+dropped. `time` staying gap-free matters: downstream FFT-based analysis
+(e.g. pulse rate) assumes evenly spaced samples, and a silently missing row
+shifts every later timestamp.
 """
 from __future__ import annotations
 
@@ -32,6 +38,7 @@ class HDF5Recorder:
         self._buf_bfi:    list[float] = []
         self._buf_meani:  list[float] = []
         self._n_flushed = 0
+        self._n_invalid  = 0   # rows kept with bfi=NaN because κ² ≤ 0
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._f = h5py.File(self._path, "w")
@@ -49,12 +56,22 @@ class HDF5Recorder:
 
     def append(self, t: float, k2_raw: float, k2_corr: float,
                mean_i: float) -> None:
-        if k2_corr <= 0:
-            return
+        """Append one result row.
+
+        κ² ≤ 0 makes 1/κ² undefined, but the frame itself still happened —
+        dropping the row here would leave a gap in `time`, breaking the
+        even sampling that downstream FFT-based analysis (e.g. pulse rate)
+        depends on. Keep the row and store bfi as NaN ("missing") instead.
+        """
+        if k2_corr > 0:
+            bfi = 1.0 / k2_corr
+        else:
+            bfi = float("nan")
+            self._n_invalid += 1
         self._buf_t.append(t)
         self._buf_k2raw.append(k2_raw)
         self._buf_k2corr.append(k2_corr)
-        self._buf_bfi.append(1.0 / k2_corr)
+        self._buf_bfi.append(bfi)
         self._buf_meani.append(mean_i)
         if len(self._buf_t) >= FLUSH_EVERY:
             self.flush()
@@ -131,3 +148,8 @@ class HDF5Recorder:
     @property
     def n_points(self) -> int:
         return self._n_flushed + len(self._buf_t)
+
+    @property
+    def n_invalid(self) -> int:
+        """Rows with κ² ≤ 0 — kept in the file with bfi=NaN rather than dropped."""
+        return self._n_invalid

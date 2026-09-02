@@ -55,16 +55,23 @@ def test_round_trip_values(tmp_path):
         np.testing.assert_allclose(f["mean_intensity"][:], mean_is)
 
 
-def test_non_positive_k2_corr_skipped(tmp_path):
+def test_non_positive_k2_corr_kept_as_nan(tmp_path):
+    """κ² ≤ 0 rows must be kept (not dropped) so `time` stays gap-free —
+    only `bfi` becomes NaN, since 1/κ² is undefined for those points."""
     rec = _make_recorder(tmp_path)
-    rec.append(0.0,  0.1, -0.1, 500.0)   # negative k2_corr — skip
-    rec.append(0.05, 0.1,  0.0, 500.0)   # zero k2_corr — skip
+    rec.append(0.0,  0.1, -0.1, 500.0)   # negative k2_corr — bfi -> NaN
+    rec.append(0.05, 0.1,  0.0, 500.0)   # zero k2_corr — bfi -> NaN
     rec.append(0.1,  0.1,  0.1, 500.0)   # valid
+    assert rec.n_invalid == 2
     rec.close()
 
     with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert len(f["time"]) == 1
-        assert f["time"][0] == pytest.approx(0.1)
+        assert len(f["time"]) == 3
+        np.testing.assert_allclose(f["time"][:],    [0.0, 0.05, 0.1])
+        np.testing.assert_allclose(f["k2_corr"][:], [-0.1, 0.0, 0.1])
+        assert math.isnan(f["bfi"][0])
+        assert math.isnan(f["bfi"][1])
+        assert f["bfi"][2] == pytest.approx(10.0)   # 1 / 0.1
 
 
 def test_flush_every_threshold(tmp_path):

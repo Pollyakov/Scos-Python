@@ -79,9 +79,10 @@ class TestDropOldestQueue:
 class _MockProcessor:
     """Fake processor: returns fixed k2 values, with optional sleep and errors."""
 
-    def __init__(self, sleep_range=(0, 0), raise_on=None):
-        self.sleep_range = sleep_range   # (min_s, max_s) random sleep per call
-        self.raise_on    = set(raise_on or [])   # set of call indices to raise on
+    def __init__(self, sleep_range=(0, 0), raise_on=None, raise_generic_on=None):
+        self.sleep_range      = sleep_range   # (min_s, max_s) random sleep per call
+        self.raise_on         = set(raise_on or [])           # -> GainTableError
+        self.raise_generic_on = set(raise_generic_on or [])   # -> plain RuntimeError
         self._call_count = 0
         self._lock       = threading.Lock()
 
@@ -93,6 +94,8 @@ class _MockProcessor:
             time.sleep(random.uniform(*self.sleep_range))
         if idx in self.raise_on:
             raise GainTableError(f"mock GainTableError at call {idx}")
+        if idx in self.raise_generic_on:
+            raise RuntimeError(f"mock unexpected error at call {idx}")
         return 0.05, 0.04, 100.0   # k2_raw, k2_corr, mean_i
 
 
@@ -173,6 +176,29 @@ class TestRealtimePipeline:
         assert len(errors) == 3
         assert len(results) == 7
         assert len(results) + len(errors) == 10
+
+    def test_generic_exception_counted_not_silent(self):
+        """A generic (non-GainTableError) exception must not vanish without a
+        trace: it should be counted via error_count, and the pipeline must
+        keep processing frames submitted after it (regression test for the
+        bare `except Exception: continue` that used to swallow it)."""
+        proc = _MockProcessor(raise_generic_on={2})
+        pipeline = RealtimePipeline(proc, n_workers=1)   # deterministic order
+        results = []
+        pipeline.result_ready.connect(
+            lambda t, k2_raw, k2_corr, mean_i, proc_ms: results.append(t),
+            Qt.ConnectionType.DirectConnection,
+        )
+        pipeline.start()
+
+        for frame, mask, t in _make_frames(5):
+            pipeline.submit(frame, mask, t)
+
+        pipeline.stop()
+        pipeline.wait(5000)
+
+        assert pipeline.error_count == 1
+        assert len(results) == 4   # the other 4 frames still come through
 
     def test_clean_shutdown_no_lost_results(self):
         """All submitted frames must be emitted (or error'd) before pipeline exits."""

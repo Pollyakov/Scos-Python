@@ -15,10 +15,16 @@ still reads zero. `_inflight_sem` caps how many frames may be submitted to
 the pool but not yet collected by the emitter; once that cap is reached the
 dispatcher blocks (it runs on its own QThread, not the GUI thread), so any
 further backlog is absorbed by the bounded, visible `_input_q` instead.
+
+A frame whose processing raises (other than GainTableError, which is a
+recognized, user-facing condition) is logged and counted via `error_count`
+rather than silently discarded — an uncounted, unlogged drop is how a bug
+like a data race turns into an invisible gap in the results.
 """
 
 import collections
 import concurrent.futures
+import logging
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -30,6 +36,8 @@ from processor import GainTableError, SCOSProcessor
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +139,7 @@ class RealtimePipeline(QThread):
         # idle waiting for the dispatcher — without letting the backlog grow
         # unbounded the way the bare ThreadPoolExecutor queue would.
         self._inflight_sem = threading.Semaphore(max_inflight or 2 * n_workers)
+        self._error_count = 0   # frames whose processing raised — see _emit_loop
 
     # ------------------------------------------------------------------
     # Public API (called from GUI thread)
@@ -143,6 +152,11 @@ class RealtimePipeline(QThread):
     def dropped_count(self) -> int:
         """Total frames evicted from the input queue due to backpressure."""
         return self._input_q.dropped_count
+
+    @property
+    def error_count(self) -> int:
+        """Total frames whose processing raised an unexpected exception."""
+        return self._error_count
 
     def stop(self) -> None:
         """Signal the pipeline to drain and exit. Call before wait()."""
@@ -199,10 +213,16 @@ class RealtimePipeline(QThread):
                 self.error_occurred.emit(str(e))
                 continue
             except Exception:
-                # Swallowed here deliberately for now — logging/counting this
-                # path is a separate, already-planned follow-up task. Only the
-                # semaphore release is added so in-flight capacity isn't leaked.
+                # The frame itself is unrecoverable — there's no k2/BFi to
+                # emit — but the failure must not vanish without a trace:
+                # that's how bugs like the ROI race turn into silent data
+                # gaps. Log with traceback and count it instead.
                 self._inflight_sem.release()
+                self._error_count += 1
+                logger.exception(
+                    "SCOS worker raised an unexpected exception — frame "
+                    "dropped (error #%d so far)", self._error_count,
+                )
                 continue
             self._inflight_sem.release()
             self.result_ready.emit(t, k2_raw, k2_corr, mean_i, proc_ms)
