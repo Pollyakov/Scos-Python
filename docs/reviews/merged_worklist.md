@@ -14,6 +14,79 @@ two documents merged here.
 needs. Within that, measurement accuracy comes before convenience. Every task that
 changes behavior includes "docs updated" in its *Done when*.
 
+**Note on the MATLAB reference (added 2026-09-02):** the original MATLAB source is at
+`C:\SCOS\Code\`. Both reviews had already located and used
+`SCOSvsTime_WithNoiseSubtraction_Ver2.m` for the offline κ² accuracy tests (via its saved
+`LocalStd7x7_corr.mat` output), but nobody had read its later plotting/rBFi section
+(lines ~440-562) until now — that section resolves Question Q1 / Gap G5 (see task 10)
+and confirms the NaN convention in task 2. `GUI/SCOS_GUI.m` in the same folder is the old
+live-camera GUI (saves `scosData`/`scosTime`, matching the legacy `.mat` convention
+already noted in `CLAUDE.md`) — it is **not** the "Session tab" document.
+
+**The "Session tab" document has been found (added 2026-09-02):** `docs/session_tab`,
+supplied directly by the user. It's a short numbered list from the supervisor, not a
+literal "tab" UI spec — see Claim S5, now resolved. It independently cites
+`https://github.com/viti1/SCOS/blob/main/SCOSvsTime_WithNoiseSubtraction_Ver2.m` line 505
+for the normalization code — the exact same file and line already found at
+`C:\SCOS\Code\`, cross-confirming that reference. Its 8 items are a checklist, not a
+build sequence (see the note at the top of Phase 1) — every task below has been checked
+against it; findings are folded into tasks 9, 10, 12, 16, and Claim S5.
+
+---
+
+## Status (last updated: 2026-09-02)
+
+Legend: ✅ done · 🔄 in progress · ⬜ not started. Update this table, and the matching
+task heading below, whenever a task starts or finishes — that's the only way this stays
+trustworthy as a living document instead of a snapshot of 2026-07-26.
+
+**Phase 0 — Data integrity**
+
+| # | Task | Status |
+|---|---|---|
+| 1 | Cap in-flight work, make dropped frames visible | ✅ Done — commits `996712f`, `78c2f0e` |
+| 2 | Stop the silent swallows (errors + κ²≤0 → NaN) | ✅ Done — pending commit |
+| 3 | Fix the ROI data race | ⬜ Not started |
+| 4 | Add a real overload test | ⬜ Not started — see note in task 4 |
+| 5 | Move frame intake off GUI thread + capture-time timestamps | ⬜ Not started |
+| 6 | Verify #1 and #5 on the real camera | ⬜ Not started |
+| 7 | Write down pool-vs-single-thread decision | ⬜ Not started |
+
+**Phase 1 — End-of-session spine**
+
+| # | Task | Status |
+|---|---|---|
+| 8 | One session folder + real FINISHED transition | ⬜ Not started |
+| 9 | Save the real result in the required schema | ⬜ Not started |
+| 10 | Short-vs-long normalization (E1) | ⬜ Not started |
+| 11 | End-of-session laser popup + intensity check (E3) | ⬜ Not started |
+| 12 | Save plot figure at end of session (E4) | ⬜ Not started |
+| 13 | Tag version 0 (E5) | ⬜ Not started |
+
+**Phase 2 — Recording, long sessions, unattended runs**
+
+| # | Task | Status |
+|---|---|---|
+| 14 | HDF5 recording into its own thread | ⬜ Not started |
+| 15 | Disk-space check | ⬜ Not started |
+| 16 | Finish raw-frame saving feature (F1) | ⬜ Not started |
+| 17 | Plot downsampling (D1) | ⬜ Not started |
+| 18 | Queue-fill indicator + overload dialog (B1) | ⬜ Not started |
+| 19 | Automatic camera reconnect | ⬜ Not started |
+| 20 | Long-session hardening (F2) | ⬜ Not started |
+| 21 | Automatic laser control via Arduino (F3) | ⬜ Not started |
+
+**Phase 3 — Written-rule cleanup and tooling**
+
+| # | Task | Status |
+|---|---|---|
+| 22 | float64 check on the corrected numerator | ⬜ Not started |
+| 23 | Fix protocol typo (bright cal "turn off" → "on") | ⬜ Not started |
+| 24 | Extract pure math into `core/scos_math.py` (C1) | ⬜ Not started |
+| 25 | Project tooling lock-in | ⬜ Not started |
+
+---
+
 ### Words used more than once (defined here, once)
 
 | Term | Plain meaning |
@@ -38,7 +111,7 @@ is worse than a slow but correct one, so the buffering fix precedes all performa
 
 ---
 
-### 1. Cap in-flight work and make dropped frames visible
+### 1. Cap in-flight work and make dropped frames visible — ✅ DONE
 
 - **Goal:** A processing slowdown can no longer grow memory without limit, and any
   frame that *is* dropped is visible to the operator instead of silent.
@@ -50,6 +123,20 @@ is worse than a slow but correct one, so the buffering fix precedes all performa
   `test_bright_cal_offline.py`) still pass under 2 %; docs updated — including rewriting
   `todo.md` A3, whose current prescription is wrong (see Conflict C2).
 
+**Status — done, 2026-08-31:** implemented an `_inflight_sem` semaphore
+(`core/pipeline.py`) capping submitted-but-uncollected frames at `2 × n_workers`; the
+dispatcher thread blocks on it (never the GUI thread), so overload is absorbed by the
+existing bounded, visible `_input_q` instead of growing memory. `Dropped: N` now shows
+in the GUI Info panel and logs to `app.log` on change (`gui/main_window.py`). `todo.md`
+A3 rewritten to match. Verified: new regression test
+`test_inflight_capped_under_sustained_overload` passes; full suite 183/183 passes;
+offline MATLAB dark/bright calibration tests 4/4 pass at <2% (unaffected, as expected —
+this change is concurrency-only). Committed as `996712f` (docs reorg) and `78c2f0e`
+(the fix itself), both pushed to `origin/main`.
+Note: this covers the item-count bound task 4 asks for, via the new test above — but
+task 4's fuller scope (asserting *memory* stays bounded, and drops are counted, in the
+same test) is not yet done; see task 4 below.
+
 *Why this is first:* today `_input_q` is capped at 20 and reports zero drops, while the
 ThreadPoolExecutor's internal queue and the `_inflight` deque behind it have **no limit at
 all** (`core/pipeline.py:114-151`). Review B reproduced ~23 MB parked and growing after 5
@@ -58,7 +145,7 @@ out-of-memory crash that loses the whole session.
 
 ---
 
-### 2. Stop the silent swallows (errors and κ² ≤ 0 rows)
+### 2. Stop the silent swallows (errors and κ² ≤ 0 rows) — ✅ DONE
 
 - **Goal:** No hidden holes in the time axis and no hidden crashes.
 - **Source:** both (A: B3/T2; B: B2/T2 — same fix, described identically).
@@ -69,6 +156,43 @@ out-of-memory crash that loses the whole session.
 - **Done when:** a test feeds one κ² ≤ 0 point and one frame that raises, and both are
   preserved/counted rather than vanishing; `timeVec` still has one row per frame;
   offline MATLAB tests still pass; docs updated.
+
+**Status — done, 2026-08-31:** `core/pipeline.py`'s emitter now logs (with traceback via
+`logger.exception`) and counts any non-`GainTableError` exception in `error_count`,
+instead of a bare `continue`. `core/recorder.py.append()` keeps every row — when κ² ≤ 0
+it stores `bfi=NaN` and increments `n_invalid`, instead of returning early and dropping
+the row. `docs/todo.md` updated (new Done item 17). Verified: new tests
+`test_generic_exception_counted_not_silent` (pipeline) and
+`test_non_positive_k2_corr_kept_as_nan` (recorder, replacing the old
+`test_non_positive_k2_corr_skipped` which asserted the now-fixed behavior) both pass;
+full suite 184/184 passes; offline MATLAB dark/bright tests 4/4 pass at <2%
+(unaffected — this change doesn't touch the math). Not committed yet — held per request.
+Open question this surfaces: whether the lab's MATLAB analysis tolerates `NaN` in `bfi`
+— see Question Q3, still unanswered.
+
+**Checked against the actual MATLAB reference, 2026-09-02** — found and read
+`C:\SCOS\Code\SCOSvsTime_WithNoiseSubtraction_Ver2.m:498-506`:
+```matlab
+if any(corrSpeckleContrast{1} < 0 )
+    warning('Error: There are negative values in the contrast !!!');
+    warndlg('Error: There are negative values in the contrast !!! BFI has no meaning')
+end
+...
+BFi = 1./corrSpeckleContrast{1};
+BFi(corrSpeckleContrast{1} < 0) = NaN;
+```
+**This mostly validates the fix** — MATLAB independently lands on `NaN` as the marker for
+an invalid point, the same convention this task chose. Two real differences, not just
+theoretical:
+1. **MATLAB's condition is `< 0`, this fix uses `<= 0`.** An exactly-zero `k2_corr` becomes
+   `NaN` here but would stay `Inf` in MATLAB's `BFi` (MATLAB doesn't raise on `1/0`; Python
+   does — `<= 0` was almost certainly added to avoid a `ZeroDivisionError`, a problem
+   MATLAB never had). In practice a `float64` landing on exactly `0.0` from real sensor
+   noise is effectively impossible, so this is a documented precision note, not a
+   correctness bug worth changing.
+2. **MATLAB checks once, over the whole recording, at the end** (one `warndlg` popup) —
+   this fix logs and counts continuously during a live session. That's a reasonable
+   adaptation for real-time use, not a literal translation, and doesn't need to change.
 
 *Confirmed against the code:* `recorder.append()` really does `if k2_corr <= 0: return`,
 silently deleting the row — which shifts every later timestamp and corrupts the FFT.
@@ -110,6 +234,11 @@ everything else.
 
 *Why:* today `test_pipeline.py` only checks `dropped_count` on the isolated queue — the one
 buffer that never fills in practice — so the actual failure mode is untested.
+
+*Partial coverage already exists:* task 1 added `test_inflight_capped_under_sustained_overload`,
+which floods the pipeline and asserts `_inflight` stays at the cap — that's the item-count
+half of this task. Still open: asserting *memory* stays bounded (not just item count) and
+that drops are counted in the same overload scenario.
 
 ---
 
@@ -171,6 +300,17 @@ needs the same treatment.
 
 ## Phase 1 — End-of-session spine (this is what unblocks the whole Session tab)
 
+**On task order vs. `docs/session_tab` (added 2026-09-02):** the supervisor's own list
+numbers these items 1 (laser popup) → 2 (correct saving) → 3 (normalization) → 4 (tag v0)
+→ 5 (plot+save). That's a feature checklist, not a build sequence, and following it
+literally would break two things: item 1 (laser popup, task 11) can't be built before
+the `FINISHED` state it hooks into exists (task 8) — you can't attach a popup to an
+event that doesn't happen yet; and item 4 (tag v0, task 13) can't precede item 5 (plot
+save, task 12), since the plot file is one of v0's own required deliverables — tagging
+first would tag an incomplete release. The order below (8 → 9 → 10 → 11 → 12 → 13) is
+kept as the correct **build** order; the supervisor's list confirms every task's
+*content*, not its sequence.
+
 ---
 
 ### 8. One session folder at the start, and a real FINISHED transition
@@ -198,7 +338,8 @@ pops up *mid-measurement*. This single gap is why tasks 9–12 have nowhere to a
 - **Goal:** `rBFi_results.h5` contains `startTime`, `timeVec`, `rBFi`, `Intensity` and a
   `Params` group — including the normalization constant and the git commit hash — plus
   the separate `DarkCalibration.h5` / `BrightCalibration.h5`.
-- **Source:** Review A (B2 + B9, T5 = `todo.md` E2 + Q5).
+- **Source:** Review A (B2 + B9, T5 = `todo.md` E2 + Q5); **now confirmed directly by the
+  supervisor** in `docs/session_tab` — same five keys, same file list, word for word.
 - **Depends on:** 8 (needs the FINISHED hook), 2 (NaN rows), 5 (capture timestamps feed
   `timeVec`).
 - **Files:** `core/recorder.py`, `gui/main_window.py`.
@@ -207,6 +348,12 @@ pops up *mid-measurement*. This single gap is why tasks 9–12 have nowhere to a
   once at close**, so no already-flushed data ever needs rewriting; a round-trip test
   asserts the keys; the normalization constant and git hash are present; offline MATLAB
   tests still pass; docs updated.
+
+**Confirmed folder layout (`docs/session_tab`, 2026-09-02):** the session folder must
+contain `rBfi_results.h5`, `rBfi_fig.fig` (see task 12 re: `.fig` vs `.png`),
+`DarkCalibration.h5`, `BrightCalibration.h5`, and **a new folder named `Frames`**. That
+last one is a new finding — see task 16, it doesn't match how `append_frame()` currently
+works.
 
 *The "write `rBFi` at close" part is a design decision, not something either review states —
 see Gap G4 and Question Q4. It is what keeps #9 and #10 from depending on each other: #9
@@ -232,9 +379,34 @@ whether the in-file calibration copy stays.
   the meaning of "duration" (total vs. post-normalization) is written down; docs updated.
 
 *Confirmed against the code:* the "Pulsation lower level" option currently just logs a
-warning and falls back to the mean (`gui/main_window.py:1162-1168`). Note the plot x-axis
-is **already always in minutes** (`gui/plot_widget.py:58`, axis label `min`) — see Question
-Q1 and Gap G4.
+warning and falls back to the mean (`gui/main_window.py:1162-1168`).
+
+**Confirmed against the actual MATLAB reference, 2026-09-02** — found and read
+`C:\SCOS\Code\SCOSvsTime_WithNoiseSubtraction_Ver2.m:498-514` (the script `CLAUDE.md`
+already names as the math reference, but nobody had previously read this specific
+section — only its earlier κ² output, via `LocalStd7x7_corr.mat`, was checked by the
+offline accuracy tests). The exact source:
+```matlab
+if timeVec(end) > 120
+    timeToPlot = timeVec / 60; xLabelStr = 'time [min]';
+    rBFi = BFi/mean(BFi(1:round(10*frameRate)));
+else
+    timeToPlot = timeVec; xLabelStr = 'time [sec]';
+    rBFi = BFi/prctile(BFi(1:round(10*frameRate)),5);
+end
+```
+This resolves **Question Q1 / Gap G5**: short recordings plot in **seconds**, long ones
+in **minutes** — confirming the "probably the inverse" guess in G5 was right. The
+current `gui/plot_widget.py:58` (always divides by 60, axis label always `min`) is
+confirmed wrong relative to this reference, not just probably wrong.
+
+**Resolved, 2026-09-02:** the reference script hardcodes the baseline window at **10
+seconds** (`round(10*frameRate)`), while the GUI's `spn_norm_seconds` spinbox (protocol
+doc default: 5 s) is user-adjustable — flagged above as an open discrepancy. `docs/session_tab`
+answers it directly, in the supervisor's own words: *"The number of seconds for
+normalization are defined by the user in the GUI as we discussed."* The configurable
+spinbox is the intended design; the hardcoded 10 s was specific to the older script, not
+a spec requirement. No change needed to the existing `spn_norm_seconds` GUI control.
 
 ---
 
@@ -261,6 +433,13 @@ Q1 and Gap G4.
 - **Files:** `gui/main_window.py`.
 - **Done when:** a completed session leaves a PNG next to the results file, showing the
   corrected rBFi; docs updated.
+
+**Open discrepancy, 2026-09-02:** `docs/session_tab` literally names the file
+`rBfi_fig.fig` — MATLAB's native figure format, which pyqtgraph/Python cannot write.
+`.png` (via `pg.exporters.ImageExporter`, already assumed by `todo.md` E4) is almost
+certainly the intended equivalent now that the tool is Python, not MATLAB — but this
+wasn't explicitly confirmed, only assumed. Worth a quick check with the supervisor
+before implementing, rather than silently picking `.png`. → new Question Q5.
 
 ---
 
@@ -326,6 +505,17 @@ Q1 and Gap G4.
 the GUI via the existing `chk_save_frames` checkbox." **It is already wired** —
 `gui/main_window.py:1113-1114`. The genuine remaining work is the disk guard (#15) and
 getting gzip off the GUI thread (#14).
+
+**New architecture mismatch, 2026-09-02 (`docs/session_tab`):** the supervisor's required
+folder layout includes **a separate folder named `Frames`** alongside the `.h5` files —
+implying individual frame files in their own directory. The current implementation does
+the opposite: `HDF5Recorder.append_frame()` (`core/recorder.py:84-100`) grows a `frames`
+dataset gzip-compressed *inside* the main session `.h5` file — there's no `Frames` folder
+at all today. This is a real conflict, not just a naming detail: it changes what #14
+("move recording into its own thread") and #16 actually need to build — writing per-frame
+files to a folder (e.g. TIFF per frame, as `tools/synth_tiff.py` and the mock cameras
+already do elsewhere in this codebase) is a different I/O pattern than appending to a
+growing HDF5 dataset. Needs a decision before implementing — see new Question Q6.
 
 ---
 
@@ -550,12 +740,16 @@ session and write `rBFi` once at close, or (b) re-read and rescale the dataset a
 **Recommendation: (a)** — one write path, no rewrite of a possibly-huge dataset. Worth
 deciding before starting #9, since it shapes the schema.
 
-### G5. The x-axis is already in minutes
+### G5. The x-axis is already in minutes — ✅ RESOLVED, 2026-09-02
 
 `todo.md` E1 asks to "convert the plot x-axis to minutes if total time > 120 s," and Review
 A's T6 repeats it. But `gui/plot_widget.py:58` already divides by 60 unconditionally and the
 axis label is always `min` — so a 60-second clip currently renders as 0–1 min. The real
 requirement is probably the inverse (show **seconds** for short recordings). → Question Q1.
+
+**Resolved:** confirmed against `C:\SCOS\Code\SCOSvsTime_WithNoiseSubtraction_Ver2.m:507-513`
+— MATLAB shows **seconds for ≤ 120 s, minutes for > 120 s**. The guess above was correct;
+`gui/plot_widget.py` needs to switch units conditionally, not always use minutes. See task 10.
 
 ### G6. Nothing states what a NaN row means downstream
 
@@ -573,9 +767,12 @@ Both `todo.md:308` and Review A's T14 say `chk_save_frames` still needs connecti
 `recorder.append_frame()`. It is connected — `gui/main_window.py:1113-1114`. The real
 remaining work is the disk guard and moving gzip off the GUI thread. Corrected in task #16.
 
-### S2. "Convert the x-axis to minutes" — already true
+### S2. "Convert the x-axis to minutes" — already true, and confirmed backwards
 
-See Gap G5. The stated task is already satisfied, and probably means the opposite.
+See Gap G5 — now resolved. The stated task ("convert to minutes if > 120 s") was actually
+precise, confirmed word-for-word against `SCOSvsTime_WithNoiseSubtraction_Ver2.m:507-513`
+on 2026-09-02: seconds for ≤ 120 s, minutes for > 120 s. It's the *current code*
+(`gui/plot_widget.py`, always minutes) that's wrong, not the task description.
 
 ### S3. Review B's memory-growth number is from a rebuilt harness, not the live app
 
@@ -590,19 +787,30 @@ measurement of your app.
 Review A ran the suite; Review B explicitly did not (its Assumption 3) and neither did this
 merge. Worth one `pytest` run before starting, so you know your baseline is green.
 
-### S5. Both reviews substitute a document they could not find
+### S5. Both reviews substitute a document they could not find — ✅ RESOLVED, 2026-09-02
 
 Both state they could not locate a "SCOS GUI Project" document with a Session tab, and both
 treat `docs/SCOS_protocol.md` + the `todo.md` E-items as the binding spec instead. Every
 Session-tab task here (#9–#13, #21) inherits that substitution. If the real document exists
 outside the repo, those tasks should be re-checked against it.
 
+**Resolved:** the user supplied `docs/session_tab` — a short numbered list from the
+supervisor, not a literal GUI "tab." Checked every Session-tab task (#9–#13, #16, #21)
+against it: the substitution the reviews made (`SCOS_protocol.md` + `todo.md` E-items) was
+a reasonable, accurate stand-in — nothing it implied turned out to be wrong. Three new
+specifics came from having the real document that neither review nor the substitution
+could have supplied: the required `Frames` folder (task 16, new conflict), the `.fig` file
+extension (task 12, new question), and explicit confirmation that the normalization window
+is meant to be user-configurable, not hardcoded (task 10, now resolved).
+
 ---
 
 # Questions before you start
 
-1. **Plot x-axis units (blocks #10):** the axis is already always in minutes. Should short
-   recordings (≤ 120 s) show **seconds** instead, or is "always minutes" fine?
+1. ~~**Plot x-axis units (blocks #10):** the axis is already always in minutes. Should short
+   recordings (≤ 120 s) show **seconds** instead, or is "always minutes" fine?~~
+   **✅ Answered, 2026-09-02** — confirmed against MATLAB source: seconds for ≤ 120 s,
+   minutes for > 120 s. See Gap G5 / task 10.
 2. **Calibration duplication (blocks #9):** when `DarkCalibration.h5` / `BrightCalibration.h5`
    become separate files, does the copy inside the session `.h5` stay, or go?
 3. **NaN tolerance (affects #2):** does your MATLAB analysis handle `NaN` inside `rBFi` /
@@ -613,3 +821,10 @@ outside the repo, those tasks should be re-checked against it.
    alternative is to write rBFi live and rescale the dataset at FINISHED. (a) avoids
    rewriting a possibly-huge dataset, but means a crash mid-session leaves a file with no
    `rBFi` in it — only raw BFi plus the constant. Confirm (a) is acceptable.
+5. **Figure file format (blocks #12):** `docs/session_tab` names `rBfi_fig.fig` — a MATLAB
+   format Python can't write. Confirm `.png` is acceptable (assumed yes, not confirmed).
+6. **Raw-frame storage shape (blocks #14, #16):** `docs/session_tab` requires a separate
+   `Frames` folder; the current `HDF5Recorder.append_frame()` instead grows a dataset
+   inside the main `.h5` file. Confirm which is wanted — a folder of individual frame
+   files, or keep the embedded HDF5 dataset (and if so, is `Frames` just where that `.h5`
+   file itself should live, not individual frames)?

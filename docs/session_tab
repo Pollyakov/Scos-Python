@@ -1,0 +1,62 @@
+This document outlines the recommended next steps discussed with the supervisor.
+
+1.End of the session: 
+pop up window with the message - Measurement has ended. Please turn off the laser.
+The system should check that the average intensity of the picture reduced by 90% after the user clicked ok.
+
+2.Correct saving of the results and calibration :at the very beginning of the session due to the  protocol.
+
+In a new folder should be these files:
+-rBfi_results.h5
+-rBfi_fig.fig
+-DarkCalibration.h5
+-BrightCalibration.h5
+-A new folder “Frames” 
+
+in results.h5 should be:
+startTime
+timeVec
+rBFi
+Intensity
+Params ( struct )
+
+3. Add Normalisation for short recording. Vika sent the code.
+pulsation lower level 
+here is the example:
+
+
+BFi = 1./corrSpeckleContrast{1};
+    BFi(corrSpeckleContrast{1} < 0) = NaN;
+    if timeVec(end) > 120 % case of long record
+        timeToPlot = timeVec / 60; % convert to min
+        xLabelStr = 'time [min]';
+        rBFi = BFi/mean(BFi(1:round(10*frameRate))); % normalize by first 10 seconds        
+    else % case of short record
+        timeToPlot = timeVec ; % convert to min
+        xLabelStr = 'time [sec]';
+        rBFi = BFi/prctile(BFi(1:round(10*frameRate)),5); % normalize by 5% percentile in first 10 sec
+    end   
+
+
+The number of seconds for normalization are defined by the user in the GUI as we discussed.
+
+
+This code taken from here:
+
+
+https://github.com/viti1/SCOS/blob/main/SCOSvsTime_WithNoiseSubtraction_Ver2.m
+
+
+line 505
+
+
+4. Save the version with tag number 0.
+
+5. Plot and save 
+
+6. Next phase  - add option for saving raw frames.
+
+7. After that  - long sessions.
+8. Control laser automatically
+
+
