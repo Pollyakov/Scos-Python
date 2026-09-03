@@ -45,8 +45,8 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | # | Task | Status |
 |---|---|---|
 | 1 | Cap in-flight work, make dropped frames visible | ✅ Done — commits `996712f`, `78c2f0e` |
-| 2 | Stop the silent swallows (errors + κ²≤0 → NaN) | ✅ Done — pending commit |
-| 3 | Fix the ROI data race | ⬜ Not started |
+| 2 | Stop the silent swallows (errors + κ²≤0 → NaN) | ✅ Done — commits `86334a0`, `9471e51` |
+| 3 | Fix the ROI data race | ✅ Done — pending commit |
 | 4 | Add a real overload test | ⬜ Not started — see note in task 4 |
 | 5 | Move frame intake off GUI thread + capture-time timestamps | ⬜ Not started |
 | 6 | Verify #1 and #5 on the real camera | ⬜ Not started |
@@ -202,7 +202,7 @@ tolerates NaN.
 
 ---
 
-### 3. Fix the ROI data race (locked or atomic)
+### 3. Fix the ROI data race (locked or atomic) — ✅ DONE
 
 - **Goal:** Dragging the ROI circle during a measurement can no longer corrupt or vanish
   a data point.
@@ -220,6 +220,27 @@ tolerates NaN.
 threads read them, and nothing in `gui/image_widget.py` ever locks the circle. Placed in
 Phase 0 because it can silently produce a **wrong κ²**, which the accuracy rule outranks
 everything else.
+
+**Status — done, 2026-09-02:** implemented both halves. `processor.py`: introduced a
+frozen `_RoiCrop` dataclass bundling `roi`/`mask_crop`/`dm_f32`/`dv_f32`/`bv_f32`;
+`set_roi()` now builds the whole new bundle locally and publishes it with one attribute
+assignment, and `process()` reads it with one attribute read into a local variable —
+both atomic under the GIL, so a worker thread can never observe a mix of old and new
+fields. `gui/image_widget.py`: new `set_roi_locked()` disables the circle via
+`QGraphicsItem.setEnabled(False)` (which also disables its child resize handles, not
+just body dragging) plus the Auto/Draw/Clear ROI buttons; wired into
+`gui/main_window.py`'s `_set_state()` so it's called on every transition, locked for
+`MEASURING_INIT`/`MEASURING`, unlocked otherwise — one hook instead of scattering calls
+across ~15 call sites.
+
+**Verified empirically, not just by inspection:** temporarily reverted `processor.py`
+and ran the new concurrency test (`TestRoiRace`, 3 worker threads × 200 `process()`
+calls against a thread continuously calling `set_roi()` with differently-sized masks) —
+it failed with 167/600 shape-mismatch exceptions on the old code, 0/600 on the fixed
+code. Also added `TestRoiLock` (`tests/test_image_widget.py`) for the GUI-side lock.
+Full suite 188/188 passes; offline MATLAB dark/bright tests 4/4 pass at <2% (confirmed —
+unaffected, as expected, since only how the ROI state is published/read changed, not the
+math). `docs/todo.md` updated (new Done item 18). Not committed yet — held per request.
 
 ---
 
