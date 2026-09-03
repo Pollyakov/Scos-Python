@@ -439,6 +439,12 @@ class MainWindow(QMainWindow):
             f"font-size: 15px; font-weight: bold; color: {color}; padding: 2px;"
         )
         self._state_label.setText(new_state.name.replace("_", " "))
+        # Lock ROI edits while worker threads are reading processor ROI
+        # state concurrently in process() — dragging the circle mid-run is
+        # a data race, not just a UX nuisance (see merged_worklist.md #3).
+        self.image_widget.set_roi_locked(
+            new_state in (State.MEASURING_INIT, State.MEASURING)
+        )
 
     # ------------------------------------------------------------------
     # Signal connections

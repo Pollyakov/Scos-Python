@@ -373,6 +373,75 @@ class TestSCOSProcessor:
 
 
 # ======================================================================
+# ROI data race (task 3): set_roi() concurrently with process()
+# ======================================================================
+
+class TestRoiRace:
+    """Regression test for the ROI data race.
+
+    set_roi() used to reassign five separate attributes one at a time
+    (_roi, _mask_crop, _dm_f32, _dv_f32, _bv_f32), and process() read them
+    back separately. A worker thread could observe new ROI bounds paired
+    with the old (differently-shaped) mask crop — a shape mismatch that
+    either crashed process() or, if shapes happened to coincide, silently
+    produced a wrong κ² with no error at all. Both are now published/read
+    as one immutable _RoiCrop bundle via a single attribute assignment/read,
+    which is atomic under the GIL.
+
+    This hammers set_roi() with differently-sized masks from one thread
+    while several other threads call process() continuously, and requires
+    every process() call to complete without raising — a shape-mismatch
+    exception is exactly what a torn read would produce.
+    """
+
+    def test_set_roi_concurrent_with_process_no_crash(self):
+        import threading
+
+        H, W = 64, 64
+        proc = SCOSProcessor(window_size=7)
+        proc.dark_mean  = np.zeros((H, W))
+        proc.dark_var   = np.zeros((H, W))
+        proc.bright_var = np.zeros((H, W))
+        frame = np.random.randint(100, 300, (H, W), dtype=np.uint16)
+
+        stop = threading.Event()
+        errors: list[Exception] = []
+
+        def roi_wiggler():
+            rng = np.random.default_rng(0)
+            while not stop.is_set():
+                r = int(rng.integers(5, 30))
+                cx = int(rng.integers(r, W - r))
+                cy = int(rng.integers(r, H - r))
+                yy, xx = np.ogrid[:H, :W]
+                mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= r ** 2
+                proc.set_roi(mask)
+
+        def worker():
+            full_mask = np.ones((H, W), dtype=bool)
+            for _ in range(200):
+                try:
+                    proc.process(frame, full_mask)
+                except Exception as exc:   # noqa: BLE001 — exactly what we're checking for
+                    errors.append(exc)
+
+        wiggler = threading.Thread(target=roi_wiggler, daemon=True)
+        wiggler.start()
+        workers = [threading.Thread(target=worker) for _ in range(3)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+        stop.set()
+        wiggler.join(timeout=2)
+
+        assert errors == [], (
+            f"process() raised under concurrent set_roi() — the ROI bundle "
+            f"is not being published/read atomically: {errors[:3]}"
+        )
+
+
+# ======================================================================
 # local_variance edge cases
 # ======================================================================
 

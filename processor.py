@@ -5,6 +5,7 @@ Matches MATLAB RecordSCOSLong.m (corrSpeckleContrast formula).
 
 import csv
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,29 @@ def shrink_mask_for_window(mask: np.ndarray, window: int) -> np.ndarray:
 
 class GainTableError(ValueError):
     """Raised when a camera's SN + nBits combination is absent from the gain CSV."""
+
+
+@dataclass(frozen=True)
+class _RoiCrop:
+    """Immutable bundle of ROI-dependent state.
+
+    set_roi() builds a complete new bundle and publishes it with a single
+    attribute assignment; process() reads the bundle with a single attribute
+    read into a local variable. Both of those are atomic under the GIL, so a
+    worker thread calling process() concurrently with a GUI-thread set_roi()
+    always sees either the whole old bundle or the whole new one — never a
+    mix of old and new fields (e.g. new crop bounds paired with the old
+    mask), which previously could crash a worker or silently produce a
+    wrong κ² if a user dragged the ROI mid-measurement.
+    """
+    roi:       "tuple[slice, slice] | None"
+    mask_crop: "np.ndarray | None"
+    dm_f32:    "np.ndarray | None"
+    dv_f32:    "np.ndarray | None"
+    bv_f32:    "np.ndarray | None"
+
+
+_EMPTY_ROI_CROP = _RoiCrop(None, None, None, None, None)
 
 # OpenCV is ~5× faster than scipy for box filtering.
 # Imported once at module load; falls back to scipy if not installed.
@@ -258,14 +282,11 @@ class SCOSProcessor:
 
         self._cached_G  : float | None = None       # cached gain so CSV isn't re-read every frame
 
-        # ROI crop: set by set_roi(); None = full frame (no crop).
-        self._roi       : tuple[slice, slice] | None = None
-        self._mask_crop : np.ndarray | None = None
-        # float32 crops of calibration arrays — rebuilt by set_roi().
-        # Keeping these as float32 avoids dtype-upcast in process() arithmetic.
-        self._dm_f32 : np.ndarray | None = None   # dark_mean crop
-        self._dv_f32 : np.ndarray | None = None   # dark_var crop
-        self._bv_f32 : np.ndarray | None = None   # bright_var crop
+        # ROI crop: set by set_roi(); _EMPTY_ROI_CROP.roi is None = full frame
+        # (no crop). Held as one immutable bundle — see _RoiCrop — so
+        # process() running on a worker thread never observes a torn mix of
+        # old and new ROI state while set_roi() is republishing it.
+        self._roi_crop: _RoiCrop = _EMPTY_ROI_CROP
 
     def set_roi(self, mask: np.ndarray) -> None:
         """
@@ -280,12 +301,14 @@ class SCOSProcessor:
         conversions.
 
         Call this whenever the ROI mask OR calibration arrays change.
+
+        Builds the whole new _RoiCrop bundle locally first, then publishes
+        it with one assignment to self._roi_crop — see _RoiCrop for why
+        that matters for thread safety.
         """
         rows, cols = np.where(mask)
         if rows.size == 0:
-            self._roi = None
-            self._mask_crop = None
-            self._dm_f32 = self._dv_f32 = self._bv_f32 = None
+            self._roi_crop = _EMPTY_ROI_CROP
             return
         pad = self.window_size // 2 + 1
         H, W = mask.shape
@@ -293,13 +316,13 @@ class SCOSProcessor:
         r1 = min(H, int(rows.max()) + pad + 1)
         c0 = max(0, int(cols.min()) - pad)
         c1 = min(W, int(cols.max()) + pad + 1)
-        self._roi = (slice(r0, r1), slice(c0, c1))
-        self._mask_crop = mask[self._roi]
+        roi = (slice(r0, r1), slice(c0, c1))
+        mask_crop = mask[roi]
         # Pre-build float32 crops so process() avoids repeated conversions.
-        roi = self._roi
-        self._dm_f32 = self.dark_mean[roi].astype(np.float32) if self.dark_mean  is not None else None
-        self._dv_f32 = self.dark_var[roi].astype(np.float32)  if self.dark_var   is not None else None
-        self._bv_f32 = self.bright_var[roi].astype(np.float32) if self.bright_var is not None else None
+        dm_f32 = self.dark_mean[roi].astype(np.float32)   if self.dark_mean   is not None else None
+        dv_f32 = self.dark_var[roi].astype(np.float32)    if self.dark_var    is not None else None
+        bv_f32 = self.bright_var[roi].astype(np.float32)  if self.bright_var  is not None else None
+        self._roi_crop = _RoiCrop(roi, mask_crop, dm_f32, dv_f32, bv_f32)   # single atomic publish
 
     def calibrate(self, dark_frames: np.ndarray) -> None:
         """
@@ -416,12 +439,15 @@ class SCOSProcessor:
 
         # Crop to ROI bounding box (set by set_roi) — same as MATLAB's im_cut.
         # Slicing numpy arrays is a zero-copy view; astype() below does the copy.
-        if self._roi is not None:
-            roi        = self._roi
-            mask_work  = self._mask_crop
-            dark_mean  = self._dm_f32   # pre-cropped float32 — may be None
-            dark_var   = self._dv_f32
-            bright_var = self._bv_f32
+        # Snapshot the whole bundle in one read — see _RoiCrop docstring for
+        # why this must not be split into separate attribute reads.
+        crop = self._roi_crop
+        if crop.roi is not None:
+            roi        = crop.roi
+            mask_work  = crop.mask_crop
+            dark_mean  = crop.dm_f32   # pre-cropped float32 — may be None
+            dark_var   = crop.dv_f32
+            bright_var = crop.bv_f32
         else:
             roi        = (slice(None), slice(None))
             mask_work  = mask

@@ -11,6 +11,8 @@ import pytest
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from PyQt6.QtWidgets import QApplication
+_app = QApplication.instance() or QApplication([])
 
 # _make_mask is a @staticmethod — import the class
 from gui.image_widget import ImageWidget
@@ -66,3 +68,38 @@ class TestMakeMask:
         # Flip horizontally and vertically — should be identical
         np.testing.assert_array_equal(mask, np.flip(mask, axis=0))
         np.testing.assert_array_equal(mask, np.flip(mask, axis=1))
+
+
+class TestRoiLock:
+    """set_roi_locked() — disables ROI edits during MEASURING (task 3: ROI race)."""
+
+    @pytest.fixture
+    def widget(self):
+        w = ImageWidget()
+        w._frame = np.zeros((100, 100), dtype=np.uint16)
+        w._draw_roi()   # creates a real CircleROI so locking has something to act on
+        yield w
+        w.close()
+
+    def test_lock_disables_circle_and_buttons(self, widget):
+        widget.set_roi_locked(True)
+        assert widget._roi_circle.isEnabled() is False
+        assert widget.btn_auto_roi.isEnabled() is False
+        assert widget.btn_draw_roi.isEnabled() is False
+        assert widget.btn_clear_roi.isEnabled() is False
+
+    def test_unlock_restores_circle_and_buttons(self, widget):
+        widget.set_roi_locked(True)
+        widget.set_roi_locked(False)
+        assert widget._roi_circle.isEnabled() is True
+        assert widget.btn_auto_roi.isEnabled() is True
+        assert widget.btn_draw_roi.isEnabled() is True
+        assert widget.btn_clear_roi.isEnabled() is True
+
+    def test_new_circle_created_while_locked_is_also_disabled(self, widget):
+        """Defense in depth: even if a new ROI is created while locked
+        (e.g. via set_roi_circle(), not gated by the disabled buttons),
+        the new circle must come up disabled too."""
+        widget.set_roi_locked(True)
+        widget.set_roi_circle(30, 30, 10)
+        assert widget._roi_circle.isEnabled() is False

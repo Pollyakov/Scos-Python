@@ -21,6 +21,7 @@ class ImageWidget(QWidget):
         self._circ         = None   # dict: cx, cy, r
         self._first_frame  = True
         self._crop_rect    = None   # (y0, y1, x0, x1) when cut is active
+        self._roi_locked   = False  # True during MEASURING — see set_roi_locked()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -129,6 +130,7 @@ class ImageWidget(QWidget):
         )
         self.plot.addItem(roi)
         self._roi_circle = roi
+        roi.setEnabled(not self._roi_locked)
         roi.sigRegionChangeFinished.connect(self._on_roi_changed)
         self._circ = {"cx": cx, "cy": cy, "r": r}
         self._emit_roi()
@@ -159,9 +161,25 @@ class ImageWidget(QWidget):
         )
         self.plot.addItem(roi)
         self._roi_circle = roi
+        roi.setEnabled(not self._roi_locked)
         roi.sigRegionChangeFinished.connect(self._on_roi_changed)
         self._circ = {"cx": cx, "cy": cy, "r": r}
         self._emit_roi()
+
+    def set_roi_locked(self, locked: bool) -> None:
+        """Prevent (or restore) any ROI edit during a live measurement.
+
+        Dragging/resizing the circle, or clicking Auto/Draw/Clear ROI, all
+        end up calling processor.set_roi() on the GUI thread while worker
+        threads may be concurrently reading that state in process() — see
+        the _RoiCrop race this closes. QGraphicsItem.setEnabled(False) also
+        disables the circle's child resize handles, not just body dragging.
+        """
+        self._roi_locked = locked
+        if self._roi_circle is not None:
+            self._roi_circle.setEnabled(not locked)
+        for btn in (self.btn_auto_roi, self.btn_draw_roi, self.btn_clear_roi):
+            btn.setEnabled(not locked)
 
     def _on_roi_changed(self):
         if self._roi_circle is None:
