@@ -14,7 +14,12 @@ logger = logging.getLogger(__name__)
 
 
 class CameraThread(QThread):
-    frame_ready   = pyqtSignal(np.ndarray)   # emitted for SCOS (every frame)
+    frame_ready   = pyqtSignal(np.ndarray, float)
+   # (frame, t_capture)
+    # t_capture is time.monotonic() taken where the frame is *captured*.
+    # The wall clock can jump mid-recording if the OS syncs time; and a
+    # timestamp taken later, on the GUI thread, records GUI scheduling
+    # jitter as if it were physiology.
     display_ready = pyqtSignal(np.ndarray)   # emitted for display (capped at 30 FPS)
     error         = pyqtSignal(str)
     warning       = pyqtSignal(str)
@@ -219,9 +224,12 @@ class CameraThread(QThread):
                         logger.warning(msg)
                         self.warning.emit(msg)
                     if result.GrabSucceeded():
+                        # Stamp the frame as close to the grab as software can
+                        # get, before the copy and before any signal delivery.
+                        t_capture = time.monotonic()
                         frame = result.Array.copy()
-                        self.frame_ready.emit(frame)   # always — for SCOS
-                        now = time.monotonic()
+                        self.frame_ready.emit(frame, t_capture)   # always — for SCOS
+                        now = t_capture
                         if now - self._last_display >= self._display_interval:
                             self.display_ready.emit(frame)   # capped — for GUI
                             self._last_display = now

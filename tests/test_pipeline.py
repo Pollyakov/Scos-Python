@@ -466,3 +466,246 @@ class TestSustainedOverload:
         assert stats.dropped <= 1, (
             f"expected ~0 counted drops in the uncapped case, got {stats.dropped}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Blocking intake — merged_worklist task 5
+# ---------------------------------------------------------------------------
+#
+# Two different producer paths now share one queue, and they mean different
+# things:
+#
+#   submit()  — non-blocking, drop-oldest. Kept for producers that must never
+#               be stalled, and the path TestSustainedOverload above measures.
+#   on_frame() — blocking, called on the *camera* thread. This is what the live
+#               app uses: a full queue throttles the grab loop instead of
+#               silently discarding a frame or freezing the GUI.
+#
+# The tests below cover the second path: that it really blocks, that the block
+# is always bounded (a producer that could wait forever would hang
+# CameraThread.stop(), and with it the GUI), that the loss is counted when the
+# bound is hit, and that timeVec is built from capture time rather than from
+# whenever a thread got round to the frame.
+
+
+class TestBlockingPut:
+
+    def test_blocked_producer_resumes_when_a_slot_frees(self):
+        """A full queue makes the producer wait — and lose nothing."""
+        q = _DropOldestQueue(maxsize=3)
+        for i in range(3):
+            q.put(i)
+
+        finished = threading.Event()
+
+        def producer():
+            q.put(99, block=True, timeout=5.0)
+            finished.set()
+
+        th = threading.Thread(target=producer)
+        th.start()
+        try:
+            assert not finished.wait(0.2), (
+                "put(block=True) returned while the queue was still full — "
+                "the producer is not being back-pressured at all"
+            )
+            assert q.dropped_count == 0, "blocked, yet something was dropped"
+
+            assert q.get() == 0                 # free exactly one slot
+            assert finished.wait(2.0), "producer never resumed after a slot freed"
+        finally:
+            th.join(timeout=5)
+
+        assert q.dropped_count == 0             # the whole point: nothing lost
+
+    def test_timeout_falls_back_to_a_counted_drop(self):
+        """A wedged consumer must not stall the producer forever.
+
+        The camera thread is the producer in the app, and CameraThread.stop()
+        waits on it with no timeout — an unbounded wait here would hang the
+        GUI on shutdown. So the wait is capped, and what it costs (one frame)
+        is counted rather than silently swallowed.
+        """
+        q = _DropOldestQueue(maxsize=2)
+        q.put(0)
+        q.put(1)                                # full; nobody is draining
+
+        t0     = time.monotonic()
+        queued = q.put(2, block=True, timeout=0.2)
+        waited = time.monotonic() - t0
+
+        assert queued is False, "expected the item to have evicted another"
+        assert waited >= 0.2,   f"gave up after only {waited:.3f}s — did not wait"
+        assert waited < 3.0,    f"waited {waited:.3f}s for a 0.2s timeout"
+        assert q.dropped_count == 1, "the timeout drop was not counted"
+        assert [q.get(), q.get()] == [1, 2]     # oldest evicted, newest kept
+
+    def test_non_blocking_put_is_unchanged(self):
+        """submit()'s path keeps its old semantics — drop oldest, never wait."""
+        q  = _DropOldestQueue(maxsize=2)
+        t0 = time.monotonic()
+        for i in range(4):
+            q.put(i)
+        assert time.monotonic() - t0 < 0.5, "non-blocking put() blocked"
+        assert q.dropped_count == 2
+        assert [q.get(), q.get()] == [2, 3]
+
+
+class TestCameraThreadIntake:
+
+    _SHAPE = (16, 16)
+
+    def _frame(self):
+        return np.zeros(self._SHAPE, dtype=np.uint16)
+
+    def _mask(self):
+        return np.ones(self._SHAPE, dtype=bool)
+
+    def test_on_frame_is_a_no_op_until_intake_is_enabled(self):
+        """PREVIEW and both calibration phases must cost the camera nothing."""
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        pipeline.on_frame(self._frame(), time.monotonic())
+        assert pipeline.queue_depth == 0
+        assert pipeline.t0_capture is None
+        assert not pipeline.intake_enabled
+
+    def test_timevec_comes_from_capture_time_not_delivery_time(self):
+        """The scientific point of task 5.
+
+        Capture stamps are perfectly even; the calls delivering them are not
+        (a stall is injected mid-run, standing in for a busy GUI or a slow
+        disk). The emitted timeVec must show the even capture cadence, because
+        FFT-based pulse analysis reads uneven samples as a wrong heart rate.
+        """
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=2)
+        times    = []
+        pipeline.result_ready.connect(
+            lambda t, *_: times.append(t), Qt.ConnectionType.DirectConnection
+        )
+        pipeline.start()
+        pipeline.enable_intake(self._mask())
+
+        n_frames = 10
+        base     = time.monotonic()
+        try:
+            for i in range(n_frames):
+                if i == 5:
+                    time.sleep(0.15)        # <- the jitter that must NOT appear
+                pipeline.on_frame(self._frame(), base + i * 0.05)
+
+            deadline = time.monotonic() + 10.0
+            while len(times) < n_frames and time.monotonic() < deadline:
+                time.sleep(0.01)
+        finally:
+            pipeline.stop()
+            pipeline.wait(3000)
+
+        assert len(times) == n_frames, f"expected {n_frames} results, got {len(times)}"
+        assert times == pytest.approx([i * 0.05 for i in range(n_frames)], abs=1e-9), (
+            "timeVec followed delivery timing instead of capture timing"
+        )
+
+    def test_wall_clock_anchor_latches_with_the_first_frame(self):
+        """t0 is latched from a real captured frame, not from enable_intake().
+
+        Monotonic time carries no absolute meaning, so the wall clock is
+        latched at the same instant — that pair is what lets task 9 write an
+        absolute `startTime` next to a jump-proof timeVec.
+        """
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        pipeline.enable_intake(self._mask())
+        assert pipeline.t0_capture is None, "t0 latched before any frame arrived"
+        assert pipeline.t0_wall is None
+
+        before = time.time()
+        stamp  = time.monotonic()
+        pipeline.on_frame(self._frame(), stamp)
+        after  = time.time()
+
+        assert pipeline.t0_capture == stamp
+        assert before <= pipeline.t0_wall <= after
+
+    def test_overload_detected_fires_once_per_episode(self):
+        """The operator is warned exactly once on the way up past 80 % full."""
+        processor = _BlockingProcessor()        # workers never complete a frame
+        pipeline  = RealtimePipeline(processor, n_workers=2)
+        depths    = []
+        pipeline.overload_detected.connect(
+            lambda d: depths.append(d), Qt.ConnectionType.DirectConnection
+        )
+        pipeline.start()
+        # Short timeout so the stalled run finishes quickly; the app uses 1.5 s.
+        pipeline.enable_intake(self._mask(), put_timeout_s=0.05)
+
+        try:
+            base = time.monotonic()
+            for i in range(40):
+                pipeline.on_frame(self._frame(), base + i * 0.05)
+
+            assert len(depths) == 1, (
+                f"expected one overload warning per episode, got {len(depths)} — "
+                "a re-firing warning would spam app.log once per frame"
+            )
+            assert depths[0] >= 0.8 * pipeline.queue_maxsize, (
+                f"warned at depth {depths[0]} of {pipeline.queue_maxsize} — "
+                "below the documented 80 % high-water mark"
+            )
+            assert pipeline.dropped_count > 0, (
+                "frames were lost past the timeout but none were counted"
+            )
+        finally:
+            processor.release()
+            pipeline.stop()
+            pipeline.wait(5000)
+
+    def test_a_wedged_pipeline_stalls_capture_only_briefly(self):
+        """Worst case: nothing drains at all. Each call must still return fast.
+
+        This is the property that keeps CameraThread.stop() — a wait() with no
+        timeout — from hanging the GUI when the processing stage is wedged.
+        """
+        processor = _BlockingProcessor()
+        pipeline  = RealtimePipeline(processor, n_workers=1)
+        pipeline.start()
+        pipeline.enable_intake(self._mask(), put_timeout_s=0.1)
+
+        try:
+            worst = 0.0
+            base  = time.monotonic()
+            for i in range(40):
+                t0 = time.monotonic()
+                pipeline.on_frame(self._frame(), base + i * 0.05)
+                worst = max(worst, time.monotonic() - t0)
+
+            assert worst < 1.0, (
+                f"one intake call blocked the camera thread for {worst:.2f}s "
+                "against a 0.1s cap"
+            )
+        finally:
+            processor.release()
+            pipeline.stop()
+            pipeline.wait(5000)
+
+    def test_stopped_pipeline_never_stalls_the_camera(self):
+        """After stop() nothing drains the queue — intake must close with it.
+
+        Start SCOS tears down and rebuilds the pipeline. If the camera thread
+        were still feeding the dead one, every frame would pay the full put
+        timeout. stop() closes the gate so on_frame() returns immediately.
+        """
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        pipeline.start()
+        pipeline.enable_intake(self._mask(), put_timeout_s=5.0)
+        pipeline.stop()
+        pipeline.wait(3000)
+
+        t0 = time.monotonic()
+        for _ in range(30):
+            pipeline.on_frame(self._frame(), time.monotonic())
+        elapsed = time.monotonic() - t0
+
+        assert not pipeline.intake_enabled
+        assert elapsed < 1.0, (
+            f"30 frames into a stopped pipeline took {elapsed:.2f}s — the "
+            "camera thread is still being blocked by a queue nothing drains"
+        )

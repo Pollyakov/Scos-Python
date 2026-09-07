@@ -48,8 +48,8 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | 2 | Stop the silent swallows (errors + κ²≤0 → NaN) | ✅ Done — commits `86334a0`, `9471e51` |
 | 3 | Fix the ROI data race | ✅ Done — commit `9838097` |
 | 4 | Add a real overload test | ✅ Done — see note in task 4 |
-| 5 | Move frame intake off GUI thread + capture-time timestamps | ⬜ Not started |
-| 6 | Verify #1 and #5 on the real camera | ⬜ Not started |
+| 5 | Move frame intake off GUI thread + capture-time timestamps | ✅ Done — see note in task 5 |
+| 6 | Verify #1 and #5 on the real camera | ⬜ Not started — **now unblocked** |
 | 7 | Write down pool-vs-single-thread decision | ⬜ Not started |
 
 **Phase 1 — End-of-session spine**
@@ -326,7 +326,7 @@ test documents it and tolerates a shortfall of exactly 1. → new Question Q7.
 
 ---
 
-### 5. Move frame intake off the GUI thread — and timestamp at capture, in the same change
+### 5. Move frame intake off the GUI thread — and timestamp at capture, in the same change — ✅ DONE
 
 - **Goal:** Restore real backpressure to the camera (the documented
   `Implementation_Plan.md §2` design), and at the same time attach each frame's timestamp
@@ -344,6 +344,70 @@ test documents it and tolerates a shortfall of exactly 1. → new Question Q7.
   replay produces evenly spaced `timeVec` taken from capture time; offline MATLAB tests
   still pass; docs updated (`Implementation_Plan.md` diagram, `todo.md` A3, and the stale
   "processing runs on the GUI thread" line in `CLAUDE.md`).
+
+**Status — done, 2026-09-07:** both halves landed in one change, as C1 recommended.
+
+*Capture-time timestamps.* `frame_ready` now carries `(frame, t_capture)`, where `t_capture`
+is `time.monotonic()` taken at the grab — before the array copy, before any signal delivery.
+**Correction to this task's file list:** there are **three** real emitters, not four —
+`camera.py`, `mock_camera.py`, `folder_camera.py`. `h5_replay.py`'s `_NullCamera.frame_ready`
+is a no-op `_Sig` stub that is never emitted (replay feeds `result_ready` directly), so it
+needed only a comment. Likewise only **two** of the four named test files actually connect to
+the signal (`test_mock_camera.py`, `test_folder_camera.py`); `test_camera.py` and
+`test_display_throttle.py` never do — the latter only exercises `_last_display` arithmetic.
+
+*Intake off the GUI thread.* `RealtimePipeline.on_frame()` is connected to `frame_ready` with
+`Qt.ConnectionType.DirectConnection`, so intake executes on the **camera** thread. A full
+queue now blocks the grab loop — real backpressure, absorbed by Pylon's `MaxNumBuffer=20` —
+instead of freezing the GUI (which a blocking `put()` on the GUI thread would do, Conflict C2)
+or piling frames into Qt's unbounded queued-connection event queue. The mask travels in a
+frozen `_Intake` bundle published with one atomic assignment, the same pattern task 3 used for
+the ROI. `_on_scos_frame` keeps only GUI-owned work: labels, calibration collectors, raw-frame
+save.
+
+*Three hazards this created, and what was done about them:*
+1. **A dead pipeline could stall capture.** Start SCOS tears down and rebuilds the pipeline,
+   and a stopped one never drains its queue. `stop()` now closes the intake gate first, and
+   `_disconnect_pipeline_intake()` unhooks the camera before the teardown.
+2. **An unbounded wait would hang the GUI.** `CameraThread.stop()` calls `wait()` with no
+   timeout, so a camera thread blocked forever inside the intake slot would hang shutdown.
+   The wait is therefore capped (`put_timeout_s`, default 1.5 s) and a frame lost to that cap
+   is *counted*, not silently swallowed. This is a deliberate deviation from
+   `Implementation_Plan §2`'s "blocks if full", recorded there too.
+3. **Camera warnings became a GUI stall.** Blocking intake pushes loss into the Pylon buffer
+   by design, making skipped-image warnings the *expected* overload symptom — and
+   `_on_camera_warning` raised a modal dialog per event, which freezes the GUI thread and
+   stops it draining frames. Demoted to status bar + `app.log` during a session; still modal
+   outside one, where there is no data to lose.
+
+`overload_detected(depth)` fires once per episode at 80 % fill and re-arms below 50 % (a bare
+threshold would re-fire every frame while hovering at the mark). It logs and shows a status-bar
+warning; the fill bar and 4-option dialog remain task 18. `t0_wall` is latched together with
+`t0_capture` on the first frame, so task 9 has a defensible absolute `startTime` next to a
+jump-proof `timeVec`.
+
+**Verified.** New end-to-end test `tests/test_frame_intake.py` runs the real `FolderMockCamera`
++ `RealtimePipeline` through a real Qt event loop with the GUI handler stalled at 150 ms/frame
+against a 20 Hz source: `timeVec` keeps the camera's ~59 ms cadence. Re-running it on the
+pre-change design (intake queued to the GUI thread, timestamp taken there) gives **151 ms**
+gaps — a 20 Hz recording described as 6.6 Hz, i.e. a wrong heart rate out of the FFT. That
+contrast is what the test asserts, plus a guard that the stall actually happened so it cannot
+pass vacuously. Nine new unit tests in `test_pipeline.py` cover the blocking queue, the
+capped wait, the counted timeout drop, the once-per-episode overload edge, and the two
+never-stall-the-camera properties; three of them were confirmed to fail against the old
+behavior before being kept. Suite **209/209**; offline MATLAB dark/bright **4/4 at <2 %**
+(Gap G1 — `core/pipeline.py` is on its list).
+
+*Coverage note (task 4 interaction):* `submit()` deliberately keeps its old non-blocking
+drop-oldest semantics, so `TestSustainedOverload` still measures exactly what it measured. It
+now covers a path the live app no longer uses for intake — the memory bound still holds
+structurally (same `_input_q`, same `_inflight_sem`), but drop accounting differs between the
+two producers. `TestBlockingPut` / `TestCameraThreadIntake` cover the live path.
+
+*Known limitation, unchanged by this task:* intake backpressure bounds Qt's event queue only
+while a measurement is running. During `DARK_CAL` / `BRIGHT_CAL` the per-frame Welford update
+still runs on the GUI thread with no backpressure, as before — that, and the raw-frame gzip
+write, belong to tasks 14/16.
 
 *Inferred dependency, stated so you can check it:* both changes rewrite the same handoff —
 `frame_ready` is emitted by **four** frame sources (`camera.py:223`, `mock_camera.py:113`,

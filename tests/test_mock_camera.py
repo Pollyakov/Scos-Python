@@ -5,6 +5,7 @@ Parallel to tests/test_camera.py — no real camera or Basler SDK needed.
 
 import sys
 import os
+import time
 import numpy as np
 import pytest
 import tifffile
@@ -44,7 +45,7 @@ class TestMockCameraEmission:
 
         received = []
         mock.frame_ready.connect(
-            lambda f: received.append(f.copy()),
+            lambda f, t: received.append(f.copy()),
             Qt.ConnectionType.DirectConnection,
         )
         mock.start_capture()
@@ -60,7 +61,7 @@ class TestMockCameraEmission:
 
         received = []
         mock.frame_ready.connect(
-            lambda f: received.append(f.copy()),
+            lambda f, t: received.append(f.copy()),
             Qt.ConnectionType.DirectConnection,
         )
         mock.start_capture()
@@ -78,7 +79,7 @@ class TestMockCameraEmission:
         mock.frame_rate = 1000
 
         received = []
-        def _collect(f):
+        def _collect(f, t):
             received.append(None)
             if len(received) >= 7:     # more than one full pass
                 mock._running = False  # stop from inside the emitting thread
@@ -88,6 +89,57 @@ class TestMockCameraEmission:
         mock.wait()
 
         assert len(received) >= 7
+
+
+class TestMockCameraCaptureTimestamps:
+    """frame_ready carries the monotonic time the frame was captured.
+
+    Timestamping at capture (rather than when the GUI thread gets round to the
+    frame) is what keeps timeVec evenly spaced — see merged_worklist task 5.
+    """
+
+    def test_timestamp_is_monotonic_and_recent(self, tmp_path):
+        _make_tiff(tmp_path / "stack.tif", n_frames=5)
+        mock = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.frame_rate = 1000
+
+        stamps = []
+        mock.frame_ready.connect(
+            lambda f, t: stamps.append(t),
+            Qt.ConnectionType.DirectConnection,
+        )
+        t_before = time.monotonic()
+        mock.start_capture()
+        mock.wait()
+        t_after = time.monotonic()
+
+        assert len(stamps) == 5
+        # Same clock, taken inside the run: bracketed by the test's own reads.
+        assert t_before <= stamps[0]
+        assert stamps[-1] <= t_after
+        # Strictly non-decreasing — a later frame can never carry an earlier time
+        assert stamps == sorted(stamps)
+
+    def test_timestamps_track_the_playback_rate(self, tmp_path):
+        """At a fixed FPS the gaps between capture times track 1/FPS."""
+        _make_tiff(tmp_path / "stack.tif", n_frames=6)
+        mock = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.frame_rate = 50            # 20 ms per frame
+
+        stamps = []
+        mock.frame_ready.connect(
+            lambda f, t: stamps.append(t),
+            Qt.ConnectionType.DirectConnection,
+        )
+        mock.start_capture()
+        mock.wait()
+
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        assert len(gaps) == 5
+        # Generous bound: msleep granularity is coarse on Windows, and this
+        # asserts the timestamps follow the capture cadence, not the exact rate.
+        for gap in gaps:
+            assert 0.005 <= gap <= 0.20, f"gap {gap:.3f}s outside plausible range"
 
 
 # ---------------------------------------------------------------------------

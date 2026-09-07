@@ -109,13 +109,30 @@ A pre-commit hook runs all tests before each commit; failures block the commit.
 ## Architecture
 
 ```
-Thread 1 (CameraThread/QThread):  pypylon grabs → emits frame_ready (every frame)
-                                                 → emits display_ready (≤30 FPS)
-Main thread (GUI):                frame_ready  → _on_scos_frame() → SCOSProcessor.process() → PlotWidget.append()
-                                  display_ready → _on_display_frame() → ImageWidget.update_frame()
+Thread 1 (CameraThread/QThread):  pypylon grabs → stamps t_capture (time.monotonic())
+                                  → emits frame_ready(frame, t_capture)   (every frame)
+                                  → emits display_ready(frame)             (≤30 FPS)
+
+  frame_ready ─direct─→ RealtimePipeline.on_frame()   [runs on the CAMERA thread]
+                            ↓ bounded blocking queue (20)
+              Thread 2+ (worker pool): SCOSProcessor.process()
+                            ↓ result_ready (queued)
+  frame_ready ─queued─→ Main thread (GUI): _on_scos_frame()  → labels, calibration
+                                                                   collectors, raw-frame save
+                       _on_scos_result() → PlotWidget.append() / HDF5Recorder.append()
+                       display_ready     → _on_display_frame()  → ImageWidget.update_frame()
 ```
 
-IMPORTANT: Processing runs on the GUI thread. If `process()` exceeds the frame budget (1000/FPS ms), the GUI lags and frames drop.
+IMPORTANT: κ² processing runs on a worker pool, and frame **intake** runs on the camera
+thread — not the GUI thread (merged_worklist task 5). A slow `process()` therefore fills a
+bounded queue and back-pressures the grab loop (visible: `overload_detected`, `Dropped: N`,
+Pylon skipped-frame warnings) instead of lagging the GUI. Each frame's timestamp is taken at
+capture on the **monotonic** clock, so GUI scheduling jitter can never enter `timeVec`.
+
+Still on the GUI thread, by design for now: the dark/bright calibration collectors and the
+raw-frame HDF5 write (tasks 14/16). Intake backpressure bounds Qt's queued-connection event
+queue only while a measurement is running; during DARK_CAL / BRIGHT_CAL it is unbounded as
+before.
 
 ## Key Modules
 

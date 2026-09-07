@@ -52,7 +52,7 @@ class TestFolderCameraEmission:
 
         received = []
         cam.frame_ready.connect(
-            lambda f: received.append(f.copy()),
+            lambda f, t: received.append(f.copy()),
             Qt.ConnectionType.DirectConnection,
         )
         cam.start_capture()
@@ -71,7 +71,7 @@ class TestFolderCameraEmission:
 
         received = []
         cam.frame_ready.connect(
-            lambda f: received.append(f.copy()),
+            lambda f, t: received.append(f.copy()),
             Qt.ConnectionType.DirectConnection,
         )
         cam.start_capture()
@@ -96,7 +96,7 @@ class TestFolderCameraEmission:
         cam.frame_rate = 1000
         received = []
         cam.frame_ready.connect(
-            lambda f: received.append(int(f[0, 0])),
+            lambda f, t: received.append(int(f[0, 0])),
             Qt.ConnectionType.DirectConnection,
         )
         cam.start_capture()

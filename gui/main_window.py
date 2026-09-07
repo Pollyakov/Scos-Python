@@ -453,13 +453,17 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         # Camera thread signals
         self.camera.display_ready.connect(self._on_display_frame)   # 30 FPS cap → GUI
-        self.camera.frame_ready.connect(self._on_scos_frame)         # every frame → SCOS
+        # Queued (GUI thread): FPS/intensity labels, calibration collectors,
+        # raw-frame saving. SCOS intake is NOT here any more — see
+        # _connect_pipeline_intake().
+        self.camera.frame_ready.connect(self._on_scos_frame)
         self.camera.error.connect(self._on_camera_error)
         self.camera.warning.connect(self._on_camera_warning)
 
         # SCOS worker thread signals (results arrive on GUI thread via queued connection)
         self._scos_worker.result_ready.connect(self._on_scos_result)
         self._scos_worker.error_occurred.connect(self._on_scos_error)
+        self._connect_pipeline_intake()
 
         if self._h5_replay is not None:
             self._h5_replay.result_ready.connect(self._on_scos_result)
@@ -501,6 +505,40 @@ class MainWindow(QMainWindow):
 
         # Save
         self.btn_save.clicked.connect(self._save_data)
+
+    # ------------------------------------------------------------------
+    # Pipeline intake wiring
+    # ------------------------------------------------------------------
+
+    def _connect_pipeline_intake(self) -> None:
+        """Feed the camera's frames straight into the pipeline, off the GUI thread.
+
+        DirectConnection means RealtimePipeline.on_frame() executes on the
+        *camera* thread, so a full input queue blocks the grab loop — real
+        backpressure, absorbed by Pylon's own 20-frame buffer — instead of
+        piling frames up in Qt's unbounded queued-connection event queue while
+        the GUI thread is busy (Implementation_Plan §2).
+        """
+        self.camera.frame_ready.connect(
+            self._scos_worker.on_frame, Qt.ConnectionType.DirectConnection
+        )
+        self._scos_worker.overload_detected.connect(self._on_overload)
+
+    def _disconnect_pipeline_intake(self) -> None:
+        """Unhook the current pipeline before it is replaced or stopped.
+
+        A stopped pipeline no longer drains its input queue, so a camera thread
+        still connected to it would block for the full put timeout on every
+        single frame. Must run before the old pipeline is torn down.
+        """
+        try:
+            self.camera.frame_ready.disconnect(self._scos_worker.on_frame)
+        except TypeError:
+            pass   # not connected (e.g. _NullCamera in HDF5 replay mode)
+        try:
+            self._scos_worker.overload_detected.disconnect(self._on_overload)
+        except TypeError:
+            pass
 
     # ------------------------------------------------------------------
     # Slots
@@ -550,6 +588,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Camera Error", str(e))
         else:
             logger.info("Stop Video")
+            # Close the intake gate before camera.stop(), which wait()s on the
+            # camera thread with no timeout. Every route to stopping capture
+            # passes through here — including _on_camera_error, which unchecks
+            # Start Video directly without going through _toggle_scos.
+            self._scos_worker.disable_intake()
             self.btn_start_scos.setChecked(False)
             self.btn_start_scos.setEnabled(False)
             self.chk_trigger.setEnabled(True)   # re-enable in case it was disabled for mock-folder
@@ -662,13 +705,18 @@ class MainWindow(QMainWindow):
             self.processor.gain_db     = self.spn_gain.value()
             fmt = self.cmb_format.currentText()
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
-            # Recreate pipeline with the currently selected worker count
+            # Recreate pipeline with the currently selected worker count.
+            # Unhook the camera from the outgoing pipeline first — once it is
+            # stopped nothing drains its queue, and a camera thread still
+            # feeding it would stall on every frame.
+            self._disconnect_pipeline_intake()
             self._scos_worker.stop()
             self._scos_worker.wait(2000)
             n_workers = self.spn_workers.value()
             self._scos_worker = RealtimePipeline(self.processor, n_workers=n_workers, parent=self)
             self._scos_worker.result_ready.connect(self._on_scos_result)
             self._scos_worker.error_occurred.connect(self._on_scos_error)
+            self._connect_pipeline_intake()
             self._scos_worker.start()
             self._last_logged_dropped_count = 0
             self.lbl_dropped.setText("Dropped: 0")
@@ -677,6 +725,7 @@ class MainWindow(QMainWindow):
             self._start_dark_cal()
         else:
             logger.info("Stop SCOS")
+            self._scos_worker.disable_intake()   # camera stops feeding immediately
             self._scos_mask            = None
             self._measuring_start_time = None
             self._time_left_label.hide()
@@ -944,6 +993,15 @@ class MainWindow(QMainWindow):
 
         self.plot_widget.reset()
         self._set_state(State.MEASURING_INIT)
+        # Open the intake gate *before* _start_recorder()'s modal folder dialog.
+        # Frames captured while that dialog is up are now processed on the
+        # camera and worker threads and timestamped at capture, instead of
+        # being mis-timed (or lost) by a stalled GUI thread.
+        scos_mask = self._scos_mask if self._scos_mask is not None else self._mask
+        if scos_mask is None:
+            logger.warning("No ROI mask available — SCOS intake not started")
+        else:
+            self._scos_worker.enable_intake(scos_mask)
         self._start_recorder()
 
     def keyPressEvent(self, event):
@@ -1055,8 +1113,16 @@ class MainWindow(QMainWindow):
         )
         self.image_widget.update_frame(frame)
 
-    def _on_scos_frame(self, frame: np.ndarray):
-        """Runs on GUI thread (queued signal from camera thread) — every frame."""
+    def _on_scos_frame(self, frame: np.ndarray, t_capture: float):
+        """Runs on GUI thread (queued signal from camera thread) — every frame.
+
+        GUI-owned per-frame work only: labels, calibration collectors and the
+        raw-frame save. SCOS intake happens on the camera thread instead (see
+        _connect_pipeline_intake), so this handler falling behind can no longer
+        delay or mis-timestamp a measurement frame. `t_capture` is the
+        monotonic capture time; the measurement path uses it, and it is
+        accepted here so both connections share one signal signature.
+        """
         # Default mask = whole frame when no ROI is set
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)
@@ -1115,13 +1181,11 @@ class MainWindow(QMainWindow):
         if self._state not in (State.MEASURING_INIT, State.MEASURING) or self._mask is None:
             return
 
-        # Hand the frame off to the worker thread.  The worker keeps a 1-frame
-        # queue so it always processes the latest frame and never falls behind.
-        t = time.time() - self._start_time
-        mask = self._scos_mask if self._scos_mask is not None else self._mask
-        self._scos_worker.submit(frame, mask, t)
+        # NOTE: the frame is NOT submitted for processing here — the camera
+        # thread already did that via RealtimePipeline.on_frame().
 
-        # Save raw frame to HDF5 if requested
+        # Save raw frame to HDF5 if requested. Still synchronous on the GUI
+        # thread (gzip and all) — moving it to its own thread is task 14.
         if self._recorder is not None and self.chk_save_frames.isChecked():
             self._recorder.append_frame(frame)
 
@@ -1205,6 +1269,21 @@ class MainWindow(QMainWindow):
         if self._recorder is not None:
             self._recorder.append(t, k2_raw, k2_corr, mean_i)
 
+    def _on_overload(self, depth: int):
+        """Input queue crossed 80 % full — emitted once per overload episode.
+
+        At this point capture is already being throttled by the blocking
+        intake, which is the safe behaviour; this is the operator's warning
+        that the machine is not keeping up. The queue-fill bar and the
+        four-option "what should I give up?" dialog are task 18.
+        """
+        msg = (
+            f"SCOS overload — input queue {depth}/{self._scos_worker.queue_maxsize} "
+            f"full; camera capture is being throttled to keep up"
+        )
+        logger.warning(msg)
+        self.status.showMessage(msg)
+
     def _on_scos_error(self, msg: str):
         """GainTableError raised in worker thread — stop SCOS and show dialog."""
         self.btn_start_scos.setChecked(False)
@@ -1224,7 +1303,21 @@ class MainWindow(QMainWindow):
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
     def _on_camera_warning(self, msg: str):
-        from PyQt6.QtWidgets import QMessageBox
+        """Camera-side warning — most often Pylon reporting skipped frames.
+
+        Now that intake blocks the grab loop under overload, buffer-overflow
+        warnings are the *expected* symptom of a slow patch rather than a
+        rarity, and a modal dialog per event would freeze the GUI thread —
+        exactly what this backpressure work exists to prevent. During a session
+        they go to the status bar and app.log only; outside one (parameter
+        problems at start-up, where there is no data to lose) the blocking
+        dialog is still the right call.
+        """
+        logger.warning("%s", msg)   # camera messages already name their source
+        self.status.showMessage(msg)
+        if self._state in (State.DARK_CAL, State.BRIGHT_CAL,
+                           State.MEASURING_INIT, State.MEASURING):
+            return
         QMessageBox.warning(self, "Camera Warning", msg)
 
     def _on_camera_error(self, msg: str):

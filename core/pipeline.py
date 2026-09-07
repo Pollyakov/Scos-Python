@@ -27,6 +27,7 @@ import concurrent.futures
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -66,11 +67,19 @@ def _worker_fn(
 
 
 class _DropOldestQueue:
-    """Thread-safe bounded queue that evicts the *oldest* item when full.
+    """Thread-safe bounded queue with two producer modes.
 
-    Unlike queue.Queue (which raises Full or blocks), appending to a full
-    queue here silently drops the head element so the most recent frame
-    is always accepted.
+    Non-blocking (``block=False``, the default): appending to a full queue
+    evicts the head element and counts it, so the most recent frame is always
+    accepted. Used by ``submit()``.
+
+    Blocking (``block=True``): the producer *waits* for a free slot instead,
+    which is what turns a slow processing stage into real backpressure on the
+    camera thread rather than a silent loss (Implementation_Plan §2). The wait
+    is always bounded: after ``timeout`` seconds the item is accepted anyway,
+    evicting and counting the oldest. That hard cap matters — a producer that
+    could wait forever would hang ``CameraThread.stop()``, which calls
+    ``wait()`` with no timeout, and with it the whole GUI.
     """
 
     def __init__(self, maxsize: int) -> None:
@@ -78,24 +87,68 @@ class _DropOldestQueue:
         self._cond    = threading.Condition()
         self._dropped = 0
 
-    def put(self, item: object) -> None:
-        """Non-blocking. Evicts oldest item if full (sentinel None never evicts)."""
+    def put(self, item: object, *, block: bool = False,
+            timeout: float | None = None) -> bool:
+        """Append an item. Returns True if it fit, False if it evicted one.
+
+        A False return is exactly the "we lost a frame" case, and is always
+        reflected in ``dropped_count`` (the sentinel None is the one exception
+        — see Question Q7 in the merged worklist).
+        """
+        deadline = (time.monotonic() + timeout) if (block and timeout is not None) else None
         with self._cond:
+            if block:
+                while len(self._dq) == self._dq.maxlen:
+                    if deadline is None:
+                        self._cond.wait(0.05)
+                        continue
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break        # hard cap hit — fall through and evict
+                    self._cond.wait(remaining)
+            queued = True
             if item is not None and len(self._dq) == self._dq.maxlen:
                 self._dropped += 1   # deque will auto-evict oldest on append
+                queued = False
             self._dq.append(item)
-            self._cond.notify()
+            self._cond.notify_all()
+            return queued
 
     def get(self) -> object:
         """Blocking. Returns oldest item (or sentinel)."""
         with self._cond:
             while not self._dq:
                 self._cond.wait()
-            return self._dq.popleft()
+            item = self._dq.popleft()
+            # A slot just freed up — wake any producer blocked in put().
+            self._cond.notify_all()
+            return item
 
     @property
     def dropped_count(self) -> int:
         return self._dropped
+
+    @property
+    def qsize(self) -> int:
+        with self._cond:
+            return len(self._dq)
+
+    @property
+    def maxsize(self) -> int:
+        return self._dq.maxlen
+
+
+@dataclass(frozen=True)
+class _Intake:
+    """Immutable snapshot of everything the camera-thread intake path needs.
+
+    Published by the GUI thread with a single attribute assignment and read by
+    the camera thread with a single attribute read - both atomic under the GIL,
+    so the camera thread can never observe a half-updated intake state. Same
+    pattern as processor._RoiCrop (merged worklist task 3).
+    """
+    mask:          np.ndarray
+    put_timeout_s: float
 
 
 # ---------------------------------------------------------------------------
@@ -112,13 +165,27 @@ class RealtimePipeline(QThread):
     Results are emitted in submission order (oldest future first) so the
     BFI time-series is always monotonically increasing.
 
+    Frame intake runs on the *camera* thread, not the GUI thread: the camera's
+    frame_ready signal is connected to on_frame() with a DirectConnection, so a
+    full input queue blocks the grab loop (real backpressure, absorbed by the
+    camera's own 20-frame Pylon buffer) instead of either freezing the GUI or
+    piling frames up in Qt's unbounded queued-connection event queue.
+
     Signals:
         result_ready(t, k2_raw, k2_corr, mean_i, proc_ms)
         error_occurred(message)
+        overload_detected(queue_depth)  - input queue first crossed 80 % full
     """
 
-    result_ready   = pyqtSignal(float, float, float, float, float)
-    error_occurred = pyqtSignal(str)
+    result_ready      = pyqtSignal(float, float, float, float, float)
+    error_occurred    = pyqtSignal(str)
+    overload_detected = pyqtSignal(int)
+
+    # Fraction of the input queue that counts as "overloaded", and the lower
+    # fraction it must fall back to before the warning can fire again - a plain
+    # threshold would re-fire on every frame while hovering at the mark.
+    _OVERLOAD_HIGH = 0.8
+    _OVERLOAD_LOW  = 0.5
 
     def __init__(
         self,
@@ -141,12 +208,100 @@ class RealtimePipeline(QThread):
         self._inflight_sem = threading.Semaphore(max_inflight or 2 * n_workers)
         self._error_count = 0   # frames whose processing raised — see _emit_loop
 
+        # Camera-thread intake state. `_intake` is None whenever no measurement
+        # is running, which makes on_frame() a cheap early return during
+        # PREVIEW and the two calibration phases.
+        self._intake: _Intake | None = None
+        self._t0_capture: float | None = None   # monotonic — the timeVec origin
+        self._t0_wall:    float | None = None   # wall clock at that same instant
+        self._overloaded = False
+
     # ------------------------------------------------------------------
     # Public API (called from GUI thread)
 
     def submit(self, frame: np.ndarray, mask: np.ndarray, t: float) -> None:
-        """Enqueue a frame for processing. Non-blocking; drops oldest if full."""
+        """Enqueue a frame for processing. Non-blocking; drops oldest if full.
+
+        This is the caller-supplies-its-own-timestamp path, kept for tests and
+        for any producer that must never be blocked. The live camera path is
+        on_frame(), which blocks instead of dropping.
+        """
         self._input_q.put((frame, mask, t))
+
+    def enable_intake(self, mask: np.ndarray, *,
+                      put_timeout_s: float = 1.5) -> None:
+        """Start accepting frames from the camera thread (call at MEASURING_INIT).
+
+        `mask` is the shrunk SCOS mask; it is captured into an immutable bundle
+        so the camera thread never reads it mid-update. The timeVec origin is
+        latched from the first frame that actually arrives, not from this call,
+        so t=0 is a real capture instant.
+
+        Caller contract: this mask must stay in step with the one handed to
+        `processor.set_roi()` — the workers read the processor's ROI crops, not
+        this bundle, and the two describe the same region. Today that holds
+        because ROI edits are locked for the whole of MEASURING_INIT/MEASURING
+        (merged worklist task 3); anything that unlocks ROI mid-run has to
+        re-publish both together.
+        """
+        self._t0_capture = None
+        self._t0_wall    = None
+        self._overloaded = False
+        self._intake = _Intake(mask=mask, put_timeout_s=put_timeout_s)
+
+    def disable_intake(self) -> None:
+        """Stop accepting camera frames (call on Stop SCOS / FINISHED)."""
+        self._intake = None
+
+    @property
+    def intake_enabled(self) -> bool:
+        return self._intake is not None
+
+    @property
+    def t0_capture(self) -> float | None:
+        """Monotonic capture time of the first measured frame - the t=0 origin."""
+        return self._t0_capture
+
+    @property
+    def t0_wall(self) -> float | None:
+        """Wall-clock time at t=0, for the absolute `startTime` the schema needs.
+
+        Monotonic is the right clock for intervals (it cannot jump when the OS
+        syncs time mid-recording) but carries no absolute meaning, so the two
+        are latched together on the first frame.
+        """
+        return self._t0_wall
+
+    def on_frame(self, frame: np.ndarray, t_capture: float) -> None:
+        """Camera-thread intake slot - connect with Qt.ConnectionType.DirectConnection.
+
+        Runs on whichever thread emitted frame_ready (the camera/mock thread),
+        never the GUI thread. Blocks while the queue is full, which throttles
+        the grab loop; the wait is capped inside put(), so a wedged pipeline
+        stalls capture briefly and countably rather than forever.
+        """
+        intake = self._intake            # one atomic read - see _Intake
+        if intake is None:
+            return                       # not measuring: nothing to do
+
+        if self._t0_capture is None:
+            self._t0_capture = t_capture
+            self._t0_wall    = time.time()
+        t = t_capture - self._t0_capture
+
+        self._input_q.put((frame, intake.mask, t),
+                          block=True, timeout=intake.put_timeout_s)
+        self._check_overload()
+
+    def _check_overload(self) -> None:
+        """Emit overload_detected once per episode, on the way up past 80 %."""
+        maxsize = self._input_q.maxsize or 1
+        depth   = self._input_q.qsize
+        if not self._overloaded and depth >= self._OVERLOAD_HIGH * maxsize:
+            self._overloaded = True
+            self.overload_detected.emit(depth)
+        elif self._overloaded and depth <= self._OVERLOAD_LOW * maxsize:
+            self._overloaded = False
 
     @property
     def dropped_count(self) -> int:
@@ -158,8 +313,23 @@ class RealtimePipeline(QThread):
         """Total frames whose processing raised an unexpected exception."""
         return self._error_count
 
+    @property
+    def queue_depth(self) -> int:
+        """Frames waiting in the input queue (drives the task-18 fill bar)."""
+        return self._input_q.qsize
+
+    @property
+    def queue_maxsize(self) -> int:
+        return self._input_q.maxsize
+
     def stop(self) -> None:
-        """Signal the pipeline to drain and exit. Call before wait()."""
+        """Signal the pipeline to drain and exit. Call before wait().
+
+        Intake is closed first: once the dispatcher exits nothing drains the
+        input queue, so a camera thread still feeding a dead pipeline would
+        block for the full put timeout on every frame.
+        """
+        self._intake = None
         self._input_q.put(None)
 
     # ------------------------------------------------------------------

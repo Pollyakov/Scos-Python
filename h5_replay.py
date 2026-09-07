@@ -29,7 +29,7 @@ class _NullCamera:
         def emit(self, *_):      pass
         def disconnect(self, *_): pass
 
-    frame_ready   = _Sig()
+    frame_ready   = _Sig()   # never emitted — replay feeds result_ready directly
     display_ready = _Sig()
     error         = _Sig()
     warning       = _Sig()

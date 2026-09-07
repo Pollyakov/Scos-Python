@@ -53,6 +53,17 @@ Camera ──► frame_queue ──► Processor ─┬─► result_queue ─�
 - Detect drops via `result.GetNumberOfSkippedImages()`
 
 ### Overload behavior — never drop silently
+
+> **Status (2026-09-07): implemented** — merged_worklist task 5. Built as
+> `RealtimePipeline._input_q` (bounded 20) rather than a separate `frame_queue`
+> object, fed by `on_frame()` direct-connected to the camera's `frame_ready`, so
+> the *camera* thread is the one that blocks. Two deviations from the text below,
+> both deliberate: (1) the block is capped at 1.5 s and a frame lost to that cap
+> is counted — an unbounded wait would hang `CameraThread.stop()`, which calls
+> `wait()` with no timeout; (2) the 4-option dialog and fill bar are **not** built
+> yet (task 18) — today `overload_detected` logs and shows a status-bar warning
+> while the blocking intake throttles capture on its own.
+
 - `frame_queue` is bounded (size 20). When fill ≥ 80 % (16 frames, ~800 ms slack
   at 20 Hz), processor emits `overload_detected`.
 - Total slack from start of slowdown to first dropped frame is

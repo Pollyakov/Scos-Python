@@ -11,7 +11,12 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 
 class MockCameraThread(QThread):
-    frame_ready   = pyqtSignal(np.ndarray)
+    frame_ready   = pyqtSignal(np.ndarray, float)
+   # (frame, t_capture)
+    # t_capture is time.monotonic() taken where the frame is *captured*.
+    # The wall clock can jump mid-recording if the OS syncs time; and a
+    # timestamp taken later, on the GUI thread, records GUI scheduling
+    # jitter as if it were physiology.
     display_ready = pyqtSignal(np.ndarray)
     error         = pyqtSignal(str)
     warning       = pyqtSignal(str)
@@ -110,9 +115,10 @@ class MockCameraThread(QThread):
                 t0 = time.perf_counter()
 
                 frame = self._stack[idx]
-                self.frame_ready.emit(frame)
+                t_capture = time.monotonic()
+                self.frame_ready.emit(frame, t_capture)
 
-                now = time.monotonic()
+                now = t_capture
                 if now - self._last_display >= self._display_interval:
                     self.display_ready.emit(frame)
                     self._last_display = now
