@@ -34,7 +34,7 @@ against it; findings are folded into tasks 9, 10, 12, 16, and Claim S5.
 
 ---
 
-## Status (last updated: 2026-09-02)
+## Status (last updated: 2026-09-07)
 
 Legend: ✅ done · 🔄 in progress · ⬜ not started. Update this table, and the matching
 task heading below, whenever a task starts or finishes — that's the only way this stays
@@ -46,8 +46,8 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 |---|---|---|
 | 1 | Cap in-flight work, make dropped frames visible | ✅ Done — commits `996712f`, `78c2f0e` |
 | 2 | Stop the silent swallows (errors + κ²≤0 → NaN) | ✅ Done — commits `86334a0`, `9471e51` |
-| 3 | Fix the ROI data race | ✅ Done — pending commit |
-| 4 | Add a real overload test | ⬜ Not started — see note in task 4 |
+| 3 | Fix the ROI data race | ✅ Done — commit `9838097` |
+| 4 | Add a real overload test | ✅ Done — see note in task 4 |
 | 5 | Move frame intake off GUI thread + capture-time timestamps | ⬜ Not started |
 | 6 | Verify #1 and #5 on the real camera | ⬜ Not started |
 | 7 | Write down pool-vs-single-thread decision | ⬜ Not started |
@@ -166,7 +166,7 @@ the row. `docs/todo.md` updated (new Done item 17). Verified: new tests
 `test_non_positive_k2_corr_kept_as_nan` (recorder, replacing the old
 `test_non_positive_k2_corr_skipped` which asserted the now-fixed behavior) both pass;
 full suite 184/184 passes; offline MATLAB dark/bright tests 4/4 pass at <2%
-(unaffected — this change doesn't touch the math). Not committed yet — held per request.
+(unaffected — this change doesn't touch the math). Committed as `86334a0`.
 Open question this surfaces: whether the lab's MATLAB analysis tolerates `NaN` in `bfi`
 — see Question Q3, still unanswered.
 
@@ -240,11 +240,11 @@ it failed with 167/600 shape-mismatch exceptions on the old code, 0/600 on the f
 code. Also added `TestRoiLock` (`tests/test_image_widget.py`) for the GUI-side lock.
 Full suite 188/188 passes; offline MATLAB dark/bright tests 4/4 pass at <2% (confirmed —
 unaffected, as expected, since only how the ROI state is published/read changed, not the
-math). `docs/todo.md` updated (new Done item 18). Not committed yet — held per request.
+math). `docs/todo.md` updated (new Done item 18). Committed as `9838097`.
 
 ---
 
-### 4. Add a real overload test
+### 4. Add a real overload test — ✅ DONE
 
 - **Goal:** Remove the false confidence in the current tests, so #1 can't silently regress.
 - **Source:** Review B (B7, T3).
@@ -260,6 +260,69 @@ buffer that never fills in practice — so the actual failure mode is untested.
 which floods the pipeline and asserts `_inflight` stays at the cap — that's the item-count
 half of this task. Still open: asserting *memory* stays bounded (not just item count) and
 that drops are counted in the same overload scenario.
+
+**Status — done, 2026-09-07:** added `TestSustainedOverload` to `tests/test_pipeline.py`
+(tests only — no production code changed).
+
+*How memory is measured:* a `weakref` is held to every frame handed to the pipeline and the
+number still alive is counted. Since CPython frees a frame the instant its last reference
+drops, that count is exactly how many frames the pipeline is still holding (input queue +
+executor queue + workers); × frame size gives real bytes. This is deliberately **not** RSS
+sampling — RSS is allocator-noisy and would be either flaky or too loose to prove anything,
+whereas this is exact and measures precisely the leak Review B described. Frames are the
+lab's true 700×700 uint16 size, so the MB figure is the real one. A `_BlockingProcessor`
+(never completes until released) makes "workers slower than camera" absolute rather than a
+race between a sleep and a submit loop.
+
+*Two deliberate anti-flake / anti-rot measures:* the submit loop yields 0.5 ms per frame so
+the dispatcher gets a guaranteed scheduling window — without it, a tight pure-Python loop
+leaves the dispatcher dependent on the 5 ms GIL switch interval, and a loaded machine could
+starve it, overflowing `_input_q` and permanently losing the very frames the uncapped
+control needs to see parked in memory (that would fail the *control*, the load-bearing
+half, while the capped test still passed). And the memory bound is derived from
+`pipeline._input_q._dq.maxlen` read back at runtime rather than a hardcoded 20, so
+resizing the queue in `core/pipeline.py` can't leave the bound silently too loose (proving
+nothing) or too tight (spurious red).
+
+*Two tests, one scenario — 60 frames flooded into a stalled 2-worker pipeline. Figures below
+were byte-identical across 6 consecutive runs of each configuration on the dev machine; the
+assertions carry slack so they hold under scheduling noise rather than depending on these
+exact values:*
+
+| Configuration | Frames retained | Memory | Peak `_inflight` | Drops counted |
+|---|---|---|---|---|
+| Capped (shipped, `max_inflight=2×workers`) | 25 / 60 | **24.5 MB** | 3 | **35** |
+| Uncapped (`max_inflight=10⁶`, pre-fix) | 60 / 60 | **58.8 MB** | 59 | **0** |
+
+`test_memory_bounded_and_drops_counted_under_overload` asserts the first row (bounded
+memory, bounded in-flight, drops counted, and full frame accounting).
+`test_uncapped_pipeline_leaks_silently` asserts the second — a **permanent negative
+control** rather than a one-off manual check, so neither the cap nor the bound in the first
+test can be quietly removed or widened without a test turning red. The uncapped row is
+exactly Review B's finding reproduced: nearly every frame parked in memory while the drop
+counter still reads zero.
+
+*Verified it actually fails on the broken code:* temporarily neutering the semaphore in
+`core/pipeline.py` (`Semaphore(10**6)`) made the new test fail with *"retained 60 frames
+(58.8 MB) out of 60 submitted; expected <= 32"*, and also failed task 1's existing
+`test_inflight_capped_under_sustained_overload`. `core/pipeline.py` was reverted
+immediately (`git checkout`) and is untouched by this task.
+
+*Baseline before starting:* 192/192 passing (Claim S4's suggested check — the 188 figure in
+task 3's note has since grown). After: 194/194.
+
+*Offline MATLAB tests (Gap G1):* not applicable here — this task adds test code only and
+touches no path those tests validate. Noted rather than run for form.
+
+**Bug this surfaced (not fixed here — needs a decision):** `_DropOldestQueue.put()`'s
+docstring claims "sentinel `None` never evicts", but `collections.deque(maxlen=N)` evicts
+the oldest item on *any* append once full — including the sentinel. The `item is not None`
+guard skips the **counter**, not the eviction. So `stop()` on a full queue silently discards
+one frame without counting it. Confirmed empirically: the capped run above accounts for 59
+of 60 frames (24 emitted + 35 dropped), while the uncapped run — whose queue is never full —
+accounts for all 60. Harmless in practice (one frame, at shutdown, when the session is
+ending anyway) but it makes exact accounting impossible and the docstring is wrong. The new
+test documents it and tolerates a shortfall of exactly 1. → new Question Q7.
 
 ---
 
@@ -803,10 +866,14 @@ reconstruction faithfully matches `core/pipeline.py`, so the *mechanism* is real
 finding stands — but treat the specific megabyte figure as an illustration, not a
 measurement of your app.
 
-### S4. "186/186 tests pass" is inherited, not re-verified
+### S4. "186/186 tests pass" is inherited, not re-verified — ✅ RESOLVED, 2026-09-07
 
 Review A ran the suite; Review B explicitly did not (its Assumption 3) and neither did this
 merge. Worth one `pytest` run before starting, so you know your baseline is green.
+
+**Resolved:** baseline run before starting task 4 — **192/192 passing** (~4 min). The suite
+has grown past every figure quoted above (186 in the reviews, 188 in task 3's note), so
+those numbers were stale rather than wrong. After task 4: **194/194**.
 
 ### S5. Both reviews substitute a document they could not find — ✅ RESOLVED, 2026-09-02
 
@@ -849,3 +916,12 @@ is meant to be user-configurable, not hardcoded (task 10, now resolved).
    inside the main `.h5` file. Confirm which is wanted — a folder of individual frame
    files, or keep the embedded HDF5 dataset (and if so, is `Frames` just where that `.h5`
    file itself should live, not individual frames)?
+7. **Sentinel eviction (raised by #4, blocks nothing):** `stop()` puts a `None` sentinel
+   into `_DropOldestQueue`; if the queue is full, `deque(maxlen=...)` evicts one real frame
+   and the `item is not None` guard means it is **not** counted in `dropped_count`. One
+   frame lost at shutdown is scientifically harmless, but it breaks exact accounting and
+   the `put()` docstring ("sentinel None never evicts") is factually wrong. Options: (a)
+   leave it, fix only the docstring; (b) count the eviction like any other drop; (c) give
+   the sentinel its own flag instead of a queue slot so it never evicts. Recommend (c) or
+   (b) — but it touches `core/pipeline.py`, which activates Gap G1's offline-MATLAB
+   re-run criterion, so it wasn't done inside a tests-only task.

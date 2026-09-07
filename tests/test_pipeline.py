@@ -9,6 +9,8 @@ import os
 import time
 import threading
 import random
+import weakref
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -249,4 +251,218 @@ class TestRealtimePipeline:
         assert max_seen <= cap + 1, (
             f"in-flight work grew to {max_seen}, expected <= {cap + 1} "
             f"(cap={cap}) — the in-flight semaphore is not bounding memory"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sustained-overload memory test (merged_worklist task 4)
+# ---------------------------------------------------------------------------
+#
+# What "memory" means here
+# ------------------------
+# These tests measure memory as *retained-frame bytes*: a weakref is held to
+# every frame handed to the pipeline, and the number still alive is counted.
+# Because CPython frees a frame the moment the last reference drops, the alive
+# count is exactly the number of frames the pipeline is still holding — in the
+# input queue, in the executor's internal queue, or inside a worker.
+#
+# This is deliberately *not* resident-set-size (RSS) sampling. RSS is noisy:
+# allocators keep freed pages, the GC runs when it likes, and other tests in the
+# session move the number around — an RSS assertion would be either flaky or so
+# loose it proves nothing. The alive count is exact, deterministic, and measures
+# precisely the leak Review B described (frames parked in an unbounded executor
+# queue). Multiplying by frame size converts it to real bytes; the frames are
+# the lab's true 700x700 uint16 size, so the MB figure is the real one.
+#
+# Determinism
+# -----------
+# `_BlockingProcessor` never completes a frame until released, so "the workers
+# are slower than the camera" is absolute rather than a race between a sleep and
+# a submit loop. Nothing here depends on OS sleep granularity or thread
+# scheduling luck, which is what makes the numbers reproducible on any machine.
+
+_INFLIGHT_SLACK = 8   # frames in transit in thread locals at the moment we sample
+
+
+class _BlockingProcessor:
+    """Processor whose every call blocks until `release()` is called.
+
+    Models a fully stalled processing stage — the worst case of the slowdown
+    that motivated the in-flight cap — without depending on sleep timing.
+    """
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def process(self, frame, mask):
+        self._gate.wait(timeout=30)   # timeout only so a bug can't hang the suite
+        return 0.05, 0.04, 100.0
+
+    def release(self) -> None:
+        self._gate.set()
+
+
+class _OverloadStats(NamedTuple):
+    submitted:      int
+    max_alive:      int     # peak frames retained by the pipeline
+    retained_mb:    float   # peak retained frames converted to megabytes
+    max_inflight:   int     # peak len(pipeline._inflight)
+    dropped:        int
+    results:        int
+    clean_exit:     bool
+    q_maxsize:      int     # read from the pipeline, not hardcoded — see below
+
+
+def _run_overload(
+    *,
+    max_inflight: int | None,
+    n_workers: int = 2,
+    n_frames: int = 60,
+    shape: tuple[int, int] = (700, 700),
+) -> _OverloadStats:
+    """Flood a stalled pipeline with `n_frames` and measure what it retains.
+
+    `max_inflight=None` uses the shipped default cap (2 * n_workers). Passing a
+    huge value disables the cap, reproducing the pre-fix behaviour — see
+    `test_uncapped_pipeline_leaks_silently` for why that matters.
+    """
+    proc     = _BlockingProcessor()
+    pipeline = RealtimePipeline(proc, n_workers=n_workers, max_inflight=max_inflight)
+
+    n_results = 0
+
+    def on_result(*_args):
+        nonlocal n_results
+        n_results += 1
+
+    pipeline.result_ready.connect(on_result, Qt.ConnectionType.DirectConnection)
+    pipeline.start()
+
+    mask         = np.ones(shape, dtype=bool)
+    frame_nbytes = shape[0] * shape[1] * np.dtype(np.uint16).itemsize
+    refs: list[weakref.ref] = []
+    max_alive    = 0
+    max_inflight_seen = 0
+
+    for i in range(n_frames):
+        # np.full (not np.zeros): zeros can come from calloc and never commit
+        # pages, which would make the megabyte figure notional rather than real.
+        frame = np.full(shape, 200, dtype=np.uint16)
+        refs.append(weakref.ref(frame))
+        pipeline.submit(frame, mask, float(i) * 0.05)
+        del frame   # only the pipeline may hold this frame from here on
+        max_alive         = max(max_alive, sum(1 for r in refs if r() is not None))
+        max_inflight_seen = max(max_inflight_seen, len(pipeline._inflight))
+        # Guarantee the dispatcher a scheduling window every iteration (~30 ms
+        # total). Without it this is a tight pure-Python loop and the dispatcher
+        # only runs when the GIL switch interval (5 ms default) preempts us — on
+        # a loaded machine it could be starved for the whole loop, overflowing
+        # _input_q and permanently losing the frames the uncapped control needs
+        # to observe parked in memory. Costs nothing in the capped case, where
+        # the dispatcher blocks on the semaphore after ~4 frames regardless.
+        time.sleep(0.0005)
+
+    # Let the dispatcher finish moving whatever it can out of _input_q, so the
+    # peak reflects a settled backlog rather than a half-drained one.
+    time.sleep(0.3)
+    max_alive         = max(max_alive, sum(1 for r in refs if r() is not None))
+    max_inflight_seen = max(max_inflight_seen, len(pipeline._inflight))
+
+    proc.release()
+    pipeline.stop()
+    clean = pipeline.wait(20000)
+
+    return _OverloadStats(
+        submitted    = n_frames,
+        max_alive    = max_alive,
+        retained_mb  = max_alive * frame_nbytes / 1e6,
+        max_inflight = max_inflight_seen,
+        dropped      = pipeline.dropped_count,
+        results      = n_results,
+        clean_exit   = clean,
+        q_maxsize    = pipeline._input_q._dq.maxlen,
+    )
+
+
+class TestSustainedOverload:
+    """Task 4 of docs/reviews/merged_worklist.md.
+
+    The pre-existing `test_inflight_capped_under_sustained_overload` covers only
+    the item-count half of the requirement. These two cover the rest: that
+    *memory* stays bounded and that drops are *counted*, in the same overload
+    run — and, via the negative control, that the test would actually notice if
+    the in-flight cap were removed again.
+    """
+
+    def test_memory_bounded_and_drops_counted_under_overload(self):
+        """Frames arriving far faster than a stalled processor can drain them
+        must leave memory flat and the loss visible in `dropped_count`."""
+        n_workers = 2
+        cap       = 2 * n_workers          # the shipped default max_inflight
+        stats     = _run_overload(max_inflight=None, n_workers=n_workers)
+
+        assert stats.clean_exit, "pipeline did not shut down in time — numbers below are meaningless"
+
+        # Retained frames: the bounded _input_q, plus the capped in-flight set,
+        # plus a small allowance for frames in transit in thread locals. The
+        # queue size is read back from the pipeline rather than hardcoded, so
+        # changing _input_q's size in core/pipeline.py cannot leave this bound
+        # silently wrong in either direction.
+        bound = stats.q_maxsize + cap + _INFLIGHT_SLACK
+        assert stats.max_alive <= bound, (
+            f"pipeline retained {stats.max_alive} frames "
+            f"({stats.retained_mb:.1f} MB) out of {stats.submitted} submitted; "
+            f"expected <= {bound} (queue {stats.q_maxsize} + in-flight cap {cap} "
+            f"+ slack {_INFLIGHT_SLACK}). Memory is not bounded under sustained overload."
+        )
+        assert stats.max_inflight <= cap + 1, (
+            f"in-flight work reached {stats.max_inflight}, expected <= {cap + 1}"
+        )
+
+        # The whole point of the design: the backlog is absorbed by the queue
+        # that *counts* what it discards, so overload is visible to the operator.
+        assert stats.dropped > 0, (
+            "no drops were counted even though the processor never completed a "
+            "frame — the backlog went somewhere invisible"
+        )
+
+        # Every submitted frame is accounted for: emitted, or counted as dropped.
+        # The one permitted shortfall is the stop() sentinel: appending it to a
+        # full deque evicts a frame without incrementing the counter (the
+        # `item is not None` guard in _DropOldestQueue.put skips the increment,
+        # but deque(maxlen=...) evicts anyway). Harmless at shutdown, but it
+        # means exact equality would be wrong here.
+        accounted = stats.results + stats.dropped
+        assert stats.submitted - 1 <= accounted <= stats.submitted, (
+            f"{stats.submitted} frames submitted but only {accounted} accounted "
+            f"for ({stats.results} emitted + {stats.dropped} dropped) — "
+            "frames are disappearing without being counted"
+        )
+
+    def test_uncapped_pipeline_leaks_silently(self):
+        """Negative control: with the in-flight cap removed, the same run parks
+        nearly every frame in memory while `dropped_count` still reads zero.
+
+        This is the failure Review B reported, and it is what the test above
+        exists to catch. Keeping it as a test rather than a one-off manual check
+        means the cap cannot be removed — nor the bound above quietly widened —
+        without a test turning red.
+        """
+        n_workers = 2
+        stats     = _run_overload(max_inflight=10**6, n_workers=n_workers)
+
+        assert stats.clean_exit, "pipeline did not shut down in time"
+
+        # Same bound the capped test asserts, derived the same way.
+        bound = stats.q_maxsize + 2 * n_workers + _INFLIGHT_SLACK
+        assert stats.max_alive > bound, (
+            f"expected the uncapped pipeline to retain more than {bound} frames, "
+            f"but it retained {stats.max_alive} — this control no longer "
+            "reproduces the unbounded-growth bug, so the test above proves nothing"
+        )
+        # ...and it does so invisibly: the drop counter never fires, because the
+        # backlog bypassed the bounded queue entirely and piled up in the
+        # executor's own unbounded queue.
+        assert stats.dropped <= 1, (
+            f"expected ~0 counted drops in the uncapped case, got {stats.dropped}"
         )

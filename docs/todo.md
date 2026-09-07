@@ -1,6 +1,6 @@
 # SCOS — Implementation Backlog
 
-Last updated: 2026-06-04
+Last updated: 2026-09-03 (items 17, 18, and the A3 rewrite added; see docs/reviews/merged_worklist.md for the full task list these come from)
 
 > **Reconciliation note (vs. 2026-05-12 version):**
 > Items 5, 6, 7, and 16 from the previous version have landed and are reclassified below.
@@ -32,6 +32,7 @@ Last updated: 2026-06-04
 | 16 | `GrabStrategy_OneByOne` + skipped-frame warning | `camera.py` now uses `OneByOne` + `MaxNumBuffer=20`. After each `RetrieveResult`, `GetNumberOfSkippedImages()` is checked and a `warning` signal emitted if > 0. Both test mocks updated. |
 | 17 | Stop silently dropping data | `core/pipeline.py`'s emitter no longer swallows a worker exception with a bare `continue` — it's now logged (with traceback) and counted via `error_count`. `core/recorder.py.append()` no longer drops a row when κ² ≤ 0 — it keeps the row and stores `bfi=NaN` (via `n_invalid`) instead, so `time` stays evenly spaced for downstream FFT-based analysis. |
 | 18 | Fix the ROI data race | `processor.py`: `set_roi()` and `process()` now publish/read one immutable `_RoiCrop` bundle via a single attribute assignment/read (atomic under the GIL) instead of 5 separate fields, so a worker thread in `process()` can no longer observe a torn mix of old/new ROI state. `gui/image_widget.py`: new `set_roi_locked()` disables the draggable circle (via `setEnabled`, which also disables its resize handles) and the Auto/Draw/Clear ROI buttons; wired into `gui/main_window.py`'s `_set_state()` so the ROI is locked for the duration of `MEASURING_INIT`/`MEASURING`. Verified the race empirically: the new concurrency test fails with ~28% of calls raising shape-mismatch errors against the old code, 0 against the fixed code. |
+| 19 | Real sustained-overload test | `tests/test_pipeline.py` gains `TestSustainedOverload`, closing merged-worklist task 4 (the old `test_inflight_capped_under_sustained_overload` only covered item count, not memory). Memory is measured exactly, via a `weakref` to every submitted frame — the alive count *is* the number of frames the pipeline still holds — rather than by noisy RSS sampling; frames are the lab's real 700×700 uint16 size. Flooding a stalled 2-worker pipeline with 60 frames: **capped (shipped)** retains 25 frames / 24.5 MB with 35 drops counted; **uncapped (pre-fix)** retains all 60 / 58.8 MB with **0** drops counted — Review B's silent leak, reproduced. The uncapped case is kept as a permanent negative control so the cap can't be removed, nor the bound widened, without a red test. Verified it fails on broken code: neutering the semaphore made it fail with "retained 60 frames (58.8 MB)… expected <= 32". Tests only — no production code touched. Suite 194/194. |
 
 ---
 
