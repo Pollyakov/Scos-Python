@@ -56,7 +56,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 
 | # | Task | Status |
 |---|---|---|
-| 8 | One session folder + real FINISHED transition | ⬜ Not started |
+| 8 | One session folder + real FINISHED transition | ✅ Done — see note in task 8 |
 | 9 | Save the real result in the required schema | ⬜ Not started |
 | 10 | Short-vs-long normalization (E1) | ⬜ Not started |
 | 11 | End-of-session laser popup + intensity check (E3) | ⬜ Not started |
@@ -461,7 +461,7 @@ kept as the correct **build** order; the supervisor's list confirms every task's
 
 ---
 
-### 8. One session folder at the start, and a real FINISHED transition
+### 8. One session folder at the start, and a real FINISHED transition — ✅ DONE
 
 - **Goal:** One place where a measurement is finalized, and one folder holding everything
   from that session.
@@ -478,6 +478,63 @@ kept as the correct **build** order; the supervisor's list confirms every task's
 (`gui/main_window.py:685`) and `FINISHED` is only ever reached by HDF5 replay
 (`:589`). There are two separate folder dialogs (`:688` and `:756`), and the second one
 pops up *mid-measurement*. This single gap is why tasks 9–12 have nowhere to attach.
+
+**Status — done, 2026-09-07:** `gui/main_window.py` only.
+
+*Session folder.* `_cal_output_folder` is replaced by two fields with distinct lifetimes:
+`_output_root` (the parent, asked for once per window and remembered) and `_session_folder`
+(a fresh `scos_<timestamp>/` created under it at every Start SCOS). Dark cal, bright cal and
+the results recorder all write there, so two runs can no longer interleave their files in
+one directory. `_session_folder` is cleared at the *start* of `_start_dark_cal` as well as in
+`_finish_session()` — a stale path left by a cancelled run would otherwise silently collect
+the next run's calibration files. If `mkdir` fails (unwritable or full drive) the run is
+refused up front, before any frames are collected, rather than quietly producing an unsaved
+session.
+
+*Second dialog removed.* `_start_recorder()` no longer calls `QFileDialog` — it uses
+`_session_folder`. When no folder was chosen the measurement still runs unsaved, preserving
+the previous cancel behaviour rather than turning it into a hard failure.
+
+*FINISHED transition.* The Stop branch of `_toggle_scos` now computes `was_measuring` and,
+only when a real measurement was running, goes `FINISHED` → `_finish_session()` → `PREVIEW`.
+Cancelling an unfinished DARK_CAL/BRIGHT_CAL still goes straight to `PREVIEW`: there are no
+results to finalize, and passing through FINISHED would fire tasks 11/12 (laser popup, figure
+save) on a session that produced no data. Auto-stop needs no separate path — it un-checks the
+button, which re-enters the same branch.
+
+*Deliberate ordering for task 9:* `_finish_session()` runs while the recorder is still
+**open**; the caller invokes `_stop_recorder()` only after it returns. Task 9's design (Gap
+G4 option (a)) buffers raw BFi during the session and writes the final `rBFi` once at close,
+so that write must land inside `_finish_session()`. This is stated in the method's docstring
+so it does not get reordered later.
+
+*Verified:* new `tests/test_session_lifecycle.py` (7 tests). The two FINISHED-transition
+tests were confirmed to fail against pre-task-8 behaviour — forcing `was_measuring = False`
+reproduced the old path exactly (`transitions were [PREVIEW]`) and both failed; reverted
+immediately. The two cancel-during-calibration tests pass in both versions by design: they
+are the regression guard for the distinction, not for the transition. The no-dialog test
+monkeypatches `QFileDialog.getExistingDirectory` to raise, so a reintroduced dialog fails
+loudly instead of hanging the suite on a modal nothing will click. Full suite 216/216;
+offline MATLAB dark/bright tests included and passing at <2% (unaffected — no math touched).
+
+**Two paths still bypass `_finish_session()` — tasks 9–12 must know this.** "One place where
+a measurement is finalized" is now true for a *live* session, not for every route to a
+stopped one:
+
+1. **HDF5 replay.** `_on_h5_replay_finished()` sets `State.FINISHED` directly and does not
+   call `_finish_session()`. Left as-is on purpose — a replay has no recorder and no session
+   folder, so the laser-off check (task 11) is meaningless there and a results write (task 9)
+   has nothing to write. But task 12 (save the figure) *would* plausibly want to fire on a
+   replay, so decide that when task 12 lands rather than assuming it is covered.
+2. **Closing the window mid-measurement.** `closeEvent` flushes the recorder (Done item 3)
+   without going through `_finish_session()`. Under task 9's design that leaves a file with
+   raw BFi and no `rBFi` — exactly the crash-mid-session outcome Question Q4 asks Vika to
+   accept. If she rejects Q4 option (a), this path needs handling too.
+
+**Not done here, deliberately:** the `Frames` subfolder from `docs/session_tab` is not
+created — its shape is still open (Question Q6) and it belongs to tasks 14/16. Calibration
+files keep their current `dark_cal_<ts>.mat` / `bright_cal_<ts>.mat` names; task 9 renames
+them to `DarkCalibration.h5` / `BrightCalibration.h5`, so churning them now would be wasted.
 
 ---
 

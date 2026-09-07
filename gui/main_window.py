@@ -123,11 +123,16 @@ class MainWindow(QMainWindow):
         self._arduino_debounce.setInterval(1000)  # 1 second
         self._arduino_debounce.timeout.connect(self._upload_arduino)
 
-        # Calibration state (shared output folder; dark and bright are mutually exclusive)
+        # Calibration state (dark and bright are mutually exclusive)
         self._dark_cal_collector:      DarkCalCollector   | None = None
         self._bright_cal_collector:    BrightCalCollector | None = None
         self._dark_cal_trigger_was_on: bool = False
-        self._cal_output_folder:       Path | None = None
+        # Output layout: the operator picks a parent folder once (remembered for
+        # the lifetime of the window), and every run creates its own timestamped
+        # session folder underneath it. Calibration, results and figure all land
+        # in that one folder — see merged_worklist.md #8 and docs/session_tab.
+        self._output_root:    Path | None = None
+        self._session_folder: Path | None = None
 
         # Camera & processor
         self.camera    = camera if camera is not None else CameraThread()
@@ -725,6 +730,10 @@ class MainWindow(QMainWindow):
             self._start_dark_cal()
         else:
             logger.info("Stop SCOS")
+            # Was this a real measurement, or an abandoned calibration? Only a
+            # measurement gets finalized — cancelling during DARK_CAL/BRIGHT_CAL
+            # has no results to write, so it must not pass through FINISHED.
+            was_measuring = self._state in (State.MEASURING_INIT, State.MEASURING)
             self._scos_worker.disable_intake()   # camera stops feeding immediately
             self._scos_mask            = None
             self._measuring_start_time = None
@@ -742,17 +751,65 @@ class MainWindow(QMainWindow):
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
             self._set_params_enabled(True)    # restore all parameter inputs
+            # Bound unconditionally: the closing message below is guarded by the
+            # same `was_measuring` flag, but leaving this to the guard alone
+            # makes an unbound-local NameError one edit away.
+            session_folder = None
+            if was_measuring:
+                self._set_state(State.FINISHED)
+                session_folder = self._session_folder   # kept for the closing message
+                self._finish_session()
             self._stop_recorder()
+            if was_measuring:
+                self.status.showMessage(
+                    f"Session finished → {session_folder}"
+                    if session_folder is not None
+                    else "Session finished (not saved — no output folder)"
+                )
             self._set_state(State.PREVIEW)
 
+    def _finish_session(self) -> None:
+        """Single finalization point for a completed measurement.
+
+        Reached from exactly one place — the Stop branch of _toggle_scos — which
+        both the Stop SCOS button and the duration auto-stop funnel through, so
+        a manual stop and an automatic one finalize identically.
+
+        The recorder is deliberately still OPEN here: the caller runs
+        _stop_recorder() only after this returns. Work that must write into the
+        results file belongs in this method, not after it — task 9's design
+        buffers raw BFi during the session and writes the final rBFi once at
+        close, and task 10 supplies the normalization constant that write uses.
+        Tasks 11 (laser-off popup + intensity check) and 12 (save the figure)
+        hook in here too. See merged_worklist.md #8-#12.
+        """
+        logger.info("Session finished — state FINISHED")
+        if self._session_folder is not None:
+            logger.info("Session output folder: %s", self._session_folder)
+        # Released so the next run creates its own folder rather than writing
+        # into this one. The parent (_output_root) is kept, so the operator is
+        # asked for a location only once per window. The status message is left
+        # to the caller: _stop_recorder() runs after this and would overwrite
+        # anything set here.
+        self._session_folder = None
+
     def _start_recorder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Choose folder to save HDF5 recording", str(Path.home())
-        )
-        if not folder:
-            return   # user cancelled — SCOS runs without auto-save
+        """Open the results recorder in this session's folder.
+
+        Deliberately shows no dialog. It used to prompt for a second folder
+        here — mid-measurement, after calibration had already finished — which
+        stalled the GUI at the worst possible moment and let a session's files
+        be scattered across two directories. The folder is now chosen once, up
+        front, in _start_dark_cal (merged_worklist.md #8).
+        """
+        if self._session_folder is None:
+            # No folder was chosen at Start SCOS — measure without auto-save,
+            # matching the previous behaviour when the operator cancelled the
+            # dialog. Data still plots live; it is just not written to disk.
+            logger.warning("No session folder — SCOS runs without auto-save")
+            return
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = Path(folder) / f"scos_{ts}.h5"
+        path = self._session_folder / f"scos_{ts}.h5"
         meta = {
             "frame_rate_hz":  self.spn_fps.value(),
             "exposure_ms":    self.spn_exposure.value(),
@@ -812,10 +869,17 @@ class MainWindow(QMainWindow):
             self.btn_save.setEnabled(True)
             return
 
-        # Step 2: choose (or reuse) output folder
-        if self._cal_output_folder is None:
+        # Step 2: choose (or reuse) the parent folder, then create this run's
+        # session folder inside it. Everything this session produces —
+        # calibration, results, figure — goes in there and nowhere else, so a
+        # second run can never mix its files into the first run's output.
+        # Clear any folder left over from a previous run *before* creating the
+        # new one: if this run is cancelled below, a stale path must not remain
+        # and silently collect the next run's calibration files.
+        self._session_folder = None
+        if self._output_root is None:
             folder = QFileDialog.getExistingDirectory(
-                self, "Choose folder to save calibration files"
+                self, "Choose folder to save this session's results"
             )
             if not folder:
                 self.btn_start_scos.blockSignals(True)
@@ -824,7 +888,31 @@ class MainWindow(QMainWindow):
                 self.btn_start_scos.blockSignals(False)
                 self.btn_save.setEnabled(True)
                 return
-            self._cal_output_folder = Path(folder)
+            self._output_root = Path(folder)
+
+        session_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_folder = self._output_root / f"scos_{session_ts}"
+        try:
+            session_folder.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            # An unwritable or full drive must stop the run here, before any
+            # frames are collected — not silently produce an unsaved session.
+            logger.exception("Could not create session folder %s", session_folder)
+            QMessageBox.critical(
+                self, "Cannot Create Session Folder",
+                f"Could not create\n{session_folder}\n\n{exc}\n\n"
+                "Choose a different location and start again.",
+            )
+            self._output_root = None   # force a re-pick on the next attempt
+            self.btn_start_scos.blockSignals(True)
+            self.btn_start_scos.setChecked(False)
+            self.btn_start_scos.setText("Start SCOS")
+            self.btn_start_scos.blockSignals(False)
+            self.btn_save.setEnabled(True)
+            return
+        self._session_folder = session_folder
+        logger.info("Session folder created: %s", session_folder)
+        self.status.showMessage(f"Session folder: {session_folder}")
 
         # Step 3: disable external trigger without triggering Arduino upload
         self._dark_cal_trigger_was_on = self.chk_trigger.isChecked()
@@ -864,9 +952,9 @@ class MainWindow(QMainWindow):
             self.processor.set_roi(self._mask)
 
         # Save .mat — keys match the names used throughout processor.py and MATLAB
-        if self._cal_output_folder is not None:
+        if self._session_folder is not None:
             ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            mat_path = self._cal_output_folder / f"dark_cal_{ts}.mat"
+            mat_path = self._session_folder / f"dark_cal_{ts}.mat"
             scipy.io.savemat(str(mat_path), {
                 "mean_dark":  dark_mean,   # per-pixel temporal mean  [DU]
                 "var_dark":   dark_var,    # per-pixel variance, spatially filtered [DU²]
@@ -952,9 +1040,9 @@ class MainWindow(QMainWindow):
         if self._mask is not None:
             self.processor.set_roi(self._mask)
 
-        if self._cal_output_folder is not None:
+        if self._session_folder is not None:
             ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            mat_path = self._cal_output_folder / f"bright_cal_{ts}.mat"
+            mat_path = self._session_folder / f"bright_cal_{ts}.mat"
             scipy.io.savemat(str(mat_path), {
                 "spIm":      sp_im,       # mean bright image minus dark [DU]
                 "spVar":     bright_var,  # local spatial variance of spIm [DU²]
