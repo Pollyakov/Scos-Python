@@ -23,6 +23,12 @@ class MockCameraThread(QThread):
 
     DISPLAY_FPS_CAP = 30.0
 
+    # No physical camera behind these frames, so there is no serial number to
+    # look up in CamerasMeasuredGain.csv. MainWindow checks this flag before
+    # refusing a run: the synthetic source is allowed to fall back to the
+    # convert_gain() formula, with a dialog saying so.
+    is_synthetic = True
+
     def __init__(self, tiff_path: str, loop: bool = True, parent=None):
         super().__init__(parent)
         self.tiff_path  = tiff_path

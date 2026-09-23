@@ -162,11 +162,14 @@ def main() -> None:
     mask = load_mask(data_dir, sample.shape)
 
     # --- Dark calibration ---
+    # Offline analysis script, not a measurement: G comes from the formula so
+    # that a recording can be re-analysed without its camera being in the gain
+    # table. The app itself always uses the table — see processor.resolve_gain.
     proc = SCOSProcessor(
-        window_size  = args.window,
-        gain_db      = args.gain_db,
-        bit_depth    = args.bit_depth,
-        sat_capacity = args.sat_capacity,
+        window_size            = args.window,
+        gain_db                = args.gain_db,
+        bit_depth              = args.bit_depth,
+        test_mode_sat_capacity = args.sat_capacity,
     )
 
     print("\n--- Dark calibration ---")

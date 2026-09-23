@@ -164,8 +164,11 @@ class TestFolderCameraAPI:
         info = cam.get_info()
         assert info["width"]  == 12
         assert info["height"] == 8
-        assert "sat_capacity" in info
         assert "model" in info
+        # The serial is what the gain lookup needs; saturation capacity is
+        # deliberately absent (supervisor's instruction, 2026-09-23).
+        assert "serial" in info
+        assert "sat_capacity" not in info
 
     def test_get_calibration_mat_none_when_absent(self, tmp_path):
         rec = tmp_path / "rec"; rec.mkdir()

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+import warnings
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -37,14 +38,13 @@ class _CalibrationLoaderThread(QThread):
     progress = pyqtSignal(str)         # human-readable step description
 
     def __init__(self, processor, dark_dir, main_dir, smoothing_mat,
-                 scale, sat_capacity, window_size, parent=None):
+                 scale, window_size, parent=None):
         super().__init__(parent)
         self._proc    = processor
         self._dark    = dark_dir
         self._main    = main_dir        # NEW: compute spVar from raw frames
         self._smooth  = smoothing_mat   # fallback if main_dir is None
         self._scale   = scale
-        self._sat     = sat_capacity
         self._window  = window_size
 
     def run(self):
@@ -54,14 +54,12 @@ class _CalibrationLoaderThread(QThread):
                 dark_dir=self._dark,
                 main_dir=self._main,
                 scale=self._scale,
-                sat_capacity=self._sat,
                 window_size=self._window,
                 on_progress=self.progress.emit,
             )
             n_dark = len(list(self._dark.glob("*.tiff"))) if self._dark else 0
             src    = "computed from frames" if self._main else "loaded from mat"
-            self.done.emit(True,
-                f"dark:{n_dark}  spVar:{src}  sat_cap={self._sat:.0f}e-")
+            self.done.emit(True, f"dark:{n_dark}  spVar:{src}")
         except Exception as e:
             self.done.emit(False, str(e))
 
@@ -695,6 +693,20 @@ class MainWindow(QMainWindow):
         self.cam_group.setStyleSheet(locked_ss)
         self.scos_group.setStyleSheet(locked_ss)
 
+    def _reset_start_button(self) -> None:
+        """Put Start SCOS back to its un-pressed state after a refused run.
+
+        blockSignals keeps setChecked() from re-entering _toggle_scos with
+        checked=False, which would run the whole Stop branch against a session
+        that never started.
+        """
+        self.btn_start_scos.blockSignals(True)
+        self.btn_start_scos.setChecked(False)
+        self.btn_start_scos.setText("Start SCOS")
+        self.btn_start_scos.blockSignals(False)
+        self.btn_save.setEnabled(True)
+        self._set_params_enabled(True)
+
     def _toggle_scos(self, checked: bool):
         if checked:
             logger.info(
@@ -702,14 +714,20 @@ class MainWindow(QMainWindow):
                 self.spn_window.value(), self.spn_gain.value(),
                 self.cmb_format.currentText(), self.spn_fps.value(),
             )
-            self.btn_start_scos.setText("Stop SCOS")
-            self.btn_save.setEnabled(False)
-            self._set_params_enabled(False)   # lock all parameter inputs
             # Set processor params now so they're ready when measurement begins
             self.processor.window_size = self.spn_window.value()
             self.processor.gain_db     = self.spn_gain.value()
             fmt = self.cmb_format.currentText()
             self.processor.bit_depth   = int(fmt.replace("Mono", ""))
+            # G[DU/e] is resolved here, before anything else changes state: a
+            # camera that is not in the gain table must stop the run now, while
+            # nothing has been started and there is nothing to unwind.
+            if not self._prepare_gain():
+                self._reset_start_button()
+                return
+            self.btn_start_scos.setText("Stop SCOS")
+            self.btn_save.setEnabled(False)
+            self._set_params_enabled(False)   # lock all parameter inputs
             # Recreate pipeline with the currently selected worker count.
             # Unhook the camera from the outgoing pipeline first — once it is
             # stopped nothing drains its queue, and a camera thread still
@@ -819,7 +837,13 @@ class MainWindow(QMainWindow):
             "roi_cx":         float(self._roi_circ.get("cx", -1)),
             "roi_cy":         float(self._roi_circ.get("cy", -1)),
             "roi_r":          float(self._roi_circ.get("r",  -1)),
-            "sat_capacity_e": float(self.processor.sat_capacity),
+            # Provenance for G[DU/e] — which camera it was looked up for, the
+            # value actually used, and whether it came from the measured table
+            # or the formula. Without these a saved session cannot be re-checked.
+            "camera_sn":      str(self.processor.camera_sn or ""),
+            "camera_model":   str(self.camera.get_info().get("model", "")),
+            "gain_du_per_e":  float(self.processor.gain_du_per_e or 0.0),
+            "gain_source":    str(self.processor.gain_source or ""),
         }
         self._recorder = HDF5Recorder(path, meta)
         self._recorder.save_calibration(
@@ -904,11 +928,7 @@ class MainWindow(QMainWindow):
                 "Choose a different location and start again.",
             )
             self._output_root = None   # force a re-pick on the next attempt
-            self.btn_start_scos.blockSignals(True)
-            self.btn_start_scos.setChecked(False)
-            self.btn_start_scos.setText("Start SCOS")
-            self.btn_start_scos.blockSignals(False)
-            self.btn_save.setEnabled(True)
+            self._reset_start_button()
             return
         self._session_folder = session_folder
         logger.info("Session folder created: %s", session_folder)
@@ -1372,6 +1392,92 @@ class MainWindow(QMainWindow):
         logger.warning(msg)
         self.status.showMessage(msg)
 
+    # ------------------------------------------------------------------
+    # G[DU/e] resolution — supervisor's rule, 2026-09-22
+    # ------------------------------------------------------------------
+
+    _GAIN_TABLE_HINT = (
+        "\n\nMeasure G[DU/e] for this camera at this bit depth and add the row "
+        "to CamerasMeasuredGain.csv, then start again."
+    )
+
+    def _camera_serial(self) -> str:
+        """Serial number reported by the frame source; '' when unknown.
+
+        get_info() returns {} on a camera that is not open yet, and the
+        synthetic TIFF mock puts a file path in this field — neither is a
+        serial number, so both come back as ''.
+        """
+        try:
+            sn = str(self.camera.get_info().get("serial", "") or "").strip()
+        except Exception:
+            logger.exception("Could not read camera info for the gain lookup")
+            return ""
+        return sn if sn.isdigit() else ""
+
+    def _prepare_gain(self) -> bool:
+        """Resolve G[DU/e] before a run starts. Returns False to refuse the run.
+
+        Vika's rule (2026-09-22): G always comes from the measured table, never
+        from the convert_gain() formula. A camera missing from the table is a
+        hard stop — a formula estimate would silently bias the shot-noise term
+        and therefore every κ² the session produces. An inexact *gain* is not a
+        hard stop: the table entry is rescaled in dB and the operator is told.
+
+        The one exception is the synthetic --mock-tiff source, which has no
+        camera at all and so can never be in the table; it keeps the formula and
+        says so, because its numbers are for exercising the GUI, not for science.
+        """
+        synthetic = bool(getattr(self.camera, "is_synthetic", False))
+        sn        = self._camera_serial()
+        self.processor.camera_sn = sn or None
+        self.processor.invalidate_gain()
+
+        if not sn and not synthetic:
+            QMessageBox.critical(
+                self, "Can't calculate SCOS",
+                f"Can't calculate SCOS: CameraSN <unknown> Mono{self.processor.bit_depth} "
+                f"was not found in G[DU/e] Calibration file"
+                f"\n\nThe camera did not report a serial number, so its measured "
+                f"gain cannot be looked up." + self._GAIN_TABLE_HINT,
+            )
+            return False
+
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                g = self.processor.resolve_gain()
+        except GainTableError as exc:
+            logger.error("Gain table lookup failed: %s", exc)
+            QMessageBox.critical(
+                self, "Can't calculate SCOS", f"{exc}{self._GAIN_TABLE_HINT}")
+            return False
+
+        logger.info("G = %.6f DU/e (source: %s, SN %s, Mono%d, %.1f dB)",
+                    g, self.processor.gain_source, sn or "-",
+                    self.processor.bit_depth, self.processor.gain_db)
+
+        if synthetic:
+            QMessageBox.warning(
+                self, "Synthetic Source — Estimated G",
+                f"This is the synthetic --mock-tiff source, which has no camera "
+                f"and cannot appear in the gain table.\n\n"
+                f"G was calculated from the formula instead "
+                f"(test-mode saturation capacity "
+                f"{self.processor.test_mode_sat_capacity:.0f} e-, G={g:.4f} DU/e).\n\n"
+                f"These results are for exercising the GUI — do not use them as "
+                f"measurements.",
+            )
+        elif caught:
+            QMessageBox.warning(
+                self, "Estimated G[DU/e]",
+                f"CameraSN {sn} Mono{self.processor.bit_depth} is in the "
+                f"G[DU/e] table, but not at {self.processor.gain_db:g} dB.\n\n"
+                f"G was rescaled from the closest measured gain "
+                f"(G={g:.4f} DU/e). SCOS will continue.",
+            )
+        return True
+
     def _on_scos_error(self, msg: str):
         """GainTableError raised in worker thread — stop SCOS and show dialog."""
         self.btn_start_scos.setChecked(False)
@@ -1487,7 +1593,6 @@ class MainWindow(QMainWindow):
         main_dir  = None if smoothing is not None else self.camera._recording_dir
 
         info    = self.camera.get_info()
-        sat_cap = info.get("sat_capacity", None)
         self.processor.gain_db   = info.get("gain_db",   self.processor.gain_db)
         self.processor.bit_depth = info.get("bit_depth", 10)
         self._pending_mask_mat   = self.camera.get_mask_mat()
@@ -1498,7 +1603,7 @@ class MainWindow(QMainWindow):
 
         self._calib_thread = _CalibrationLoaderThread(
             self.processor, dark_dir, main_dir, smoothing,
-            64.0, sat_cap, self.spn_window.value(), self,
+            64.0, self.spn_window.value(), self,
         )
         self._calib_thread.progress.connect(self._calib_label.setText)
         self._calib_thread.done.connect(self._on_calibration_done)

@@ -61,7 +61,11 @@ class _FakeCamera(QObject):
     def start_capture(self, *a, **k):    pass
     def stop(self, *a, **k):             pass
     def close(self, *a, **k):            pass
-    def get_info(self):                  return {}
+    # SN 40513592 at Mono12 / 8 dB is an exact row in CamerasMeasuredGain.csv,
+    # so Start SCOS resolves G from the table with no dialog — these tests are
+    # about the session lifecycle, not about the gain lookup.
+    def get_info(self):
+        return {"serial": "40513592", "model": "a2A1920-160umPRO"}
 
 
 @pytest.fixture

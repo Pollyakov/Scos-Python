@@ -53,7 +53,6 @@ _SCALE        = 64.0
 _WINDOW       = 7
 _CAMERA_SN    = "40513592"
 _BIT_DEPTH    = 10
-_SAT_CAPACITY = 11117.0
 _GAIN_DB      = 24.0
 
 _reference_available = _MAIN_DIR.exists() and _DARK_DIR.exists()
@@ -158,7 +157,6 @@ def test_bright_cal_end_to_end_matches_matlab():
         window_size  = _WINDOW,
         gain_db      = _GAIN_DB,
         bit_depth    = _BIT_DEPTH,
-        sat_capacity = _SAT_CAPACITY,
         camera_sn    = _CAMERA_SN,
     )
     proc.scale      = _SCALE

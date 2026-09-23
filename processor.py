@@ -150,11 +150,15 @@ def load_gain_from_table(
 
 def convert_gain(gain_db: float, bit_depth: int = 8, sat_capacity: float = 10500.0) -> float:
     """
-    Convert camera gain from dB to DU/e using the camera's sat_capacity.
-    Matches MATLAB ConvertGain.m.
+    Estimate G[DU/e] from the sensor's saturation capacity. Matches MATLAB
+    ConvertGain.m.
 
-    Use load_gain_from_table() instead when a measured CSV entry exists for
-    the camera — it is more accurate than this formula-based estimate.
+    NOT FOR MEASUREMENTS. The supervisor ruled on 2026-09-22 that every real
+    measurement takes G from the measured table (load_gain_from_table); a
+    camera missing from that table is an error, not a reason to estimate. This
+    formula survives only for test data that has no camera behind it (the
+    synthetic --mock-tiff source) and for the offline analysis scripts in
+    tools/, where it is compared against the table rather than trusted.
     """
     G0 = (2 ** bit_depth) / sat_capacity
     return 10 ** (gain_db / 20.0) * G0
@@ -254,24 +258,32 @@ class SCOSProcessor:
         proc.calibrate_bright(bright_frames)  # optional but recommended
         k2_raw, k2_corr, mean_i = proc.process(frame, mask)
 
-    For real lab recordings (Basler a2A1920-160umPRO, 24 dB):
+    For real lab recordings (Basler a2A1920-160umPRO, 24 dB) the camera's
+    serial number is what selects G — see camera_sn below:
         proc = SCOSProcessor(window_size=7, gain_db=24, bit_depth=10,
-                             sat_capacity=11117.0)   # Phase-0 measured
+                             camera_sn="40513592")
         proc.load_calibration_mat(dark_dir=dark_dir, main_dir=recording_dir,
-                                  scale=64.0, sat_capacity=11117.0)
+                                  scale=64.0)
         k2_raw, k2_corr, mean_i = proc.process(raw_uint16_frame, mask)
     """
 
     def __init__(self, window_size: int = 7, gain_db: float = 0.0,
-                 bit_depth: int = 8, sat_capacity: float = 10500.0,
-                 camera_sn: str | None = None):
+                 bit_depth: int = 8, camera_sn: str | None = None,
+                 test_mode_sat_capacity: float = 10500.0):
         self.window_size   = window_size
         self.gain_db       = gain_db
         self.bit_depth     = bit_depth
-        self.sat_capacity  = sat_capacity
-        # When set, process() uses load_gain_from_table() for measured DU/e.
-        # When None, falls back to convert_gain() (formula-based).
+        # The camera's serial number is what makes a measurement possible:
+        # resolve_gain() looks G up in CamerasMeasuredGain.csv by SN + bit depth,
+        # and a camera that is not in that table cannot be measured with.
         self.camera_sn    = camera_sn
+        # TEST MODE ONLY — never used for a real measurement.
+        # The synthetic --mock-tiff source has no camera and therefore no serial
+        # number, so nothing can be looked up for it. Only in that case does
+        # resolve_gain() fall back to the convert_gain() formula, which needs a
+        # saturation capacity. Do not reintroduce this into the measurement path
+        # and do not save it with results (supervisor's instruction, 2026-09-23).
+        self.test_mode_sat_capacity = test_mode_sat_capacity
         # scale: raw TIFF uint16 values are divided by this before processing.
         # 1.0 for real camera frames; 64.0 for 10-bit left-justified TIFFs (a2A1920).
         self.scale        = 1.0
@@ -281,12 +293,63 @@ class SCOSProcessor:
         self.bright_var : np.ndarray | None = None  # spVar
 
         self._cached_G  : float | None = None       # cached gain so CSV isn't re-read every frame
+        self._gain_source: str | None  = None       # "table" or "formula" — recorded with the results
 
         # ROI crop: set by set_roi(); _EMPTY_ROI_CROP.roi is None = full frame
         # (no crop). Held as one immutable bundle — see _RoiCrop — so
         # process() running on a worker thread never observes a torn mix of
         # old and new ROI state while set_roi() is republishing it.
         self._roi_crop: _RoiCrop = _EMPTY_ROI_CROP
+
+    # ------------------------------------------------------------------
+    # G[DU/e] — the electron→digital-unit conversion constant
+    # ------------------------------------------------------------------
+
+    def invalidate_gain(self) -> None:
+        """Drop the cached G so the next resolve_gain() recomputes it.
+
+        gain_db, bit_depth and camera_sn are all plain attributes that callers
+        assign between runs; without this the first run's G would be reused for
+        every later one.
+        """
+        self._cached_G    = None
+        self._gain_source = None
+
+    def resolve_gain(self) -> float:
+        """Compute G[DU/e] now, cache it, and return it.
+
+        Call this before a measurement starts, not from a worker thread: when
+        the camera is absent from the gain table this raises, and the operator
+        has to see that as one dialog rather than one error per frame.
+
+        Raises GainTableError when camera_sn + bit_depth is not in the CSV, and
+        warns (UserWarning) when the exact gain_db is not in the table and G had
+        to be extrapolated from the closest entry — the caller is expected to
+        surface both.
+        """
+        if self._cached_G is None:
+            if self.camera_sn is not None:
+                self._cached_G    = load_gain_from_table(
+                    self.camera_sn, self.bit_depth, self.gain_db)
+                self._gain_source = "table"
+            else:
+                # No serial number → synthetic test data (--mock-tiff). Real
+                # sources always have one, so this branch never runs during a
+                # measurement; see test_mode_sat_capacity in __init__.
+                self._cached_G    = convert_gain(
+                    self.gain_db, self.bit_depth, self.test_mode_sat_capacity)
+                self._gain_source = "formula"
+        return self._cached_G
+
+    @property
+    def gain_du_per_e(self) -> float | None:
+        """The resolved G, or None if no frame has been processed yet."""
+        return self._cached_G
+
+    @property
+    def gain_source(self) -> str | None:
+        """"table" (measured CSV) or "formula" (convert_gain), once resolved."""
+        return self._gain_source
 
     def set_roi(self, mask: np.ndarray) -> None:
         """
@@ -356,7 +419,6 @@ class SCOSProcessor:
         dark_dir: "str | Path | None" = None,
         main_dir: "str | Path | None" = None,
         scale: float = 64.0,
-        sat_capacity: float | None = None,
         window_size: int | None = None,
         on_progress: "callable | None" = None,
     ) -> None:
@@ -370,7 +432,6 @@ class SCOSProcessor:
         main_dir      : folder of main recording TIFFs → spVar computed from scratch
                         Preferred over smoothing_mat; requires dark_mean to be loaded first.
         scale         : divide raw TIFF uint16 by this (64 for 10-bit left-justified a2A1920)
-        sat_capacity  : override self.sat_capacity (11117.0 for a2A1920 at 24 dB)
         window_size   : spatial smoothing window; defaults to self.window_size
 
         Order when both dark_dir and main_dir are given:
@@ -379,8 +440,6 @@ class SCOSProcessor:
         """
         self.scale = scale
         w = window_size if window_size is not None else self.window_size
-        if sat_capacity is not None:
-            self.sat_capacity = sat_capacity
 
         # --- Dark calibration ---
         if dark_dir is not None:
@@ -430,12 +489,9 @@ class SCOSProcessor:
         kappa2_corr   : noise-corrected κ²
         mean_intensity: mean pixel value inside ROI after dark subtraction
         """
-        if self._cached_G is None:
-            if self.camera_sn is not None:
-                self._cached_G = load_gain_from_table(self.camera_sn, self.bit_depth, self.gain_db)
-            else:
-                self._cached_G = convert_gain(self.gain_db, self.bit_depth, self.sat_capacity)
-        G = self._cached_G
+        # Normally already resolved by the GUI before the run started, so that a
+        # missing table entry becomes one dialog instead of one error per frame.
+        G = self.resolve_gain()
 
         # Crop to ROI bounding box (set by set_roi) — same as MATLAB's im_cut.
         # Slicing numpy arrays is a zero-copy view; astype() below does the copy.

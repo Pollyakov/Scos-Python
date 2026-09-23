@@ -44,11 +44,12 @@ the post-demo direction.
 2. Biased variance estimator → fixed to unbiased (×N²/(N²−1))
 3. Dark variance not spatially smoothed → now applies `uniform_filter`
 4. Wrong `sat_capacity` (was 10400, correct value for a2A1920-160umPRO is **11117 e-**)
-   — diagnosed via Phase-0 PTC analysis; `load_calibration_mat` now accepts this as a parameter.
+   — diagnosed via Phase-0 PTC analysis. Superseded on 2026-09-22: G now comes from the
+   measured table, so no saturation capacity enters a measurement at all.
 
 **Math validation result (against MATLAB reference, 600 real frames):**
 - Raw κ²: **0.45% error** ✓
-- Corrected κ²: **1.2% error** ✓ (using sat_capacity=11117, spVar from smoothingCoefficients.mat,
+- Corrected κ²: **1.2% error** ✓ (G from the measured table for SN 40513592, spVar from smoothingCoefficients.mat,
   dark calibration from 600 dark frames)
 
 **Architecture target:** 3 threads + 2 queues:
@@ -148,13 +149,15 @@ before.
 
 IMPORTANT: Exposure in GUI = **milliseconds**. Camera API (pypylon) = **microseconds**. Conversion: `exposure_us = gui_value * 1000`. Getting this wrong silently produces bad data.
 
-IMPORTANT: `convert_gain(gain_db, bit_depth, sat_capacity)` returns DU/e (digital units per electron). Both `bit_depth` and `sat_capacity` are camera-model-specific — they are fixed hardware properties, unrelated to calibration.
+IMPORTANT: **G[DU/e] always comes from the measured table**, never from a formula (supervisor's ruling, 2026-09-22). `load_gain_from_table(camera_sn, n_bits, gain_db)` reads `CamerasMeasuredGain.csv` — the same file MATLAB's `LoadG.m` uses — keyed on the camera's **serial number** plus bit depth. A camera that is not in that table cannot be measured with: `MainWindow._prepare_gain()` refuses to start the run and shows "Can't calculate SCOS: CameraSN <> Mono<> was not found in G[DU/e] Calibration file". A camera that *is* in the table but not at the requested gain is fine — G is rescaled in dB from the closest row and the operator is warned.
+
+IMPORTANT: `sat_capacity` must NOT be used for measurements and must NOT be saved with results. The formula `convert_gain(gain_db, bit_depth, sat_capacity)` survives only for the synthetic `--mock-tiff` source (which has no camera and therefore no serial number) and for the offline scripts in `tools/`. On `SCOSProcessor` it is deliberately named `test_mode_sat_capacity` so nothing suggests it belongs in the measurement path.
 
 Known camera parameters:
-| Camera | bit_depth | sat_capacity | Notes |
-|--------|-----------|-------------|-------|
-| Basler a2A1920-160umPRO (SN 40513592) | 10 | **11117** | TIFF ×64 (10-bit left-justified in uint16); 1216×1936; sat_capacity measured via Phase-0 diagnostic |
-| Lab demo camera (700×700) | 12 | 10500 | Default — verify on first use |
+| Camera | bit_depth | Notes |
+|--------|-----------|-------|
+| Basler a2A1920-160umPRO (SN 40513592) | 10 | TIFF ×64 (10-bit left-justified in uint16); 1216×1936; in the gain table at Mono10 (16/18/20 dB) and Mono12 (8 dB) |
+| Lab demo camera (700×700) | 12 | Must be added to `CamerasMeasuredGain.csv` before it can be used |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
 - Save format matches MATLAB convention: .mat with keys `scosTime`, `scosData` (κ²), `frameRate`, `exposureTime`, `Gain`

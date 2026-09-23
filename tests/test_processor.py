@@ -81,7 +81,7 @@ class TestLoadGainFromTable:
         import numpy as np
         # camera 40513592, nBits=10, gain=20 dB → measuredG = 0.920986881
         proc = SCOSProcessor(window_size=5, gain_db=20.0, bit_depth=10,
-                             sat_capacity=11117.0, camera_sn="40513592")
+                             camera_sn="40513592")
         frame = np.full((50, 50), 500, dtype=np.uint16)
         mask  = np.ones((50, 50), dtype=bool)
         # Must not raise; G from table differs from convert_gain result
@@ -92,7 +92,7 @@ class TestLoadGainFromTable:
         """SCOSProcessor without camera_sn uses convert_gain (no table needed)."""
         import numpy as np
         proc = SCOSProcessor(window_size=5, gain_db=8.0, bit_depth=12,
-                             sat_capacity=10500.0)  # no camera_sn
+                             test_mode_sat_capacity=10500.0)  # no camera_sn
         frame = np.full((50, 50), 500, dtype=np.uint16)
         mask  = np.ones((50, 50), dtype=bool)
         k2_raw, k2_corr, mean_i = proc.process(frame, mask)
@@ -216,17 +216,18 @@ class TestSCOSProcessor:
         assert proc.window_size == 7
         assert proc.gain_db == 0.0
         assert proc.bit_depth == 8
-        assert proc.sat_capacity == 10500.0
+        assert proc.test_mode_sat_capacity == 10500.0
         assert proc.dark_mean is None
         assert proc.dark_var is None
         assert proc.bright_var is None
 
     def test_custom_params(self):
-        proc = SCOSProcessor(window_size=5, gain_db=6.0, bit_depth=12, sat_capacity=8000.0)
+        proc = SCOSProcessor(window_size=5, gain_db=6.0, bit_depth=12,
+                             test_mode_sat_capacity=8000.0)
         assert proc.window_size == 5
         assert proc.gain_db == 6.0
         assert proc.bit_depth == 12
-        assert proc.sat_capacity == 8000.0
+        assert proc.test_mode_sat_capacity == 8000.0
 
     def test_calibrate_sets_dark_stats(self):
         """calibrate() should compute mean and variance across the stack."""

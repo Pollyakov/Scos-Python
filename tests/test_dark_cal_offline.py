@@ -16,7 +16,7 @@ Skipped automatically when the reference data folder is absent (e.g. in CI).
 Reference data: C:/Users/USER/Scos_Frames_and_Results/
   expT5ms_Gain24dB_BL100DU_FR40Hz_005/        — main recording TIFFs + MATLAB results
   expT5ms_Gain24dB_BL100DU_FR40Hz_005_dark/   — 600 dark-frame TIFFs
-Camera: Basler a2A1920-160umPRO, SN 40513592, Mono10, sat_capacity=11117 e-,
+Camera: Basler a2A1920-160umPRO, SN 40513592, Mono10 (G from CamerasMeasuredGain.csv),
         TIFFs store 10-bit data left-justified in uint16 → divide by 64 to get DU.
 """
 
@@ -46,7 +46,6 @@ _SCALE        = 64.0      # 10-bit left-justified in uint16
 _WINDOW       = 7
 _CAMERA_SN    = "40513592"
 _BIT_DEPTH    = 10
-_SAT_CAPACITY = 11117.0
 _GAIN_DB      = 24.0      # from folder name: Gain24dB
 
 _reference_available = _DARK_DIR.exists() and _MAIN_DIR.exists()
@@ -147,7 +146,6 @@ def test_dark_cal_end_to_end_matches_matlab():
         window_size  = _WINDOW,
         gain_db      = _GAIN_DB,
         bit_depth    = _BIT_DEPTH,
-        sat_capacity = _SAT_CAPACITY,
         camera_sn    = _CAMERA_SN,
     )
     proc.scale      = _SCALE

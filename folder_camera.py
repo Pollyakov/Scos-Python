@@ -18,14 +18,6 @@ import numpy as np
 import tifffile
 from PyQt6.QtCore import QThread, pyqtSignal
 
-# Per-camera saturation capacity (e-), measured via Phase-0 diagnostic.
-# Used by MainWindow._auto_load_folder_calibration to set the correct G.
-_SAT_CAPACITY = {
-    "a2A1920-160umPRO": 11117.0,
-}
-_DEFAULT_SAT_CAPACITY = 10500.0
-
-
 def _sort_tiffs(folder: Path) -> list[Path]:
     files = list(folder.glob("*.tiff")) + list(folder.glob("*.tif"))
     return sorted(
@@ -151,7 +143,6 @@ class FolderMockCamera(QThread):
             "width":        w,
             "height":       h,
             "bit_depth":    p.get("bit_depth", 10),
-            "sat_capacity": p.get("sat_capacity", _DEFAULT_SAT_CAPACITY),
         }
 
     # ------------------------------------------------------------------
@@ -220,8 +211,9 @@ class FolderMockCamera(QThread):
         if m:
             model_str = m.group(1)    # e.g. "a2A1920-160umPRO"
             params["model"]        = f"Basler_{model_str}"
+            # The serial is what matters: G is looked up by SN + bit depth in
+            # CamerasMeasuredGain.csv.
             params["serial"]       = m.group(2)
-            params["sat_capacity"] = _SAT_CAPACITY.get(model_str, _DEFAULT_SAT_CAPACITY)
 
         # Try to read recording params from LocalStd7x7_corr.mat
         mat_path = self._recording_dir / "LocalStd7x7_corr.mat"
