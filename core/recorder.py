@@ -1,6 +1,13 @@
 """HDF5-based session recorder for SCOS measurements.
 
-Appends t, k2_raw, k2_corr, bfi, mean_intensity to a single .h5 file.
+Dataset names follow the supervisor's spec (`docs/session_tab`, answers of
+2026-09-23) so the file loads in MATLAB without translation: `startTime`,
+`timeVec`, `rBFi`, `Intensity` and a `Params` group. The κ² values the result
+is derived from (`k2_raw`, `k2_corr`) and the un-normalized `bfi` are kept
+alongside them — her list is a floor, not a ceiling, and raw BFi on disk is
+what makes a crashed session still worth something.
+
+Appends timeVec, k2_raw, k2_corr, bfi, Intensity to a single .h5 file.
 Buffered writes: data accumulates in memory and is flushed to disk every
 FLUSH_EVERY appends (or on close), so a crash loses at most FLUSH_EVERY points.
 
@@ -12,6 +19,8 @@ shifts every later timestamp.
 """
 from __future__ import annotations
 
+import datetime
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +28,66 @@ import h5py
 
 
 FLUSH_EVERY = 300   # flush every N appended results (~15 s at 20 Hz)
+
+# One calibration file per session, holding both kinds (supervisor, 2026-09-23).
+# This replaces the two .mat files and the `calibration` group that used to be
+# embedded in the results file. `docs/session_tab` asks for separate
+# DarkCalibration.h5 / BrightCalibration.h5 — that part of it is superseded.
+CALIBRATION_FILENAME = "Calibration.h5"
+
+
+def write_calibration(path: Path, group: str,
+                      datasets: dict[str, Any],
+                      attrs: dict[str, Any] | None = None) -> None:
+    """Write one calibration group ("dark" or "bright") into the session file.
+
+    Opened in append mode and called twice per session, because dark and bright
+    calibration finish minutes apart. Re-writing a group replaces it, so a
+    repeated calibration cannot leave half of the previous one behind.
+
+    Arrays are stored float32 with gzip: these are full-frame images
+    (1216×1936 for the a2A1920), and three of them uncompressed is ~28 MB.
+    """
+    import numpy as np
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "a") as f:
+        if group in f:
+            del f[group]
+        g = f.create_group(group)
+        for name, arr in datasets.items():
+            if arr is None:
+                continue
+            g.create_dataset(name, data=np.asarray(arr, dtype=np.float32),
+                             compression="gzip", compression_opts=4)
+        for k, v in (attrs or {}).items():
+            g.attrs[k] = v
+
+
+def _git_commit() -> str:
+    """Short commit hash of the code producing this file, or "unknown".
+
+    Suffixed "-dirty" when the working tree has uncommitted changes: a hash
+    that does not describe the code that actually ran is worse than no hash,
+    and during development the tree is dirty most of the time.
+    """
+    def _run(*args: str) -> str:
+        return subprocess.run(
+            args, cwd=Path(__file__).parent, capture_output=True,
+            text=True, timeout=5, check=True,
+        ).stdout.strip()
+
+    try:
+        commit = _run("git", "rev-parse", "--short", "HEAD")
+    except Exception:
+        return "unknown"
+    try:
+        if _run("git", "status", "--porcelain"):
+            commit += "-dirty"
+    except Exception:
+        pass
+    return commit
 
 
 class HDF5Recorder:
@@ -30,7 +99,8 @@ class HDF5Recorder:
         rec.close()                                # on stop or quit
     """
 
-    def __init__(self, path: Path, metadata: dict[str, Any]) -> None:
+    def __init__(self, path: Path, metadata: dict[str, Any],
+                 params_fields: dict[str, Any] | None = None) -> None:
         self._path = Path(path)
         self._buf_t:      list[float] = []
         self._buf_k2raw:  list[float] = []
@@ -43,16 +113,33 @@ class HDF5Recorder:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._f = h5py.File(self._path, "w")
 
+        # Engineering provenance lives here, separate from Params: Params holds
+        # exactly the ten fields the supervisor listed, so nothing unexpected
+        # turns up in the struct she reads.
         meta = self._f.create_group("metadata")
         for k, v in metadata.items():
             meta.attrs[k] = v
 
+        # Fixed-length ASCII, not h5py's variable-length UTF-8 default —
+        # MATLAB's h5read returns the latter as a cell array instead of a char
+        # row, and `datetime(startTime)` then fails on her side.
+        start = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+        self._f.create_dataset(
+            "startTime", data=start.encode("ascii"),
+            dtype=h5py.string_dtype("ascii", len(start)),
+        )
+
+        params = self._f.create_group("Params")
+        for k, v in (params_fields or {}).items():
+            params.attrs[k] = v
+        params.attrs["gitCommit"] = _git_commit()
+
         kw: dict = {"maxshape": (None,), "chunks": (1024,), "dtype": "float64"}
-        self._f.create_dataset("time",           shape=(0,), **kw)
-        self._f.create_dataset("k2_raw",         shape=(0,), **kw)
-        self._f.create_dataset("k2_corr",        shape=(0,), **kw)
-        self._f.create_dataset("bfi",            shape=(0,), **kw)
-        self._f.create_dataset("mean_intensity", shape=(0,), **kw)
+        self._f.create_dataset("timeVec",   shape=(0,), **kw)
+        self._f.create_dataset("k2_raw",    shape=(0,), **kw)
+        self._f.create_dataset("k2_corr",   shape=(0,), **kw)
+        self._f.create_dataset("bfi",       shape=(0,), **kw)   # raw, un-normalized
+        self._f.create_dataset("Intensity", shape=(0,), **kw)   # ROI mean, DU
 
     def append(self, t: float, k2_raw: float, k2_corr: float,
                mean_i: float) -> None:
@@ -81,11 +168,11 @@ class HDF5Recorder:
             return
         n = len(self._buf_t)
         for name, buf in (
-            ("time",           self._buf_t),
-            ("k2_raw",         self._buf_k2raw),
-            ("k2_corr",        self._buf_k2corr),
-            ("bfi",            self._buf_bfi),
-            ("mean_intensity", self._buf_meani),
+            ("timeVec",   self._buf_t),
+            ("k2_raw",    self._buf_k2raw),
+            ("k2_corr",   self._buf_k2corr),
+            ("bfi",       self._buf_bfi),
+            ("Intensity", self._buf_meani),
         ):
             ds = self._f[name]
             ds.resize(self._n_flushed + n, axis=0)
@@ -116,25 +203,42 @@ class HDF5Recorder:
         if n % 10 == 9:
             self._f.flush()
 
-    def save_calibration(
-        self,
-        mean_dark:   "np.ndarray | None",
-        var_dark:    "np.ndarray | None",
-        var_bright:  "np.ndarray | None",
-        mask:        "np.ndarray | None",
-    ) -> None:
-        """Write calibration arrays as 2D datasets.  Called once after Start SCOS."""
-        import numpy as np  # local import keeps top-level deps minimal
-        cal = self._f.require_group("calibration")
-        for name, arr in (
-            ("mean_dark",  mean_dark),
-            ("var_dark",   var_dark),
-            ("var_bright", var_bright),
-            ("mask",       mask),
-        ):
-            if arr is not None:
-                cal.create_dataset(name, data=arr.astype(np.float32),
-                                   compression="gzip", compression_opts=4)
+    def write_rbfi(self, norm_constant: float, method: str,
+                   window_seconds: float) -> None:
+        """Compute and store the final rBFi, once, at the end of the session.
+
+        Called from MainWindow._finish_session() while this file is still open.
+        rBFi cannot be written as the session runs: the normalization constant
+        depends on the recording's final length (5th percentile for <= 120 s,
+        mean for longer — task 10), so it is not known until the operator stops.
+        Buffering raw BFi on disk and dividing once here is the supervisor's
+        choice (answer 5, 2026-09-23); it also means a large dataset is never
+        rewritten.
+
+        The accepted consequence: a session that ends by crash or by closing the
+        window has `bfi` and the constant in Params, but no `rBFi`. The file is
+        still valid HDF5 and the missing dataset is recoverable offline.
+
+        NaNs in `bfi` (κ² <= 0) stay NaN in `rBFi`, keeping timeVec evenly
+        spaced — confirmed as what her analysis expects (answer 6).
+        """
+        import numpy as np
+
+        self.flush()
+        if "rBFi" in self._f:
+            del self._f["rBFi"]
+        if not norm_constant or not np.isfinite(norm_constant):
+            raise ValueError(
+                f"Refusing to write rBFi with normalization constant "
+                f"{norm_constant!r} — every point would be inf or NaN"
+            )
+        bfi  = self._f["bfi"][:]
+        self._f.create_dataset("rBFi", data=bfi / float(norm_constant))
+
+        p = self._f["Params"]
+        p.attrs["normalizationConstant"]  = float(norm_constant)
+        p.attrs["normalizationMethod"]    = str(method)
+        p.attrs["normalizationWindowSec"] = float(window_seconds)
         self._f.flush()
 
     def close(self) -> None:

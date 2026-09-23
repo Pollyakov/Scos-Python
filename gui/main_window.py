@@ -26,7 +26,7 @@ import scipy.io
 from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError, shrink_mask_for_window
 from core.session   import BrightCalCollector, DarkCalCollector, State
-from core.recorder  import HDF5Recorder
+from core.recorder  import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
 from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
@@ -111,6 +111,10 @@ class MainWindow(QMainWindow):
         # Session state machine
         self._state:           State       = State.IDLE
         self._bfi_norm:        float | None = None              # mean BFI over baseline window
+        # How that constant was actually produced, for Params.normalizationMethod.
+        # Not the same as _norm_type, which is the mode picked in the GUI: the
+        # "pulsation" mode still falls back to the mean until task 10 lands.
+        self._bfi_norm_method: str          = "mean"
         self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
         self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
         self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
@@ -804,6 +808,7 @@ class MainWindow(QMainWindow):
         logger.info("Session finished — state FINISHED")
         if self._session_folder is not None:
             logger.info("Session output folder: %s", self._session_folder)
+        self._write_rbfi()
         # Released so the next run creates its own folder rather than writing
         # into this one. The parent (_output_root) is kept, so the operator is
         # asked for a location only once per window. The status message is left
@@ -826,33 +831,59 @@ class MainWindow(QMainWindow):
             # dialog. Data still plots live; it is just not written to disk.
             logger.warning("No session folder — SCOS runs without auto-save")
             return
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self._session_folder / f"scos_{ts}.h5"
+        # Name and contents come from `docs/session_tab`; the spelling is hers.
+        path = self._session_folder / "rBfi_results.h5"
+        # Engineering provenance — kept out of Params on purpose, see recorder.
         meta = {
-            "frame_rate_hz":  self.spn_fps.value(),
-            "exposure_ms":    self.spn_exposure.value(),
-            "gain_db":        self.spn_gain.value(),
-            "window_size":    self.spn_window.value(),
-            "bit_depth":      int(self.cmb_format.currentText().replace("Mono", "")),
-            "roi_cx":         float(self._roi_circ.get("cx", -1)),
-            "roi_cy":         float(self._roi_circ.get("cy", -1)),
-            "roi_r":          float(self._roi_circ.get("r",  -1)),
-            # Provenance for G[DU/e] — which camera it was looked up for, the
-            # value actually used, and whether it came from the measured table
-            # or the formula. Without these a saved session cannot be re-checked.
             "camera_sn":      str(self.processor.camera_sn or ""),
             "camera_model":   str(self.camera.get_info().get("model", "")),
             "gain_du_per_e":  float(self.processor.gain_du_per_e or 0.0),
             "gain_source":    str(self.processor.gain_source or ""),
         }
-        self._recorder = HDF5Recorder(path, meta)
-        self._recorder.save_calibration(
-            mean_dark  = self.processor.dark_mean,
-            var_dark   = self.processor.dark_var,
-            var_bright = self.processor.bright_var,
-            mask       = self._mask,
-        )
+        # Params: exactly the fields the supervisor listed (2026-09-23), named
+        # as she named them. satCapacity is deliberately absent. The three
+        # normalization fields are filled in by write_rbfi() at close, because
+        # the constant is not known until the recording's length is final.
+        params = {
+            "frameRate":    float(self.spn_fps.value()),
+            "exposureTime": float(self.spn_exposure.value()),       # ms
+            "gain":         float(self.spn_gain.value()),           # dB
+            "windowSize":   int(self.spn_window.value()),
+            "ROI":          [float(self._roi_circ.get("cx", -1)),
+                             float(self._roi_circ.get("cy", -1)),
+                             float(self._roi_circ.get("r",  -1))],
+            "bitDepth":     int(self.cmb_format.currentText().replace("Mono", "")),
+        }
+        self._recorder = HDF5Recorder(path, meta, params)
         self.status.showMessage(f"Recording → {path}")
+
+    def _write_rbfi(self) -> None:
+        """Finalize the results file: rBFi plus the normalization fields.
+
+        Runs inside _finish_session(), while the recorder is still open. A
+        session that never reached MEASURING has no normalization constant, so
+        there is nothing to normalize by and the file keeps raw `bfi` only —
+        the same state a crash leaves behind, which the supervisor accepted.
+        """
+        if self._recorder is None:
+            return
+        if not self._bfi_norm:
+            logger.warning(
+                "No normalization constant (session never left MEASURING_INIT) "
+                "— results file keeps raw BFi with no rBFi"
+            )
+            return
+        try:
+            self._recorder.write_rbfi(
+                norm_constant  = self._bfi_norm,
+                method         = self._bfi_norm_method,
+                window_seconds = self._norm_seconds,
+            )
+            logger.info("rBFi written — constant=%.6g method=%s window=%.0f s",
+                        self._bfi_norm, self._bfi_norm_method, self._norm_seconds)
+        except Exception:
+            # Never let the finalization step lose the data already on disk.
+            logger.exception("Could not write rBFi; raw BFi is still in the file")
 
     def _stop_recorder(self) -> None:
         if self._recorder is None:
@@ -971,18 +1002,26 @@ class MainWindow(QMainWindow):
         if self._mask is not None:
             self.processor.set_roi(self._mask)
 
-        # Save .mat — keys match the names used throughout processor.py and MATLAB
+        # One calibration file per session, holding both kinds (supervisor,
+        # 2026-09-23). Key names are the ones used throughout processor.py and
+        # the MATLAB reference, so the arrays are recognisable on her side.
         if self._session_folder is not None:
-            ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            mat_path = self._session_folder / f"dark_cal_{ts}.mat"
-            scipy.io.savemat(str(mat_path), {
-                "mean_dark":  dark_mean,   # per-pixel temporal mean  [DU]
-                "var_dark":   dark_var,    # per-pixel variance, spatially filtered [DU²]
-                "n_frames":   n_collected,
-                "window_size": self._dark_cal_collector.window_size,
-            })
+            cal_path = self._session_folder / CALIBRATION_FILENAME
+            write_calibration(
+                cal_path, "dark",
+                {
+                    "mean_dark": dark_mean,   # per-pixel temporal mean [DU]
+                    "var_dark":  dark_var,    # per-pixel variance, spatially filtered [DU²]
+                    # The ROI mask has no other home now that the results file
+                    # carries no calibration group; it belongs with the arrays
+                    # it was applied to.
+                    "mask":      self._mask,
+                },
+                {"n_frames":    n_collected,
+                 "window_size": self._dark_cal_collector.window_size},
+            )
             self._calib_label.setText(
-                f"Dark cal OK — {n_collected} frames, saved {mat_path.name}"
+                f"Dark cal OK — {n_collected} frames, saved {cal_path.name}"
             )
         else:
             self._calib_label.setText(f"Dark cal OK — {n_collected} frames (not saved)")
@@ -1061,16 +1100,18 @@ class MainWindow(QMainWindow):
             self.processor.set_roi(self._mask)
 
         if self._session_folder is not None:
-            ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            mat_path = self._session_folder / f"bright_cal_{ts}.mat"
-            scipy.io.savemat(str(mat_path), {
-                "spIm":      sp_im,       # mean bright image minus dark [DU]
-                "spVar":     bright_var,  # local spatial variance of spIm [DU²]
-                "n_frames":  n_collected,
-                "window_size": self._bright_cal_collector.window_size,
-            })
+            cal_path = self._session_folder / CALIBRATION_FILENAME
+            write_calibration(
+                cal_path, "bright",
+                {
+                    "spIm":  sp_im,       # mean bright image minus dark [DU]
+                    "spVar": bright_var,  # local spatial variance of spIm [DU²]
+                },
+                {"n_frames":    n_collected,
+                 "window_size": self._bright_cal_collector.window_size},
+            )
             self._calib_label.setText(
-                f"Cal OK — dark+bright done, saved {mat_path.name}"
+                f"Cal OK — dark+bright done, saved {cal_path.name}"
             )
         else:
             self._calib_label.setText(f"Cal OK — dark+bright done ({n_collected} bright frames)")
@@ -1084,6 +1125,7 @@ class MainWindow(QMainWindow):
         logger.info("Starting SCOS measurement after calibration")
         self._start_time          = time.time()
         self._bfi_norm            = None
+        self._bfi_norm_method     = "mean"
         self._bfi_norm_buffer     = []
         self._measuring_start_time = None  # set later when normalization ends
 
@@ -1361,6 +1403,7 @@ class MainWindow(QMainWindow):
                         )
                     bfi_values = [b for _, b in self._bfi_norm_buffer]
                     self._bfi_norm             = float(np.mean(bfi_values))
+                    self._bfi_norm_method      = "mean"
                     self._measuring_start_time = time.time()   # timer starts here
                     # Add normalization window to plot retroactively, already normalized
                     for t_buf, bfi_buf in self._bfi_norm_buffer:

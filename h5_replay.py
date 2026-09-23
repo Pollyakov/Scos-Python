@@ -101,11 +101,24 @@ class H5ReplayThread(QThread):
 
     def run(self) -> None:
         with h5py.File(self._path, "r") as f:
-            times   = f["time"][:]
+            # Task 9 renamed two datasets to the supervisor's spelling
+            # (time → timeVec, mean_intensity → Intensity) and moved frameRate
+            # into Params. Recordings made before that are the one thing that
+            # cannot be re-made, so both spellings are accepted here.
+            def _pick(*names):
+                for n in names:
+                    if n in f:
+                        return f[n][:]
+                raise KeyError(f"none of {names} in {self._path}")
+
+            times   = _pick("timeVec", "time")
             k2_raws = f["k2_raw"][:]
             k2_cors = f["k2_corr"][:]
-            mean_is = f["mean_intensity"][:]
-            fps     = float(f["metadata"].attrs.get("frame_rate_hz", 20.0))
+            mean_is = _pick("Intensity", "mean_intensity")
+            if "Params" in f and "frameRate" in f["Params"].attrs:
+                fps = float(f["Params"].attrs["frameRate"])
+            else:
+                fps = float(f["metadata"].attrs.get("frame_rate_hz", 20.0))
 
         dt_ms = int(1000.0 / max(fps, 0.1))
 

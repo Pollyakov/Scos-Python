@@ -131,24 +131,25 @@ logs a warning and falls back to mean at `gui/main_window.py:1124`).
 | `DarkCalibration.h5` | `mean_dark`, `var_dark`, `n_frames`, `window_size` |
 | `BrightCalibration.h5` | `sp_im`, `bright_var`, `n_frames`, `window_size` |
 
-**Current state:** the recorder saves one file with fields `time`, `k2_raw`, `k2_corr`,
-`bfi`, `mean_intensity` plus a `metadata` group. Missing: `startTime` as an explicit
-dataset, `rBFi` (currently saves raw `bfi`, not normalized), `Params` group, separate
-calibration HDF5 files, the figure file.
+**DONE 2026-09-23** — see merged_worklist task 9 for the full note. The schema now matches
+the supervisor's spec and her answers of 2026-09-23:
 
-*Updated 2026-09-07 (Done item 21):* the **location** part of this is now solved — every run
-creates its own `scos_<timestamp>/` session folder and calibration plus results already land
-there together. What remains for E2 is purely the file *schema* and the split into separate
-calibration files, not where they go. The close-time write hook also exists now
-(`_finish_session()`, called while the recorder is still open).
+- `rBfi_results.h5` (her spelling) with `startTime` (fixed-length ASCII, `23-Sep-2026
+  15:41:47`, so MATLAB's `datetime()` reads a char row and not a cell array), `timeVec`,
+  `rBFi`, `Intensity`, and a `Params` group of exactly her ten fields — including
+  `normalizationConstant`, `normalizationMethod`, `normalizationWindowSec` and `gitCommit`.
+  `satCapacity` is excluded by instruction. `k2_raw`, `k2_corr` and raw `bfi` are kept
+  alongside; camera/G provenance sits in a separate `metadata` group.
+- `rBFi` is computed and written **once at close**, in `_finish_session()`, from raw BFi
+  buffered on disk during the session.
+- **One calibration file, not two:** `Calibration.h5` with `dark` and `bright` groups. This
+  overrides the two-file table above — the supervisor changed it on 2026-09-23. The old
+  `dark_cal_*.mat` / `bright_cal_*.mat` writes and the embedded `calibration` group are gone.
+- `h5_replay.py` reads both the old and new dataset names, so existing recordings still play.
 
-**Changes needed:**
-- `HDF5Recorder`: add `startTime` scalar dataset; add `rBFi` dataset (or rewrite `bfi`
-  as `rBFi` after normalization is finalised); rename `mean_intensity` → `Intensity`;
-  add a `Params` group containing fps, gain, exposure, window, ROI, sat_capacity.
-- `_finish_dark_cal()`: also write `DarkCalibration.h5` alongside the existing `.mat`.
-- `_finish_bright_cal()`: also write `BrightCalibration.h5`.
-- `_on_finished()`: write final `rBFi` (after E1 re-normalization) to the results file.
+Still open for Tier E: the normalization method itself (E1 — the constant is currently always
+the mean, and `normalizationMethod` records that honestly), the figure file (E4), the laser
+popup (E3) and the v0 tag (E5).
 
 ---
 

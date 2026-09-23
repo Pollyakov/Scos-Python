@@ -48,11 +48,11 @@ def test_round_trip_values(tmp_path):
     rec.close()
 
     with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        np.testing.assert_allclose(f["time"][:],           times)
-        np.testing.assert_allclose(f["k2_raw"][:],         k2_raws)
-        np.testing.assert_allclose(f["k2_corr"][:],        k2_cors)
-        np.testing.assert_allclose(f["bfi"][:],            [1/c for c in k2_cors])
-        np.testing.assert_allclose(f["mean_intensity"][:], mean_is)
+        np.testing.assert_allclose(f["timeVec"][:],   times)
+        np.testing.assert_allclose(f["k2_raw"][:],    k2_raws)
+        np.testing.assert_allclose(f["k2_corr"][:],   k2_cors)
+        np.testing.assert_allclose(f["bfi"][:],       [1/c for c in k2_cors])
+        np.testing.assert_allclose(f["Intensity"][:], mean_is)
 
 
 def test_non_positive_k2_corr_kept_as_nan(tmp_path):
@@ -66,8 +66,8 @@ def test_non_positive_k2_corr_kept_as_nan(tmp_path):
     rec.close()
 
     with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert len(f["time"]) == 3
-        np.testing.assert_allclose(f["time"][:],    [0.0, 0.05, 0.1])
+        assert len(f["timeVec"]) == 3
+        np.testing.assert_allclose(f["timeVec"][:],    [0.0, 0.05, 0.1])
         np.testing.assert_allclose(f["k2_corr"][:], [-0.1, 0.0, 0.1])
         assert math.isnan(f["bfi"][0])
         assert math.isnan(f["bfi"][1])
@@ -84,7 +84,7 @@ def test_flush_every_threshold(tmp_path):
     rec.close()
 
     with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert len(f["time"]) == FLUSH_EVERY
+        assert len(f["timeVec"]) == FLUSH_EVERY
 
 
 def test_append_across_multiple_flushes(tmp_path):
@@ -96,8 +96,8 @@ def test_append_across_multiple_flushes(tmp_path):
     rec.close()
 
     with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert len(f["time"]) == n
-        np.testing.assert_allclose(f["time"][:], np.arange(n, dtype=float))
+        assert len(f["timeVec"]) == n
+        np.testing.assert_allclose(f["timeVec"][:], np.arange(n, dtype=float))
 
 
 def test_n_points_counter(tmp_path):
@@ -115,30 +115,3 @@ def test_path_property(tmp_path):
     rec.close()
 
 
-def test_save_calibration(tmp_path):
-    """Calibration arrays are stored in the 'calibration' group."""
-    rec = _make_recorder(tmp_path)
-    mean_dark  = np.full((10, 10), 42.0,  dtype=np.float64)
-    var_dark   = np.full((10, 10), 0.5,   dtype=np.float64)
-    var_bright = np.full((10, 10), 1.2,   dtype=np.float64)
-    mask       = np.ones((10, 10), dtype=bool)
-    rec.save_calibration(mean_dark, var_dark, var_bright, mask)
-    rec.close()
-
-    with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert "calibration" in f
-        np.testing.assert_allclose(f["calibration/mean_dark"][:],  42.0,  atol=1e-5)
-        np.testing.assert_allclose(f["calibration/var_dark"][:],   0.5,   atol=1e-5)
-        np.testing.assert_allclose(f["calibration/var_bright"][:], 1.2,   atol=1e-5)
-        assert f["calibration/mask"].shape == (10, 10)
-
-
-def test_save_calibration_none_arrays_skipped(tmp_path):
-    """None arrays are silently skipped — no crash when calibration wasn't run."""
-    rec = _make_recorder(tmp_path)
-    rec.save_calibration(None, None, None, None)
-    rec.close()
-
-    with h5py.File(tmp_path / "scos_test.h5", "r") as f:
-        assert "calibration" in f
-        assert len(f["calibration"]) == 0   # empty group, no datasets

@@ -57,7 +57,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | # | Task | Status |
 |---|---|---|
 | 8 | One session folder + real FINISHED transition | ✅ Done — see note in task 8 |
-| 9 | Save the real result in the required schema | ⬜ Not started |
+| 9 | Save the real result in the required schema | ✅ Done — see note in task 9 |
 | 10 | Short-vs-long normalization (E1) | ⬜ Not started |
 | 11 | End-of-session laser popup + intensity check (E3) | ⬜ Not started |
 | 12 | Save plot figure at end of session (E4) | ⬜ Not started |
@@ -538,7 +538,7 @@ them to `DarkCalibration.h5` / `BrightCalibration.h5`, so churning them now woul
 
 ---
 
-### 9. Save the real result, in the required schema, with provenance
+### 9. Save the real result, in the required schema, with provenance — ✅ DONE
 
 - **Goal:** `rBFi_results.h5` contains `startTime`, `timeVec`, `rBFi`, `Intensity` and a
   `Params` group — including the normalization constant and the git commit hash — plus
@@ -564,10 +564,54 @@ works.
 see Gap G4 and Question Q4. It is what keeps #9 and #10 from depending on each other: #9
 builds the close-time write path, #10 supplies the number that path writes.*
 
-*Confirmed against the code:* the recorder writes `time`, `k2_raw`, `k2_corr`, `bfi`,
-`mean_intensity` (`core/recorder.py:44-48`) — raw BFi, never the normalized rBFi. The
-normalized signal exists only in the live plot and is lost on exit. See Question Q2 about
-whether the in-file calibration copy stays.
+*Confirmed against the code:* the recorder wrote `time`, `k2_raw`, `k2_corr`, `bfi`,
+`mean_intensity` — raw BFi, never the normalized rBFi. The normalized signal existed only in
+the live plot and was lost on exit.
+
+**Status — done, 2026-09-23.** All six schema questions were answered by the supervisor on
+2026-09-23 (see `docs/questions_for_vika.md`), which is what unblocked this.
+
+- `rBfi_results.h5` (her spelling, from `session_tab`) now holds `startTime`, `timeVec`,
+  `rBFi`, `Intensity` and a `Params` group. `k2_raw`, `k2_corr` and the un-normalized `bfi`
+  are kept alongside them: her list is a floor, and raw BFi on disk is what makes a crashed
+  session recoverable.
+- `startTime` is a **fixed-length ASCII** string, `23-Sep-2026 15:41:47`. h5py's default
+  variable-length UTF-8 reaches MATLAB as a cell array, and `datetime(startTime)` then fails.
+- `Params` holds exactly her ten fields — `frameRate`, `exposureTime`, `gain`, `windowSize`,
+  `ROI`, `bitDepth`, `normalizationConstant`, `normalizationMethod`, `normalizationWindowSec`,
+  `gitCommit` — and nothing else. Engineering provenance (camera SN and model, the resolved
+  G[DU/e] and whether it came from the table or the formula) lives in a separate `metadata`
+  group, so nothing unexpected appears in the struct she reads. `satCapacity` is absent by
+  explicit instruction.
+- `gitCommit` is the short hash, suffixed `-dirty` when the tree has uncommitted changes: a
+  hash that does not describe the code that ran is worse than none.
+- **rBFi is written once, at close**, by `HDF5Recorder.write_rbfi()` called from
+  `_finish_session()` while the file is still open — the design in Gap G4 option (a),
+  confirmed as her answer 5. Raw BFi is buffered on disk as the session runs. A crash or a
+  window closed mid-run therefore leaves valid HDF5 with raw BFi, the constant in `Params`
+  and no `rBFi`; she accepted that trade-off.
+- `normalizationMethod` records how the constant was *actually* produced (`"mean"` today),
+  not which mode the GUI combo box shows — the "pulsation" mode still falls back to the mean
+  until task 10.
+- NaN where κ² ≤ 0 stays NaN in `rBFi`, `timeVec` evenly spaced (her answer 6, no `valid`
+  mask).
+
+**Calibration now goes to one file, not two.** Her answer 4 overrides `session_tab` here:
+`Calibration.h5` with a `dark` group (`mean_dark`, `var_dark`, `mask`) and a `bright` group
+(`spIm`, `spVar`), each carrying `n_frames` and `window_size` as attributes. This replaces
+*three* writes — the `dark_cal_<ts>.mat` and `bright_cal_<ts>.mat` files and the `calibration`
+group that used to be embedded in the results file. `HDF5Recorder.save_calibration()` is gone.
+
+**Backwards compatibility:** `h5_replay.py` accepts both spellings (`timeVec`/`time`,
+`Intensity`/`mean_intensity`, `Params.frameRate`/`metadata.frame_rate_hz`), because existing
+recordings cannot be re-made.
+
+**Verified:** new `tests/test_results_schema.py` (16 tests) checks what MATLAB will actually
+do — that `startTime` parses and is not variable-length, that `Params` has exactly the agreed
+fields and no `satCapacity`, that `rBFi` matches `timeVec` in length with NaNs preserved, that
+a never-normalized session still yields a valid file, and that both calibration kinds land in
+one file. One of them drives a real `MainWindow` end to end, so the GUI wiring is covered too,
+not just the recorder. Suite 236 fast tests + 4 offline MATLAB.
 
 ---
 
