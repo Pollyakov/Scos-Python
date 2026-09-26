@@ -241,6 +241,15 @@ file and rename, so a crash mid-write cannot leave an unparsable config and bric
 launch. Do not save a setting that was forced by the mode rather than chosen by the operator
 (e.g. `external_trigger` is switched off and disabled in `--mock-folder` playback).
 
+**Also remember the last results folder.** `_output_root` is neither a widget nor a config
+key today: it is asked for once per window launch via `QFileDialog` in `_start_dark_cal()` and
+lost on close, so the operator re-navigates to the same place at every launch. Save the chosen
+path as `output_root` in the config and pass it as the dialog's starting directory next time.
+**Keep showing the dialog** — do not silently reuse the path. Writing a session into the
+previous subject's folder is far worse than one extra click, and the operator may be working
+with a different subject or a different drive. This one differs from the settings above in that
+`_load_config()` does not read it either, so both halves need adding.
+
 **Note — not the same bug as the "600 frames" auto-load.** In `--mock-folder` mode,
 `_auto_load_folder_calibration()` streams *every* dark TIFF in the recording folder and ignores
 the `Dark Frames` spinbox entirely. That path does not exist for a real camera (it is gated on
