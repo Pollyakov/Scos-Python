@@ -221,6 +221,34 @@ stop gracefully if space drops below 1 GB. Show remaining disk space in the stat
 
 ---
 
+#### B3 · Persist GUI settings between launches
+
+Nothing the operator sets in the GUI survives closing the window. `_load_config()`
+(`gui/main_window.py`) reads `scos_config.json` into the widgets at startup, but no counterpart
+ever writes it back — grep for `json.dump` finds nothing. So every launch resets exposure, gain,
+frame rate, window size, dark/bright frame counts, normalization seconds and measurement
+duration to whatever is hardcoded in the widget constructors or listed in the config file.
+
+Found on 2026-09-26: the operator set `Dark Frames` to 60, relaunched the app, and the run used
+600 again. Workaround applied that day — `n_dark_frames` / `n_bright_frames` were added to
+`scos_config.json` by hand (the loader already knew those keys; only the file lacked them).
+That is a patch for two fields, not a fix.
+
+**Implement:** a `_save_config()` that writes the same key set `_load_config()` reads, called
+from `closeEvent()` before the threads are stopped. Keep the file human-editable (indent=4,
+stable key order) — it is currently edited by hand and should stay that way. Write to a temp
+file and rename, so a crash mid-write cannot leave an unparsable config and brick the next
+launch. Do not save a setting that was forced by the mode rather than chosen by the operator
+(e.g. `external_trigger` is switched off and disabled in `--mock-folder` playback).
+
+**Note — not the same bug as the "600 frames" auto-load.** In `--mock-folder` mode,
+`_auto_load_folder_calibration()` streams *every* dark TIFF in the recording folder and ignores
+the `Dark Frames` spinbox entirely. That path does not exist for a real camera (it is gated on
+`hasattr(camera, "get_calibration_mat")`, which only `FolderMockCamera` has), so it needs no
+fix — but the two are easy to confuse when reading a bug report.
+
+---
+
 ### Tier C — Architecture Cleanup
 
 Refactoring the math and camera layers into clean, testable modules. Do after Tier A and E
@@ -364,7 +392,7 @@ signal HIGH → wait → measure.
 ```
 A1 (shrink_mask) → A2 (GrabStrategy) → A3 (blocking queue)
   → E1 (normalization) → E2 (HDF5 format) → E3 (laser popup) → E4 (plot save) → E5 (tag v0)
-  → B1 (overload dialog) → B2 (disk space)
+  → B1 (overload dialog) → B2 (disk space) → B3 (persist GUI settings)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4 (any order)
   → F1 (raw frames) → F2 (long sessions) → F3 (laser control)

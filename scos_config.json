@@ -6,6 +6,8 @@
     "trigger_delay_us": 0.0,
     "external_trigger": false,
     "window_size": 7,
+    "n_dark_frames": 60,
+    "n_bright_frames": 60,
     "measurement_duration_min": 0,
     "norm_type": "seconds",
     "norm_seconds": 5
