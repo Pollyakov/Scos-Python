@@ -174,7 +174,17 @@ Known camera parameters:
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
 
-IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* frame is like that the measurement can never leave `MEASURING_INIT`. `MainWindow._abort_on_invalid_k2()` catches this and stops the run with an error naming the likely cause — a dark calibration taken with light on the sensor. Before it existed the app sat silently on an empty plot and wrote an all-NaN results file. In `--mock-folder` playback this is guaranteed **whenever the live calibration runs**: that mode cannot switch a laser off, so Start SCOS's dark calibration collects the laser-on recording and overwrites the good calibration `_auto_load_folder_calibration()` had already loaded from the `_dark` folder. The mode itself is fine — measured 2026-09-27, the auto-loaded arrays alone give κ²_corr ≈ 0.0104 on the same frames, within 1.3 % of MATLAB. See todo D6.
+IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* frame is like that the measurement can never leave `MEASURING_INIT`. `MainWindow._abort_on_invalid_k2()` catches this and stops the run with an error naming the likely cause — a dark calibration taken with light on the sensor. Before it existed the app sat silently on an empty plot and wrote an all-NaN results file. Fixed for `--mock-folder` playback on 2026-09-28; see the next note.
+
+IMPORTANT: in `--mock-folder` playback there is no laser to switch off, so
+`FolderMockCamera.set_playback_source("dark")` plays the `_dark` folder for the duration of
+`DARK_CAL` instead. The bright calibration still comes from the main recording, which was
+made with a subject in place, so `spVar` is about 2.3× too large and κ²_corr lands well
+below MATLAB. That is the dataset, not the code — `--mock-folder` is for rehearsing the
+sequence, and `tests/test_dark_cal_offline.py` / `test_bright_cal_offline.py` remain the
+accuracy check. Also note `MainWindow._to_du()`: the Pylon-Viewer TIFFs store 10-bit data
+left-justified in uint16, so a frame must be divided by `processor.scale` before any
+calibration array is built from it.
 
 ## Future Protocol Design
 

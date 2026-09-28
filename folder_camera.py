@@ -60,6 +60,11 @@ class FolderMockCamera(QThread):
         self._loop          = loop
         self._running       = False
         self._tiff_files: list[Path] = []
+        # Dark calibration cannot be rehearsed by switching off a laser that
+        # does not exist, so the dark folder is played instead while the app
+        # is in DARK_CAL. See set_playback_source() and todo D6.
+        self._dark_files: list[Path] = []
+        self._source          = "main"
         self._last_display    = 0.0
         self._display_interval = 1.0 / self.DISPLAY_FPS_CAP
         self._recording_params: dict = {}
@@ -87,6 +92,9 @@ class FolderMockCamera(QThread):
                 f"No TIFF files found in {self._recording_dir}"
             )
         self._recording_params = self._parse_recording_params()
+
+        dark_dir = find_dark_dir(self._recording_dir)
+        self._dark_files = _sort_tiffs(dark_dir) if dark_dir is not None else []
 
         p = self._recording_params
         self.exposure_us  = p.get("exposure_us",  self.exposure_us)
@@ -149,6 +157,40 @@ class FolderMockCamera(QThread):
     # Calibration helpers (no equivalent on CameraThread)
     # ------------------------------------------------------------------
 
+    def set_playback_source(self, source: str) -> bool:
+        """Play the dark folder ("dark") or the recording ("main").
+
+        A real session calibrates by asking the operator to switch the laser
+        off, collecting N frames, and switching it back on. Playback has no
+        laser, so before this existed those "dark" frames were the laser-on
+        recording: `dark_var` came out carrying the live signal's variance and
+        every corrected kappa^2 went negative (todo D6, Done item 22).
+
+        Switching the file list instead makes the rehearsal cover the real
+        code — the prompts, the collectors, the folder dialog and the
+        calibration file all run exactly as they will on the rig — with frames
+        that are genuinely dark.
+
+        Returns False, and warns, when there is no dark folder to switch to;
+        playback stays on the recording so the run is not left frameless.
+        """
+        if source not in ("main", "dark"):
+            raise ValueError(f"unknown playback source {source!r}")
+        if source == "dark" and not self._dark_files:
+            self.warning.emit(
+                "No dark folder next to this recording — dark calibration will "
+                "collect laser-on frames and the corrected \u03ba\u00b2 will be "
+                "negative. Expected a sibling folder named "
+                f"'{self._recording_dir.name}_dark'."
+            )
+            return False
+        self._source = source
+        return True
+
+    @property
+    def playback_source(self) -> str:
+        return self._source
+
     def get_dark_dir(self) -> Path | None:
         """Auto-detect dark folder next to the recording directory."""
         return find_dark_dir(self._recording_dir)
@@ -168,14 +210,27 @@ class FolderMockCamera(QThread):
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        idx  = 0
-        n    = len(self._tiff_files)
+        idx     = 0
+        current = None
         try:
             while self._running:
                 target_dt = 1.0 / max(self.frame_rate, 1e-3)
                 t0 = time.perf_counter()
 
-                frame = tifffile.imread(str(self._tiff_files[idx]))
+                # Re-read the source every iteration: the GUI thread flips it
+                # when calibration starts and ends. One attribute read is
+                # atomic under the GIL, and restarting the index on a switch
+                # keeps it in range whatever the two folders' lengths are.
+                source = self._source
+                if source != current:
+                    current = source
+                    idx     = 0
+                files = self._dark_files if source == "dark" else self._tiff_files
+                n     = len(files)
+                if n == 0:
+                    break
+
+                frame = tifffile.imread(str(files[idx]))
                 t_capture = time.monotonic()
                 self.frame_ready.emit(frame, t_capture)
 

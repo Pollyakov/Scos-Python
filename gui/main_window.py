@@ -1044,11 +1044,27 @@ class MainWindow(QMainWindow):
         self._dark_cal_trigger_was_on = self.chk_trigger.isChecked()
         self.camera.set_trigger(False, self.spn_trigger_delay.value())
 
+        # In playback there is no laser to switch off, so the mock camera
+        # switches folders instead (todo D6). Nothing to do for a real camera.
+        self._set_playback_source("dark")
+
         # Step 4: start collecting
         n1 = self.spn_n1.value()
         self._dark_cal_collector = DarkCalCollector(n1, self.spn_window.value())
         self._calib_label.setText(f"Dark cal: 0 / {n1}")
         self._set_state(State.DARK_CAL)
+
+    def _set_playback_source(self, source: str) -> None:
+        """Ask a mock-folder camera to play its dark folder, or the recording.
+
+        A no-op for every other camera: a real Basler has one stream and a
+        real laser, and `--mock-tiff` has no dark frames to offer.
+        """
+        setter = getattr(self.camera, "set_playback_source", None)
+        if setter is None:
+            return
+        if setter(source):
+            logger.info("Playback source \u2192 %s", source)
 
     def _finish_dark_cal(self):
         """
@@ -1100,6 +1116,11 @@ class MainWindow(QMainWindow):
             )
         else:
             self._calib_label.setText(f"Dark cal OK — {n_collected} frames (not saved)")
+
+        # Back to the recording before _start_bright_cal() opens its modal
+        # prompt: frames keep arriving while a dialog is up, and the first
+        # bright ones would otherwise still be dark.
+        self._set_playback_source("main")
 
         # Restore trigger to whatever the user had before
         if self._dark_cal_trigger_was_on:
@@ -1341,6 +1362,23 @@ class MainWindow(QMainWindow):
         )
         self.image_widget.update_frame(frame)
 
+    def _to_du(self, frame: np.ndarray) -> np.ndarray:
+        """Convert a raw frame to the digital units `process()` computes in.
+
+        `process()` divides by `processor.scale` before doing anything, so a
+        calibration array built from undivided frames is wrong by that factor.
+        With a real camera `scale` is 1 and this returns the frame untouched;
+        it is only ever other than 1 for the Pylon-Viewer TIFFs replayed by
+        `--mock-folder`, which store 10-bit data left-justified in uint16.
+
+        Getting this wrong is not subtle but it is silent: a `dark_mean` 64x
+        too large made the mean ROI intensity come out at -7872 DU.
+        """
+        scale = getattr(self.processor, "scale", 1.0)
+        if not scale or scale == 1.0:
+            return frame
+        return frame.astype(np.float64) / float(scale)
+
     def _on_scos_frame(self, frame: np.ndarray, t_capture: float):
         """Runs on GUI thread (queued signal from camera thread) — every frame.
 
@@ -1371,7 +1409,9 @@ class MainWindow(QMainWindow):
 
         # Intensity stats — update every 0.5s regardless of SCOS state
         if self._mask is not None and (now - self._last_stats_time) >= 0.5:
-            pixels = frame[self._mask].astype(np.float64)
+            # Same units as everything else on screen and in the file: these
+            # labels say "DU", and in playback the raw frame is 64x that.
+            pixels = self._to_du(frame)[self._mask].astype(np.float64)
             mean_i = float(pixels.mean())
             p5     = float(np.percentile(pixels, 5))
             p95    = float(np.percentile(pixels, 95))
@@ -1387,7 +1427,7 @@ class MainWindow(QMainWindow):
         if self._state == State.DARK_CAL:
             if self._dark_cal_collector is None:
                 return   # guard: frame arrived during state transition
-            self._dark_cal_collector.add_frame(frame)
+            self._dark_cal_collector.add_frame(self._to_du(frame))
             n       = self._dark_cal_collector.n_collected
             n_total = self._dark_cal_collector.n_target
             self._calib_label.setText(f"Dark cal: {n} / {n_total}")
@@ -1398,7 +1438,7 @@ class MainWindow(QMainWindow):
         if self._state == State.BRIGHT_CAL:
             if self._bright_cal_collector is None:
                 return   # guard: frame arrived during state transition
-            self._bright_cal_collector.add_frame(frame)
+            self._bright_cal_collector.add_frame(self._to_du(frame))
             n       = self._bright_cal_collector.n_collected
             n_total = self._bright_cal_collector.n_target
             self._calib_label.setText(f"Bright cal: {n} / {n_total}")
