@@ -126,6 +126,10 @@ class MainWindow(QMainWindow):
         # Guard against a measurement that can never start because every
         # corrected kappa^2 is <= 0 (see _abort_on_invalid_k2).
         self._n_invalid_k2:        int  = 0
+        # Frames this window has received, and the arrival index below which
+        # they are stale — see _flush_stale_frames().
+        self._frames_seen:         int  = 0
+        self._skip_frames_until:   int  = 0
         self._invalid_k2_reported: bool = False
         self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
         self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
@@ -1047,6 +1051,7 @@ class MainWindow(QMainWindow):
         # In playback there is no laser to switch off, so the mock camera
         # switches folders instead (todo D6). Nothing to do for a real camera.
         self._set_playback_source("dark")
+        self._flush_stale_frames("the laser was switched off")
 
         # Step 4: start collecting
         n1 = self.spn_n1.value()
@@ -1162,6 +1167,8 @@ class MainWindow(QMainWindow):
             self.btn_save.setEnabled(True)
             self._set_state(State.PREVIEW)
             return
+
+        self._flush_stale_frames("the laser was switched back on")
 
         n2 = self.spn_n2.value()
         self._bright_cal_collector = BrightCalCollector(n2, self.spn_window.value())
@@ -1362,6 +1369,40 @@ class MainWindow(QMainWindow):
         )
         self.image_widget.update_frame(frame)
 
+    # A frame may already be in flight when the counter is read, so the cutoff
+    # is nudged past it. Waiting two frames too long costs 50 ms at 40 Hz;
+    # accepting one frame from before the laser changed corrupts a calibration.
+    _FLUSH_MARGIN_FRAMES = 2
+
+    def _flush_stale_frames(self, reason: str) -> None:
+        """Ignore frames captured before the lighting changed.
+
+        The calibration collectors run on the GUI thread behind a queued
+        connection. When the camera outruns this handler — and at 40 Hz with
+        per-frame percentiles over 2.4 Mpx it does — a backlog builds up in
+        Qt's event queue. Measured on the lab recording: 60 to 130 frames,
+        two to three seconds' worth.
+
+        Every one of those was captured before the operator clicked OK. Without
+        this, the dark collector's first frames are laser-on and the bright
+        collector's are laser-off, which is not a playback quirk: on the rig the
+        same backlog puts pre-laser frames into the bright calibration. It was
+        found in playback only because there the two sets differ so plainly —
+        60 of 60 "bright" frames came out dark.
+
+        The camera counts what it has handed to Qt and this window counts what
+        it has received; the difference is the backlog, so everything up to the
+        camera's current count is dropped.
+        """
+        emitted = getattr(self.camera, "frames_emitted", None)
+        if emitted is None:
+            return                      # replay stub: no live stream to flush
+        self._skip_frames_until = emitted + self._FLUSH_MARGIN_FRAMES
+        backlog = max(0, self._skip_frames_until - self._frames_seen)
+        if backlog:
+            logger.info("Flushing %d frame(s) captured before %s", backlog, reason)
+            self._calib_label.setText(f"Discarding {backlog} buffered frames…")
+
     def _to_du(self, frame: np.ndarray) -> np.ndarray:
         """Convert a raw frame to the digital units `process()` computes in.
 
@@ -1389,6 +1430,10 @@ class MainWindow(QMainWindow):
         monotonic capture time; the measurement path uses it, and it is
         accepted here so both connections share one signal signature.
         """
+        self._frames_seen += 1
+        if self._frames_seen < self._skip_frames_until:
+            return      # captured before the lighting changed — see _flush_stale_frames
+
         # Default mask = whole frame when no ROI is set
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)

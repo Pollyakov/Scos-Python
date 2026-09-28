@@ -30,6 +30,11 @@ class CameraThread(QThread):
         super().__init__(parent)
         self._running      = False
         self.camera        = None
+        # Frames handed to Qt so far. MainWindow compares it with its own
+        # arrival count to tell how far behind it is — see
+        # _flush_stale_frames(), which uses that to discard frames captured
+        # before the operator changed the lighting.
+        self.frames_emitted = 0
         self._last_display = 0.0          # timestamp of last display emit
         self._display_interval = 1.0 / self.DISPLAY_FPS_CAP
 
@@ -228,6 +233,7 @@ class CameraThread(QThread):
                         # get, before the copy and before any signal delivery.
                         t_capture = time.monotonic()
                         frame = result.Array.copy()
+                        self.frames_emitted += 1
                         self.frame_ready.emit(frame, t_capture)   # always — for SCOS
                         now = t_capture
                         if now - self._last_display >= self._display_interval:

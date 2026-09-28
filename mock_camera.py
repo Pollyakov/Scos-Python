@@ -35,6 +35,11 @@ class MockCameraThread(QThread):
         self._loop      = loop
         self._running   = False
         self._stack: np.ndarray | None = None
+        # Frames handed to Qt so far. MainWindow compares it with its own
+        # arrival count to tell how far behind it is — see
+        # _flush_stale_frames(), which uses that to discard frames captured
+        # before the operator changed the lighting.
+        self.frames_emitted = 0
         self._last_display    = 0.0
         self._display_interval = 1.0 / self.DISPLAY_FPS_CAP
 
@@ -122,6 +127,7 @@ class MockCameraThread(QThread):
 
                 frame = self._stack[idx]
                 t_capture = time.monotonic()
+                self.frames_emitted += 1
                 self.frame_ready.emit(frame, t_capture)
 
                 now = t_capture

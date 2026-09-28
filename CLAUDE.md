@@ -176,6 +176,23 @@ Known camera parameters:
 
 IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* frame is like that the measurement can never leave `MEASURING_INIT`. `MainWindow._abort_on_invalid_k2()` catches this and stops the run with an error naming the likely cause — a dark calibration taken with light on the sensor. Before it existed the app sat silently on an empty plot and wrote an all-NaN results file. Fixed for `--mock-folder` playback on 2026-09-28; see the next note.
 
+IMPORTANT: **calibration frames are discarded until the camera's backlog is gone.**
+The dark/bright collectors run on the GUI thread behind a queued connection, so when the
+camera outruns that handler a backlog builds in Qt's event queue — 60 to 130 frames at
+40 Hz, measured. Every one of them was captured *before* the operator clicked OK on the
+laser prompt, so without this the bright calibration is built from laser-off frames.
+`MainWindow._flush_stale_frames()` is called after each prompt and drops the difference
+between what the camera has emitted (`camera.frames_emitted`, on all three emitters) and
+what this window has received. Any new frame source must keep that counter.
+
+Scope of that measurement: it was taken in a **headless** run where the laser prompt
+returns instantly. A real modal dialog runs a nested event loop that keeps delivering
+queued frames while nobody is collecting them, so on the rig the backlog at the moment OK
+is clicked is probably much smaller — and the lab camera is 700x700 at 20 Hz, roughly a
+tenth of the per-second GUI work of the 2.4 Mpx 40 Hz playback. The flush is cheap
+insurance, not a measured rig problem. What *is* measured on both is that a backlog builds
+during the collection itself.
+
 IMPORTANT: in `--mock-folder` playback there is no laser to switch off, so
 `FolderMockCamera.set_playback_source("dark")` plays the `_dark` folder for the duration of
 `DARK_CAL` instead. The bright calibration still comes from the main recording, which was
