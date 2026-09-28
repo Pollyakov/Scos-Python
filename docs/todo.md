@@ -438,7 +438,7 @@ signal HIGH → wait → measure.
 
 ```
 A1 (shrink_mask) → A2 (GrabStrategy) → A3 (blocking queue)
-  → ~~E1 (normalization)~~ → ~~E2 (HDF5 format)~~ → E3 (laser popup) → E4 (plot save) → E5 (tag v0)
+  → ~~E1 (normalization)~~ → ~~E2 (HDF5 format)~~ → ~~E3 (laser popup)~~ → E4 (plot save) → E5 (tag v0)
   → B1 (overload dialog) → B2 (disk space) → B3 (persist GUI settings)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4 (any order); ~~D6~~

@@ -59,7 +59,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | 8 | One session folder + real FINISHED transition | ✅ Done — see note in task 8 |
 | 9 | Save the real result in the required schema | ✅ Done — see note in task 9 |
 | 10 | Short-vs-long normalization (E1) | ✅ Done — see note in task 10 |
-| 11 | End-of-session laser popup + intensity check (E3) | ⬜ Not started |
+| 11 | End-of-session laser popup + intensity check (E3) | ✅ Done — see note in task 11 |
 | 12 | Save plot figure at end of session (E4) | ⬜ Not started |
 | 13 | Tag version 0 (E5) | ⬜ Not started |
 
@@ -722,6 +722,49 @@ final render removed — each one caught. Full suite 280/280 fast, 4/4 slow.
   otherwise; docs updated.
 
 *Your Session-tab constraint puts this and #9 before any raw-frame work — honoured here.*
+
+**Done 2026-09-28** (`gui/main_window.py`, `tests/test_laser_off_check.py`, 8 tests; suite
+321/321). `_laser_off_check()` runs from the Stop branch of `_toggle_scos`, before
+`_set_state(FINISHED)` so results from frames still in flight — all captured before the
+prompt — are not dropped, and before `_finish_session()` writes rBFi.
+
+Three decisions were not in the spec and are worth recording:
+
+- **The comparison is dark-subtracted on both sides**, mirroring `process()` exactly. This
+  is not a preference. The camera's black level (100 DU on this rig) does not go away when
+  the laser does, so a raw-DU mean could never fall by 90 % however completely the laser was
+  switched off — the check would have warned on every run ever made.
+- **The reference is the trailing mean over the last 5 s of results, not the last value.**
+  `todo.md:173` says "the last `mean_i` value is already available"; it is not — it was only
+  ever a parameter of `_on_scos_result`, so `_intensity_history` was added, trimmed to the
+  window and reset per run in `_finish_bright_cal`. One frame's ROI mean is noisy, and a
+  momentary shadow on the final frame would drag the reference down far enough to let a
+  laser that is still on pass.
+- **No on "Continue anyway?" re-runs the check; it never discards the session.** The frames
+  are already recorded by then. Escape also returns No, which is harmless under this reading
+  — it just re-prompts — whereas under a discard reading it would destroy a session.
+
+Both open questions to the supervisor (ROI vs whole frame; last value vs trailing mean) are
+answered by default and logged as such in `docs/questions_for_vika.md` §8/§9, one constant
+each (`_LASER_OFF_DROP_FRACTION`, `_LASER_OFF_REF_SECONDS`) from being changed.
+
+Two things that would otherwise have looked like bugs at the rig: the check calls
+`_set_playback_source("dark")` before sampling, because `--mock-folder` has no laser and
+would warn on every rehearsal run — and `"main"` in the `finally`, because leaving playback
+parked on the dark folder makes the next run's live preview black until Start SCOS is pressed
+again; and the whole block is wrapped in `try/except`, because a dialog or event-loop failure
+in the stop path would otherwise skip `_finish_session()` and cost the session its rBFi.
+
+The outcome is **returned** from `_laser_off_check()` and appended to the session-finished
+message rather than posted to the status bar, which `_stop_recorder()` and the closing
+message both overwrite — the hazard `_finish_session`'s docstring already warns about. A
+failed check that reached only `app.log` is a failed check the operator never saw.
+
+The dark-subtraction and ROI-mask shape guards `return None` into the "check skipped" path
+instead of falling through. Falling through would compare raw DU against a dark-subtracted
+reference, or a whole-frame mean against an ROI one — silently reintroducing the exact error
+the check exists to catch. Neither can happen today, which is why a refactor breaking them
+has to be loud.
 
 ---
 

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QCheckBox, QComboBox, QSplitter,
     QStatusBar, QFileDialog, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QEventLoop, QTimer, QThread, pyqtSignal
 import scipy.io
 
 from camera    import CameraThread
@@ -131,6 +131,16 @@ class MainWindow(QMainWindow):
         self._frames_seen:         int  = 0
         self._skip_frames_until:   int  = 0
         self._invalid_k2_reported: bool = False
+        # Trailing (t, mean_i) from every result, for the end-of-session
+        # laser-off check (E3). todo.md claims the last mean_i is "already
+        # available"; it is not — it is only ever a parameter of
+        # _on_scos_result, so it has to be kept here on purpose.
+        self._intensity_history: list[tuple[float, float]] = []
+        # Set only while _laser_off_check() is waiting for one fresh frame, so
+        # the per-frame handler is not copying a 700x700 array it will never
+        # look at. See _await_fresh_frame().
+        self._awaiting_laser_off_frame: bool = False
+        self._laser_off_frame: np.ndarray | None = None
         self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
         self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
         self._measurement_duration_s: float       = float('inf') # ∞ = run until Stop SCOS
@@ -772,6 +782,11 @@ class MainWindow(QMainWindow):
             # has no results to write, so it must not pass through FINISHED.
             was_measuring = self._state in (State.MEASURING_INIT, State.MEASURING)
             self._scos_worker.disable_intake()   # camera stops feeding immediately
+            # Kept before _scos_mask is cleared below: the laser-off check must
+            # measure over the same ROI the processor used, so that its reading
+            # is comparable with the Intensity values recorded during the run.
+            laser_check_mask = (self._scos_mask if self._scos_mask is not None
+                                else self._mask)
             self._scos_mask            = None
             self._measuring_start_time = None
             self._time_left_label.hide()
@@ -792,17 +807,36 @@ class MainWindow(QMainWindow):
             # same `was_measuring` flag, but leaving this to the guard alone
             # makes an unbound-local NameError one edit away.
             session_folder = None
+            laser_note     = None
             if was_measuring:
+                # Laser off first, while the state is still MEASURING: results
+                # from frames already in flight are captured from before the
+                # prompt, and _on_scos_result drops everything once the state
+                # is FINISHED. Nothing raised in here may cost the session the
+                # data already collected, so the whole step is contained — a
+                # broken check is a warning, never a lost recording.
+                try:
+                    laser_note = self._laser_off_check(laser_check_mask)
+                except Exception:
+                    logger.exception("Laser-off check failed to run; "
+                                     "saving the session regardless")
+                    laser_note = "laser-off check could not run"
                 self._set_state(State.FINISHED)
                 session_folder = self._session_folder   # kept for the closing message
                 self._finish_session()
             self._stop_recorder()
             if was_measuring:
-                self.status.showMessage(
+                closing = (
                     f"Session finished → {session_folder}"
                     if session_folder is not None
                     else "Session finished (not saved — no output folder)"
                 )
+                # Appended, not posted separately: this message is the last one
+                # written to the status bar, so anything the check wants the
+                # operator to see has to ride along with it.
+                if laser_note:
+                    closing = f"{closing}  |  {laser_note}"
+                self.status.showMessage(closing)
             self._set_state(State.PREVIEW)
 
     def _finish_session(self) -> None:
@@ -1233,6 +1267,10 @@ class MainWindow(QMainWindow):
         self._last_result_t       = 0.0
         self._n_invalid_k2        = 0
         self._invalid_k2_reported = False
+        # Must be cleared per run: otherwise a second Start SCOS in the same
+        # window checks this run's laser-off frame against the *previous*
+        # run's intensity.
+        self._intensity_history   = []
         self._measuring_start_time = None  # set later when normalization ends
 
         # Shrink the ROI mask so no κ² pixel has its filter window straddle the
@@ -1403,6 +1441,194 @@ class MainWindow(QMainWindow):
             logger.info("Flushing %d frame(s) captured before %s", backlog, reason)
             self._calib_label.setText(f"Discarding {backlog} buffered frames…")
 
+    # ------------------------------------------------------------------
+    # End-of-session laser-off check (todo.md E3 / task 11)
+    # ------------------------------------------------------------------
+
+    # Two of these encode decisions the supervisor has not answered yet
+    # (docs/questions_for_vika.md). Both are reasonable defaults, chosen so the
+    # check compares like with like, and both are one constant away from being
+    # changed when she rules.
+    #
+    #   ROI, not the whole frame — this is the region the measurement actually
+    #   used, and it is the same quantity written as `Intensity` in
+    #   rBfi_results.h5, so the before/after comparison is apples to apples. A
+    #   full-frame mean would be diluted by background pixels that never saw
+    #   laser light, which makes a genuine 90 % drop look smaller than it is
+    #   and would produce false warnings.
+    #
+    #   The trailing average over the last few seconds, not the single last
+    #   value — one frame's ROI mean is noisy, and a momentary shadow over the
+    #   sensor on the very last frame would otherwise set the reference far too
+    #   low and let a laser that is still on pass the check.
+    _LASER_OFF_DROP_FRACTION = 0.90   # required fall in mean ROI intensity
+    _LASER_OFF_REF_SECONDS   = 5.0    # trailing window the reference averages
+    _LASER_OFF_TIMEOUT_MS    = 2000   # how long to wait for one fresh frame
+
+    def _reference_intensity(self) -> float | None:
+        """Mean ROI intensity over the last few seconds of the measurement.
+
+        None when there is nothing to compare against — a run stopped before
+        any result arrived, or one whose dark-subtracted intensity came out
+        non-positive (a ratio against that has no meaning).
+        """
+        if not self._intensity_history:
+            return None
+        t_end  = self._intensity_history[-1][0]
+        cutoff = t_end - self._LASER_OFF_REF_SECONDS
+        window = [mi for ti, mi in self._intensity_history if ti >= cutoff]
+        if not window:
+            window = [self._intensity_history[-1][1]]
+        ref = float(np.mean(window))
+        return ref if ref > 0 else None
+
+    def _await_fresh_frame(self) -> np.ndarray | None:
+        """Block until one frame captured after the laser change arrives.
+
+        Runs a nested event loop, which is safe here: the measurement is over,
+        intake is disabled, and the only thing still expected from the camera
+        is this one frame. Returns None on timeout rather than waiting forever
+        — a camera that has already stopped must not strand the operator in a
+        window that will never close.
+        """
+        if self._laser_off_frame is not None:
+            return self._laser_off_frame        # already arrived
+        loop  = QEventLoop(self)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(loop.quit)
+
+        def _poll():
+            if self._laser_off_frame is not None:
+                loop.quit()
+
+        poller = QTimer(self)
+        poller.setInterval(10)
+        poller.timeout.connect(_poll)
+        timer.start(self._LASER_OFF_TIMEOUT_MS)
+        poller.start()
+        try:
+            loop.exec()
+        finally:
+            timer.stop()
+            poller.stop()
+        return self._laser_off_frame
+
+    def _measure_laser_off_intensity(self, mask: np.ndarray | None) -> float | None:
+        """Mean ROI intensity of one post-laser-off frame, in process() units.
+
+        Mirrors process() exactly — frame → DU, minus dark_mean, mean inside
+        the ROI (processor.py). The dark subtraction is what makes the 90 %
+        threshold reachable at all: the camera's black level (100 DU on this
+        rig) never goes away, so a raw-DU comparison could not fall by 90 %
+        however completely the laser was switched off.
+        """
+        self._laser_off_frame          = None
+        self._awaiting_laser_off_frame = True
+        try:
+            self._set_playback_source("dark")   # no laser in --mock-folder playback
+            self._flush_stale_frames("the laser was switched off")
+            frame = self._await_fresh_frame()
+        finally:
+            self._awaiting_laser_off_frame = False
+            self._laser_off_frame          = None
+            # Put playback back where _finish_dark_cal leaves it. Without this
+            # the mock camera stays parked on the dark folder after Stop SCOS,
+            # and the operator sets up the next run against a black live image
+            # that only rights itself at the following Start SCOS.
+            self._set_playback_source("main")
+        if frame is None:
+            return None
+        im = np.asarray(self._to_du(frame), dtype=np.float64)
+        # Both of the guards below refuse rather than fall through. Skipping
+        # the dark subtraction would compare raw DU against a dark-subtracted
+        # reference, and skipping the mask would compare a whole-frame mean
+        # against an ROI one — either one silently reintroduces exactly the
+        # error this check was built to avoid. Neither can happen today (dark
+        # calibration is mandatory before MEASURING), which is precisely why
+        # a future refactor breaking them must be loud.
+        dark_mean = getattr(self.processor, "dark_mean", None)
+        if dark_mean is None or dark_mean.shape != im.shape:
+            logger.warning("Laser-off check skipped — no dark_mean matching the "
+                           "frame shape %s, so the comparison would not be "
+                           "dark-subtracted the way Intensity is", im.shape)
+            return None
+        im = im - dark_mean
+        if mask is None or mask.shape != im.shape:
+            logger.warning("Laser-off check skipped — no ROI mask matching the "
+                           "frame shape %s, so the comparison would not cover "
+                           "the region the measurement used", im.shape)
+            return None
+        return float(im[mask].mean())
+
+    def _laser_off_check(self, mask: np.ndarray | None) -> str | None:
+        """Prompt to switch the laser off, then verify that it went off.
+
+        This is not an accuracy check against MATLAB — it is here so that a
+        measurement ruined by a laser left running is caught at the rig, while
+        the operator is still standing there, instead of weeks later.
+
+        Nothing this method does may cost the session its data: it runs before
+        _finish_session() writes rBFi, so every failure path — no reference, no
+        frame, a refused check — logs and returns, and the save goes ahead.
+
+        Returns a short note for the closing status message, or None when the
+        check passed and there is nothing to say. The outcome is returned
+        rather than posted here because _toggle_scos overwrites the status bar
+        twice after this runs (_stop_recorder, then the session-finished
+        message) — the same hazard already documented in _finish_session. A
+        failed check that only ever reached app.log would be a failed check the
+        operator never saw.
+        """
+        ref = self._reference_intensity()
+        while True:
+            QMessageBox.information(
+                self,
+                "Measurement Ended",
+                "Measurement has ended. Please turn off the laser.",
+                QMessageBox.StandardButton.Ok,
+            )
+            if ref is None:
+                # Stopped before any result arrived, or a non-positive mean.
+                # The prompt above still matters — the operator should turn the
+                # laser off either way — but there is nothing to compare to.
+                logger.info("Laser-off check skipped — no measurement intensity "
+                            "to compare against")
+                return "laser-off check skipped, no reference intensity"
+
+            measured = self._measure_laser_off_intensity(mask)
+            if measured is None:
+                logger.warning("Laser-off check skipped — no frame arrived within %d ms",
+                               self._LASER_OFF_TIMEOUT_MS)
+                return "laser-off check skipped, no frame from the camera"
+
+            expected = (1.0 - self._LASER_OFF_DROP_FRACTION) * ref
+            if measured < expected:
+                logger.info("Laser-off check passed — %.1f DU < %.1f DU "
+                            "(reference %.1f DU over the last %.0f s)",
+                            measured, expected, ref, self._LASER_OFF_REF_SECONDS)
+                return None
+
+            logger.warning("Laser-off check FAILED — %.1f DU, expected < %.1f DU "
+                           "(reference %.1f DU)", measured, expected, ref)
+            # "Continue anyway?" — No means check again, never "discard the
+            # session". The frames are already recorded; refusing to save them
+            # would punish the operator for a laser switch. Escape also returns
+            # No, so only an explicit No re-runs the check, and the operator
+            # always has Yes as the way out.
+            reply = QMessageBox.question(
+                self,
+                "Laser May Still Be On",
+                f"Laser may still be on — mean intensity did not drop by 90 % "
+                f"(measured: {measured:.1f} DU, expected: < {expected:.1f} DU). "
+                f"Continue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                return (f"LASER-OFF CHECK FAILED — ⟨I⟩ {measured:.1f} DU, "
+                        f"expected < {expected:.1f} DU")
+            # No → give them another go at the laser and measure again.
+
     def _to_du(self, frame: np.ndarray) -> np.ndarray:
         """Convert a raw frame to the digital units `process()` computes in.
 
@@ -1433,6 +1659,15 @@ class MainWindow(QMainWindow):
         self._frames_seen += 1
         if self._frames_seen < self._skip_frames_until:
             return      # captured before the lighting changed — see _flush_stale_frames
+
+        # End-of-session laser-off check (E3): grab the first frame that
+        # survives the stale-frame guard above, i.e. the first one genuinely
+        # captured after the operator confirmed the laser was switched off.
+        # Copied because a real pypylon buffer is reused once this handler
+        # returns; gated by the flag so the copy costs nothing the rest of the
+        # time.
+        if self._awaiting_laser_off_frame and self._laser_off_frame is None:
+            self._laser_off_frame = frame.copy()
 
         # Default mask = whole frame when no ROI is set
         if self._mask is None or self._mask.shape != frame.shape:
@@ -1656,6 +1891,15 @@ class MainWindow(QMainWindow):
 
         self.lbl_kappa.setText(f"κ²   : {k2_corr:.5f}")
         self.lbl_bfi.setText(f"1/κ² : {bfi_raw:.2f}" if bfi_raw else "1/κ²: --")
+        # Reference for the end-of-session laser-off check. Kept trimmed to the
+        # trailing window so an hours-long recording does not accumulate a list
+        # of every result it ever produced.
+        self._intensity_history.append((t, mean_i))
+        cutoff = t - self._LASER_OFF_REF_SECONDS
+        if len(self._intensity_history) > 2 and self._intensity_history[0][0] < cutoff:
+            self._intensity_history = [
+                (ti, mi) for ti, mi in self._intensity_history if ti >= cutoff
+            ]
         if self._recorder is not None:
             self._recorder.append(t, k2_raw, k2_corr, mean_i)
 
