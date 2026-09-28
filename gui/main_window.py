@@ -859,6 +859,7 @@ class MainWindow(QMainWindow):
             logger.info("Session output folder: %s", self._session_folder)
         self._finalize_normalization()
         self._write_rbfi()
+        self._save_plot_figure()
         # Released so the next run creates its own folder rather than writing
         # into this one. The parent (_output_root) is kept, so the operator is
         # asked for a location only once per window. The status message is left
@@ -969,6 +970,38 @@ class MainWindow(QMainWindow):
             self._last_result_t, method, final, previous, previous_method,
             previous / final,
         )
+
+    # `session_tab` names this file `rBfi_fig.fig` — MATLAB's own figure format,
+    # which Python cannot write. PNG is the equivalent now that the tool is
+    # Python, and nothing is lost by it: `timeVec` and `rBFi` are in the
+    # results file beside it, so a real .fig can still be rebuilt in MATLAB
+    # from the same session. Pending confirmation (question 7 for the
+    # supervisor); changing the extension later is a one-line change.
+    FIGURE_FILENAME = "rBfi_fig.png"
+
+    def _save_plot_figure(self) -> None:
+        """Write the finished curve to a PNG beside the results file.
+
+        Runs at FINISHED, after `_finalize_normalization()` — so the figure
+        shows the curve against the constant that was actually saved, not the
+        provisional one it was drawn with while the session ran.
+
+        A figure is a convenience; the data is not. Every failure here is
+        logged and swallowed, because nothing about a missing PNG justifies
+        interrupting the close of a session whose HDF5 is already on disk.
+        """
+        if self._session_folder is None:
+            return
+        path = self._session_folder / self.FIGURE_FILENAME
+        try:
+            n = self.plot_widget.save_png(path)
+        except Exception:
+            logger.exception("Could not save the plot figure to %s", path)
+            return
+        if n == 0:
+            logger.info("No curve to save — figure not written")
+            return
+        logger.info("Plot figure saved — %d points → %s", n, path)
 
     def _write_rbfi(self) -> None:
         """Finalize the results file: rBFi plus the normalization fields.
@@ -1446,7 +1479,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     # Two of these encode decisions the supervisor has not answered yet
-    # (docs/questions_for_vika.md). Both are reasonable defaults, chosen so the
+    # (docs/open_questions.md). Both are reasonable defaults, chosen so the
     # check compares like with like, and both are one constant away from being
     # changed when she rules.
     #

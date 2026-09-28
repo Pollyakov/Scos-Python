@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 import pyqtgraph as pg
+import pyqtgraph.exporters          # noqa: F401  — registers pg.exporters
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton
 from PyQt6.QtCore import QTimer, pyqtSignal
 
@@ -120,6 +121,26 @@ class PlotWidget(QWidget):
         self._use_minutes = False
         self.graph.setLabel('bottom', 'Time', units='s')
         self.curve.setData([], [])
+
+    def save_png(self, path: "str | Path", width: int = 1600) -> int:
+        """Write the curve to `path` as a PNG. Returns the number of points drawn.
+
+        Rendered from the plot item rather than the whole widget, so the Reset
+        button does not appear in the saved figure. The width is fixed instead
+        of taken from the window: the file should look the same whether the
+        operator had the window maximised or tucked into a corner.
+
+        Returns 0 and writes nothing when there is no curve to save. Anything
+        else that goes wrong raises — the caller decides whether a failed
+        figure should be allowed to affect the session.
+        """
+        if not self._bfi:
+            return 0
+        self.render_now()                     # draw whatever is still buffered
+        exporter = pg.exporters.ImageExporter(self.graph.plotItem)
+        exporter.parameters()["width"] = int(width)
+        exporter.export(str(path))
+        return len(self._bfi)
 
     def get_data(self) -> tuple[np.ndarray, np.ndarray]:
         """Plotted data, time in **seconds**.
