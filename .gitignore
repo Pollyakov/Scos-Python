@@ -11,6 +11,10 @@ __pycache__/
 Records/
 scratch/
 
+# Rewritten from scratch on every launch (main.py opens it with mode="w"), so
+# it only ever describes the last run on one machine.
+app.log
+
 # Claude Code memory
 .claude/
 
