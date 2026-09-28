@@ -265,3 +265,52 @@ class TestMainWindowDrivesTheSwitch:
         finally:
             w.close()
 
+
+class TestRoiFromMaskMat:
+    """The ROI circle stored alongside a recording.
+
+    MATLAB's `imfindcircles` returns centers as [x y]. Reading them as [y x]
+    put the circle at (684, 1215) on a 1216-row frame — centred on the bottom
+    edge — and the mask generated from it overwrites `totMask` through the
+    `roi_changed` signal, so every κ² in a replayed session was computed over
+    roughly the wrong half of the sensor.
+
+    Measured on the lab recording: the swapped reading agrees with `totMask`
+    on 49.4 % of pixels, the correct one on 99.3 %.
+    """
+
+    def test_centers_are_read_as_x_then_y(self, tmp_path, monkeypatch):
+        import scipy.io
+
+        h, w = 40, 60
+        cx, cy, r = 45.0, 12.0, 15.0          # clearly not interchangeable
+        yy, xx = np.ogrid[:h, :w]
+        tot = (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r
+
+        mask_mat = tmp_path / "Mask.mat"
+        scipy.io.savemat(str(mask_mat), {
+            "totMask": tot.astype(np.uint8),
+            "channels": {"Centers": np.array([[cx, cy]]),
+                         "Radii":   np.array([[r]])},
+        })
+
+        monkeypatch.setattr(QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+        w_ = MainWindow(camera=_StubCamera())
+        try:
+            # A frame has to be on screen, or the widget cannot turn a circle
+            # into a mask and emits nothing.
+            w_.image_widget.update_frame(np.zeros((h, w), dtype=np.uint16))
+            w_._pending_mask_mat = mask_mat
+            w_._on_calibration_done(True, "test")
+
+            assert w_._roi_circ["cx"] == pytest.approx(cx)
+            assert w_._roi_circ["cy"] == pytest.approx(cy)
+            # And the mask the circle produces must be the one the file meant.
+            agreement = float((w_._mask == tot).mean())
+            assert agreement > 0.98, (
+                f"circle-derived mask agrees with totMask on only "
+                f"{agreement*100:.1f} % of pixels"
+            )
+        finally:
+            w_.close()

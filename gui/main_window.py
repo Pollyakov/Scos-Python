@@ -1910,12 +1910,21 @@ class MainWindow(QMainWindow):
                     self.processor.set_roi(self._mask)
                 if "channels" in mat:
                     ch = mat["channels"][0, 0]
-                    cy = float(ch["Centers"][0, 0])
-                    cx = float(ch["Centers"][0, 1])
+                    # MATLAB's imfindcircles returns centers as [x y], so the
+                    # first column is cx. Reading it the other way round put
+                    # the circle at (684, 1215) — centred on the bottom edge of
+                    # a 1216-row frame — and the mask it generates then
+                    # overwrites totMask through the roi_changed signal.
+                    # Measured on this recording: the swapped reading agrees
+                    # with totMask on 49.4 % of pixels, the correct one on
+                    # 99.3 %. Every kappa^2 in a replayed session was computed
+                    # over roughly the wrong half of the sensor.
+                    cx = float(ch["Centers"][0, 0])
+                    cy = float(ch["Centers"][0, 1])
                     r  = float(ch["Radii"][0, 0])
                     self.image_widget.set_roi_circle(cx, cy, r)
             except Exception:
-                pass
+                logger.exception("Could not apply the ROI from %s", mask_mat)
 
         self._calib_label.setText(f"Cal OK — {msg}")
 

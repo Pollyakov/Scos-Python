@@ -203,6 +203,15 @@ accuracy check. Also note `MainWindow._to_du()`: the Pylon-Viewer TIFFs store 10
 left-justified in uint16, so a frame must be divided by `processor.scale` before any
 calibration array is built from it.
 
+IMPORTANT: `Mask.mat`'s `channels.Centers` is **[x y]**, as MATLAB's `imfindcircles`
+returns it. Reading it as [y x] — which the code did until 2026-09-28 — placed the ROI
+circle at (684, 1215) on a 1216-row frame, centred on the bottom edge. The mask that
+circle generates then replaces `totMask` through the `roi_changed` signal, so every κ² in
+a replayed session was computed over roughly the wrong half of the sensor. Measured on the
+lab recording: the swapped reading agrees with `totMask` on 49.4 % of pixels, the correct
+one on 99.3 %. Real-camera sessions are unaffected — there is no `Mask.mat` and the
+operator sets the ROI in the GUI.
+
 ## Future Protocol Design
 
 The full target measurement protocol (multi-phase calibration with dark + bright frames, ROI shrink, `var_bright` noise term, rBFi normalization, recording-length limits, etc.) is documented in [docs/SCOS_protocol.md](docs/SCOS_protocol.md). The current code implements only a subset — assume features described there are NOT yet present unless this CLAUDE.md says otherwise.
