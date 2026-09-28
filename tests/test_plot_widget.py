@@ -38,7 +38,7 @@ class TestPlotWidget:
         widget.append(60.0, 20.0)  # 60 seconds, BFI=20 (= 1/κ² where κ²=0.05)
         t, bfi = widget.get_data()
         assert len(t) == 1
-        assert t[0] == pytest.approx(1.0)  # 60s → 1 minute
+        assert t[0] == pytest.approx(60.0)
         assert bfi[0] == pytest.approx(20.0)
 
     def test_append_skips_zero_bfi(self, widget):
@@ -61,11 +61,17 @@ class TestPlotWidget:
         assert len(t) == 5
         assert len(bfi) == 5
 
-    def test_time_converted_to_minutes(self, widget):
-        """Time is stored in minutes, not seconds."""
+    def test_time_stored_in_seconds(self, widget):
+        """Time is stored in seconds.
+
+        It used to be stored in minutes, because minutes were the only unit
+        the widget could draw. Task 10 made the axis unit depend on the
+        recording's length, so the conversion moved to render time and the
+        stored data stayed in the unit it arrives in.
+        """
         widget.append(120.0, 20.0)
         t, _ = widget.get_data()
-        assert t[0] == pytest.approx(2.0)  # 120s = 2 min
+        assert t[0] == pytest.approx(120.0)
 
     def test_reset_clears_data(self, widget):
         """reset() removes all accumulated data."""

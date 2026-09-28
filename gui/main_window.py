@@ -25,7 +25,9 @@ import scipy.io
 
 from camera    import CameraThread
 from processor import SCOSProcessor, GainTableError, shrink_mask_for_window
-from core.session   import BrightCalCollector, DarkCalCollector, State
+from core.session   import (BrightCalCollector, DarkCalCollector, State,
+                            NORM_METHOD_MEAN, NORM_METHOD_PERCENTILE,
+                            choose_norm_method, normalization_constant)
 from core.recorder  import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
 from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
@@ -111,10 +113,15 @@ class MainWindow(QMainWindow):
         # Session state machine
         self._state:           State       = State.IDLE
         self._bfi_norm:        float | None = None              # mean BFI over baseline window
-        # How that constant was actually produced, for Params.normalizationMethod.
-        # Not the same as _norm_type, which is the mode picked in the GUI: the
-        # "pulsation" mode still falls back to the mean until task 10 lands.
-        self._bfi_norm_method: str          = "mean"
+        # How that constant was actually produced, for Params.normalizationMethod
+        # — NORM_METHOD_MEAN or NORM_METHOD_PERCENTILE. Not the same as
+        # _norm_type, which is the mode the operator picked in the GUI: in the
+        # default "seconds" mode the recording's length decides, so the method
+        # is not known until the run ends (see _finalize_normalization).
+        self._bfi_norm_method: str          = NORM_METHOD_MEAN
+        # Last timestamp seen in this run. This is `timeVec(end)` in the
+        # reference, and it decides mean vs percentile at close.
+        self._last_result_t:   float        = 0.0
         self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
         # Guard against a measurement that can never start because every
         # corrected kappa^2 is <= 0 (see _abort_on_invalid_k2).
@@ -812,6 +819,7 @@ class MainWindow(QMainWindow):
         logger.info("Session finished — state FINISHED")
         if self._session_folder is not None:
             logger.info("Session output folder: %s", self._session_folder)
+        self._finalize_normalization()
         self._write_rbfi()
         # Released so the next run creates its own folder rather than writing
         # into this one. The parent (_output_root) is kept, so the operator is
@@ -860,6 +868,69 @@ class MainWindow(QMainWindow):
         }
         self._recorder = HDF5Recorder(path, meta, params)
         self.status.showMessage(f"Recording → {path}")
+
+    def _finalize_normalization(self) -> None:
+        """Re-pick the baseline statistic now that the recording's length is known.
+
+        Worklist task 10. The reference script decides between the mean and the
+        5th percentile of the baseline window on `timeVec(end) > 120`, which it
+        can do because it normalizes once, offline, after everything is
+        recorded. Here the curve has to be drawn live, so a provisional
+        constant is computed the moment the window closes and corrected here.
+
+        Only the divisor changes: the window is the same first `norm_seconds`
+        of the recording either way, and `_bfi_norm_buffer` still holds it.
+        Nothing is recomputed from the frames.
+
+        The plot is rescaled rather than redrawn. What was plotted is
+        `bfi / provisional`; multiplying by `provisional / final` turns it into
+        `bfi / final` with one pass over a list that is already in memory,
+        which matters for a multi-hour recording.
+        """
+        # Whatever else happens below, the session ends with the curve fully
+        # drawn: up to a second of points can still be sitting in the plot's
+        # buffer, and task 12 saves this figure to a file.
+        self.plot_widget.render_now()
+
+        if not self._bfi_norm or not self._bfi_norm_buffer:
+            return                      # never normalized; _write_rbfi says so
+
+        method = choose_norm_method(
+            duration_s       = self._last_result_t,
+            force_percentile = self._norm_type == "pulsation",
+        )
+        if method == self._bfi_norm_method:
+            logger.info(
+                "Recording is %.1f s — normalization stays %s, constant %.6g",
+                self._last_result_t, method, self._bfi_norm,
+            )
+            return
+
+        previous        = self._bfi_norm
+        previous_method = self._bfi_norm_method
+        try:
+            final = normalization_constant(
+                [b for _, b in self._bfi_norm_buffer], method)
+        except ValueError:
+            # Cannot happen if `previous` was computed from the same values,
+            # but a bad constant here would divide the whole results file.
+            logger.exception("Could not re-compute the normalization constant; "
+                             "keeping %s = %.6g", self._bfi_norm_method, previous)
+            return
+        if not final or not np.isfinite(final):
+            logger.error("Re-computed constant is %r — keeping %s = %.6g",
+                         final, self._bfi_norm_method, previous)
+            return
+
+        self._bfi_norm        = final
+        self._bfi_norm_method = method
+        self.plot_widget.rescale(previous / final)
+        logger.info(
+            "Recording is %.1f s — normalization switched to %s: "
+            "constant %.6g (was %.6g by %s), plot rescaled by %.6g",
+            self._last_result_t, method, final, previous, previous_method,
+            previous / final,
+        )
 
     def _write_rbfi(self) -> None:
         """Finalize the results file: rBFi plus the normalization fields.
@@ -1129,8 +1200,9 @@ class MainWindow(QMainWindow):
         logger.info("Starting SCOS measurement after calibration")
         self._start_time          = time.time()
         self._bfi_norm            = None
-        self._bfi_norm_method     = "mean"
+        self._bfi_norm_method     = NORM_METHOD_MEAN
         self._bfi_norm_buffer     = []
+        self._last_result_t       = 0.0
         self._n_invalid_k2        = 0
         self._invalid_k2_reported = False
         self._measuring_start_time = None  # set later when normalization ends
@@ -1455,6 +1527,8 @@ class MainWindow(QMainWindow):
                 self._time_left_label.setText(f"⏱ {mins}:{secs:02d} remaining")
                 self._time_left_label.show()
 
+        self._last_result_t = t
+
         bfi_raw = 1.0 / k2_corr if k2_corr > 0 else None
         if bfi_raw is None and self._state == State.MEASURING_INIT:
             if self._abort_on_invalid_k2(t):
@@ -1468,14 +1542,22 @@ class MainWindow(QMainWindow):
                     f"Normalizing — {t:.1f} / {self._norm_seconds:.0f} s  ({remaining:.1f} s left)"
                 )
                 if t >= self._norm_seconds and self._bfi_norm_buffer:
-                    if self._norm_type == "pulsation":
-                        logger.info(
-                            "Pulsation lower level normalization not yet implemented — "
-                            "falling back to mean of first %.0f s", self._norm_seconds
-                        )
+                    # Provisional constant. Which statistic is correct depends
+                    # on how long the recording turns out to be, and it has
+                    # barely started — so unless the operator forced the
+                    # percentile, assume the long-recording rule for now and
+                    # let _finalize_normalization() correct it at the end.
+                    self._bfi_norm_method = (
+                        NORM_METHOD_PERCENTILE if self._norm_type == "pulsation"
+                        else NORM_METHOD_MEAN)
                     bfi_values = [b for _, b in self._bfi_norm_buffer]
-                    self._bfi_norm             = float(np.mean(bfi_values))
-                    self._bfi_norm_method      = "mean"
+                    self._bfi_norm = normalization_constant(
+                        bfi_values, self._bfi_norm_method)
+                    logger.info(
+                        "Normalization window closed at %.1f s — provisional "
+                        "constant %.6g by %s over %d points",
+                        t, self._bfi_norm, self._bfi_norm_method, len(bfi_values),
+                    )
                     self._measuring_start_time = time.time()   # timer starts here
                     # Add normalization window to plot retroactively, already normalized
                     for t_buf, bfi_buf in self._bfi_norm_buffer:
@@ -1758,17 +1840,26 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        # The plot holds rBFi — BFi already divided by the normalization
+        # constant — so 1/plotted is not κ². Undo the division to get the
+        # corrected κ² this key is documented to carry (CLAUDE.md, "Save
+        # format"). Before normalization completes there is no constant and
+        # the plotted values are raw BFi, so 1/plotted is κ² as it stands.
         t, bfi = self.plot_widget.get_data()
+        k2_corr = 1.0 / (bfi * self._bfi_norm) if self._bfi_norm else 1.0 / bfi
         if path.endswith(".mat"):
             scipy.io.savemat(path, {
-                "scosTime": t,
-                "scosData": 1.0 / bfi,   # save κ² to match MATLAB convention
+                "scosTime": t,           # seconds, matching MATLAB's timeVec
+                "scosData": k2_corr,     # corrected κ², per MATLAB convention
+                "rBFi": bfi,             # what was plotted
+                "normalizationConstant": float(self._bfi_norm or 0.0),
                 "frameRate": self.spn_fps.value(),
                 "exposureTime": self.spn_exposure.value(),
                 "Gain": self.spn_gain.value(),
             })
         else:
-            np.savez(path, scosTime=t, BFI=bfi,
+            np.savez(path, scosTime=t, BFI=bfi, scosData=k2_corr,
+                     normalizationConstant=float(self._bfi_norm or 0.0),
                      frameRate=self.spn_fps.value(),
                      exposureTime=self.spn_exposure.value(),
                      gain=self.spn_gain.value())

@@ -58,7 +58,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 |---|---|---|
 | 8 | One session folder + real FINISHED transition | ✅ Done — see note in task 8 |
 | 9 | Save the real result in the required schema | ✅ Done — see note in task 9 |
-| 10 | Short-vs-long normalization (E1) | ⬜ Not started |
+| 10 | Short-vs-long normalization (E1) | ✅ Done — see note in task 10 |
 | 11 | End-of-session laser popup + intensity check (E3) | ⬜ Not started |
 | 12 | Save plot figure at end of session (E4) | ⬜ Not started |
 | 13 | Tag version 0 (E5) | ⬜ Not started |
@@ -615,7 +615,7 @@ not just the recorder. Suite 236 fast tests + 4 offline MATLAB.
 
 ---
 
-### 10. Short-vs-long normalization (E1)
+### 10. Short-vs-long normalization (E1) — ✅ DONE
 
 - **Goal:** At FINISHED, recordings ≤ 120 s use the **5th percentile** of the first N
   seconds as baseline; longer ones keep the **mean**. Rescale what was plotted and save
@@ -656,6 +656,57 @@ answers it directly, in the supervisor's own words: *"The number of seconds for
 normalization are defined by the user in the GUI as we discussed."* The configurable
 spinbox is the intended design; the hardcoded 10 s was specific to the older script, not
 a spec requirement. No change needed to the existing `spn_norm_seconds` GUI control.
+
+**Done 2026-09-28.** The rules live in `core/session.py` as two pure functions:
+`choose_norm_method(duration_s, force_percentile)` and
+`normalization_constant(values, method)`. Nothing numerical moved into the GUI.
+
+Three points the reference does not settle were decided with the user that day, and are
+provisional until Vika answers questions 10 and 11 in `docs/questions_for_vika.md`:
+
+  * **Total duration decides.** `timeVec(end)` is the whole recording, baseline window
+    included — not the time remaining after normalization. (Question 10.)
+  * **The window is the first `norm_seconds`**, from the GUI spinbox. MATLAB hardcodes
+    `round(10*frameRate)`; `docs/session_tab` says the operator chooses, and that wins.
+  * **"Pulsation lower level" forces the percentile** at any recording length. The
+    automatic duration rule applies only in the default "Number of seconds" mode.
+
+A recording that stops before the window closes still produces no `rBFi` at all — the
+existing behaviour, and question 11 is exactly about whether that is right.
+
+**MATLAB's `prctile` is not numpy's default percentile.** It interpolates linearly between
+sorted values placed at (i−0.5)/n — numpy's `method="hazen"`. numpy defaults to
+(i−1)/(n−1). On `[1,2,3,4]` the 5th percentile is 1.0 by MATLAB and 1.15 by the default.
+That constant divides every point in the results file, so the wrong convention would have
+put a systematic offset into the very comparison this task exists to make correct.
+
+**The constant is computed twice, on purpose.** The curve is drawn live, so something has
+to normalize it before the recording's length is known. When the baseline window closes,
+`_on_scos_result` computes a provisional constant — the percentile if the operator forced
+it, otherwise the mean. At FINISHED, `_finalize_normalization()` re-picks the method from
+the real duration and, if it changed, recomputes from the same buffered window and rescales
+the plot by `provisional / final`. The window is never re-collected and no frame is
+reprocessed; only the divisor changes.
+
+`gui/plot_widget.py` also gained the axis half of the reference: it stores seconds and
+converts at render time, switching the label from `s` to `min` the moment the recording
+passes 120 s. It used to divide by 60 unconditionally and label everything `min` — wrong
+for short recordings, as noted above. `get_data()` therefore returns seconds now, which
+changes `scosTime` in the manual .mat/.npz export to seconds as well; that matches
+MATLAB's `timeVec` and the HDF5 `timeVec` the recorder already wrote.
+
+Two adjacent bugs surfaced while doing this and are fixed in the same change. `_save_data()`
+wrote `1.0 / bfi` under `scosData`, a key documented as corrected κ² — but the plot holds
+rBFi, so the export was off by the normalization constant; it now divides the constant back
+out, and also writes `rBFi` and `normalizationConstant` so nothing is implicit. And
+`_finalize_normalization()` now calls `plot_widget.render_now()` on every path: the curve is
+redrawn once a second, so a session could end with up to a second of points unrendered, which
+task 12 (save the figure) would then capture.
+
+Verified by `tests/test_normalization.py` (35 tests), including six mutation checks: numpy's
+percentile in place of MATLAB's, `>=` in place of `>` at the 120 s threshold, the pulsation
+override removed, the finalizer not called at close, `scosData` reverted to `1/rBFi`, and the
+final render removed — each one caught. Full suite 280/280 fast, 4/4 slow.
 
 ---
 

@@ -41,6 +41,72 @@ class SessionConfig:
     image_update_s:     float = 2.5   # live-image refresh during MEASURING (protocol)
 
 
+# ---------------------------------------------------------------------------
+# rBFi normalization (worklist task 10 / todo E1)
+# ---------------------------------------------------------------------------
+
+# A recording longer than this is normalized by the mean of its baseline
+# window; a shorter one by the 5th percentile. Straight from the MATLAB
+# reference, SCOSvsTime_WithNoiseSubtraction_Ver2.m:498-514:
+#
+#     if timeVec(end) > 120
+#         rBFi = BFi/mean(  BFi(1:round(10*frameRate)));
+#     else
+#         rBFi = BFi/prctile(BFi(1:round(10*frameRate)), 5);
+#     end
+#
+# The reason is physiological. Over a short recording the baseline window is
+# only a few heartbeats long, so its mean sits somewhere in the middle of the
+# pulsation and depends on which part of the cardiac cycle happened to be
+# captured. The 5th percentile tracks the diastolic floor instead, which is
+# stable. Over a long recording the window averages many cycles, the mean is
+# steady, and it is the less noisy of the two.
+NORM_LONG_RECORDING_S = 120.0
+NORM_PERCENTILE       = 5.0
+
+NORM_METHOD_MEAN       = "mean"
+NORM_METHOD_PERCENTILE = "percentile5"
+
+
+def choose_norm_method(duration_s: float, force_percentile: bool = False) -> str:
+    """Pick the baseline statistic for a recording of this total length.
+
+    `duration_s` is the whole recording — the last timestamp in `timeVec`,
+    which is what `timeVec(end)` means in the reference. The baseline window
+    is part of it, not subtracted from it.
+
+    `force_percentile` is the GUI's "Pulsation lower level" mode: the operator
+    has said explicitly that they want the diastolic floor, and that overrides
+    the automatic choice however long the recording turns out to be.
+    """
+    if force_percentile:
+        return NORM_METHOD_PERCENTILE
+    return (NORM_METHOD_MEAN if duration_s > NORM_LONG_RECORDING_S
+            else NORM_METHOD_PERCENTILE)
+
+
+def normalization_constant(bfi_values, method: str) -> float:
+    """Reduce the baseline window's BFi values to the single rBFi divisor.
+
+    The percentile uses numpy's "hazen" method, not its default. MATLAB's
+    `prctile` interpolates linearly between the sorted values placed at
+    (i - 0.5) / n, which is exactly Hazen; numpy defaults to (i - 1) / (n - 1)
+    and gives a different answer on the same data. On [1, 2, 3, 4] the 5th
+    percentile is 1.0 by MATLAB and Hazen but 1.15 by numpy's default — and
+    this number divides every point in the results file, so the discrepancy
+    would show up in the very comparison against MATLAB this exists for.
+    """
+    arr = np.asarray(list(bfi_values), dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        raise ValueError("no finite BFi values in the normalization window")
+    if method == NORM_METHOD_PERCENTILE:
+        return float(np.percentile(arr, NORM_PERCENTILE, method="hazen"))
+    if method == NORM_METHOD_MEAN:
+        return float(np.mean(arr))
+    raise ValueError(f"unknown normalization method {method!r}")
+
+
 class DarkCalCollector:
     """
     Online per-pixel mean and variance using Welford's algorithm.
