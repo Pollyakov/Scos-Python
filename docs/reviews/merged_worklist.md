@@ -569,7 +569,7 @@ builds the close-time write path, #10 supplies the number that path writes.*
 the live plot and was lost on exit.
 
 **Status — done, 2026-09-23.** All six schema questions were answered by the supervisor on
-2026-09-23 (see `docs/questions_for_vika.md`), which is what unblocked this.
+2026-09-23 (see `docs/open_questions.md`), which is what unblocked this.
 
 - `rBfi_results.h5` (her spelling, from `session_tab`) now holds `startTime`, `timeVec`,
   `rBFi`, `Intensity` and a `Params` group. `k2_raw`, `k2_corr` and the un-normalized `bfi`
@@ -662,7 +662,7 @@ a spec requirement. No change needed to the existing `spn_norm_seconds` GUI cont
 `normalization_constant(values, method)`. Nothing numerical moved into the GUI.
 
 Three points the reference does not settle were decided with the user that day, and are
-provisional until Vika answers questions 10 and 11 in `docs/questions_for_vika.md`:
+provisional until Vika answers questions 10 and 11 in `docs/open_questions.md`:
 
   * **Total duration decides.** `timeVec(end)` is the whole recording, baseline window
     included — not the time remaining after normalization. (Question 10.)
@@ -745,7 +745,7 @@ Three decisions were not in the spec and are worth recording:
   — it just re-prompts — whereas under a discard reading it would destroy a session.
 
 Both open questions to the supervisor (ROI vs whole frame; last value vs trailing mean) are
-answered by default and logged as such in `docs/questions_for_vika.md` §8/§9, one constant
+answered by default and logged as such in `docs/open_questions.md` §8/§9, one constant
 each (`_LASER_OFF_DROP_FRACTION`, `_LASER_OFF_REF_SECONDS`) from being changed.
 
 Two things that would otherwise have looked like bugs at the rig: the check calls

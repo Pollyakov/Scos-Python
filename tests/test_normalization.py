@@ -21,7 +21,7 @@ Three decisions were taken on 2026-09-28 where the port had a choice:
     The automatic rule applies only in the default "Number of seconds" mode.
 
 Whether those match what Vika wants is still open (questions 10 and 11 in
-docs/questions_for_vika.md); the reference is what we follow until she answers.
+docs/open_questions.md); the reference is what we follow until she answers.
 
 MATLAB's `prctile` is not numpy's default percentile, and the difference lands
 directly in the divisor of every point in the results file — so it is tested

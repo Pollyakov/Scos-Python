@@ -13,3 +13,8 @@ scratch/
 
 # Claude Code memory
 .claude/
+
+# Personal working notes, not project documentation. questions_for_vika.md was
+# committed by accident on 2026-09-28 and had to be renamed and cleaned up;
+# this is here so the same cannot happen to the editing log.
+docs/english_editing_log.md

@@ -1,13 +1,14 @@
-# Questions for Vika
+# Open decisions pending the supervisor
 
 Compiled 2026-09-07. Decisions that need the supervisor's input before the corresponding work
-can be built correctly.
+can be built correctly. Where work could not wait, it was built against the MATLAB reference
+and the decision is marked provisional — each of those is a constant or a one-line change.
 
 **Sources:** `docs/reviews/merged_worklist.md` (Questions Q2–Q6), `docs/Implementation_Plan.md`
 §9 ("Open questions to resolve in Phase 1"), and ambiguities in `docs/session_tab` itself.
 
 **Status 2026-09-23: questions 1–6 are all answered** — see "Answered" at the bottom. The
-results-file schema (worklist task 9) is therefore unblocked, with one new ambiguity that her
+results-file schema (worklist task 9) is therefore unblocked, with one new ambiguity that the
 answer to 4 created: see question 16. Questions 7–15 are wanted but not urgent.
 
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
@@ -23,8 +24,8 @@ internal engineering decision, not a scientific or spec one.
 > `gui/main_window.py`. Tests: `tests/test_laser_off_check.py`.
 
 **7. Figure format.** `session_tab` asks for `rBfi_fig.fig`, but `.fig` is MATLAB-native and
-Python cannot write it. Is `.png` acceptable? (We can additionally save the raw plot arrays
-so you can rebuild a real `.fig` in MATLAB if you want one.)
+Python cannot write it. Is `.png` acceptable? (`timeVec` and `rBFi` are written to `rBfi_results.h5` in the same folder, so a real
+`.fig` can still be rebuilt in MATLAB from the same session.)
 
 **8. The 90 % intensity check.** "Average intensity of the picture" — whole frame, or ROI
 only? And compared against which baseline: the single last measurement value, or the mean
@@ -60,7 +61,7 @@ continue? (Assumed: warn with "Continue anyway?" and continue.)
 > these. Question 10 was answered provisionally as *total duration, baseline window included*
 > (`timeVec(end)`, exactly as in the reference). Question 11 keeps the existing behaviour: a
 > recording that stops before the window closes gets no `rBFi` at all. Both are one-line
-> changes if she answers differently — the rules are pure functions in `core/session.py`.
+> changes if the answer differs — the rules are pure functions in `core/session.py`.
 
 **10. The 120 s short/long threshold** — measured on the total recording duration including
 the normalization window, or on the time remaining after it?
@@ -91,7 +92,7 @@ fixed baseline, use rolling re-normalization, or save raw BFi and normalize offl
 
 ## E. New — raised by the answers of 2026-09-23
 
-**16. One calibration file, or two?** Your answer to question 4 says to remove the embedded
+**16. One calibration file, or two?** The answer to question 4 says to remove the embedded
 calibration group and write *"one separate file with 2 kinds of calibrations — dark and
 bright"*. But `docs/session_tab` lists the session folder as containing **two** files,
 `DarkCalibration.h5` **and** `BrightCalibration.h5`, and worklist task 9 was written against
