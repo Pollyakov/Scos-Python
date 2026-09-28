@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import time
 import warnings
 from pathlib import Path
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QGroupBox, QLabel, QDoubleSpinBox, QSpinBox,
+    QGroupBox, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox,
     QPushButton, QCheckBox, QComboBox, QSplitter,
     QStatusBar, QFileDialog, QMessageBox
 )
@@ -259,6 +260,22 @@ class MainWindow(QMainWindow):
         scos_layout = QVBoxLayout(self.scos_group)
         scos_layout.setSpacing(2)
         scos_layout.setContentsMargins(4, 8, 4, 4)
+
+        # First in the box because it is the first thing the protocol asks
+        # for (SCOS_protocol.md:13) and the first thing an operator setting up
+        # a subject wants to fill in.
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.addWidget(QLabel("Recording name:"))
+        self.txt_recording_name = QLineEdit()
+        self.txt_recording_name.setPlaceholderText("optional — e.g. subject03_rest")
+        self.txt_recording_name.setToolTip(
+            "Prefix for this session's folder. A timestamp is always appended, "
+            "so two runs with the same name never collide.\n"
+            "Left empty, the folder is named scos_<date>_<time>."
+        )
+        name_row.addWidget(self.txt_recording_name)
+        scos_layout.addLayout(name_row)
 
         self.spn_window = self._labeled_int_spin(
             scos_layout, "Window Size:", 3, 51, 7, step=2
@@ -700,6 +717,7 @@ class MainWindow(QMainWindow):
     def _set_params_enabled(self, enabled: bool) -> None:
         """Lock / unlock all Camera and SCOS parameter inputs during a session."""
         for widget in (
+            self.txt_recording_name,
             self.cmb_format,
             self.spn_exposure,
             self.spn_gain,
@@ -1044,33 +1062,47 @@ class MainWindow(QMainWindow):
     # Dark calibration
     # ------------------------------------------------------------------
 
+    # Windows rejects these outright; the control characters and the trailing
+    # dot or space are the ones that produce a folder you cannot delete.
+    _ILLEGAL_IN_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+    _NAME_MAX_CHARS  = 64
+
+    def _session_folder_name(self) -> str:
+        """Folder name for this run: the operator's name plus a timestamp.
+
+        The timestamp is not optional. `SCOS_protocol.md:13` says to create a
+        folder per recording, and a name alone would let a second run with the
+        same subject either fail or overwrite the first. With it, repeating a
+        name is harmless.
+
+        Whatever is typed is sanitised rather than rejected: an operator
+        halfway through setting up a subject should not be stopped by a colon.
+        """
+        ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = self.txt_recording_name.text().strip()
+        name = self._ILLEGAL_IN_NAME.sub("_", name)
+        name = re.sub(r"\s+", "_", name).strip("._ ")[:self._NAME_MAX_CHARS]
+        return f"{name}_{ts}" if name else f"scos_{ts}"
+
     def _start_dark_cal(self):
         """
         Step 1 of the automatic calibration sequence (triggered by Start SCOS):
-          1. Prompt to turn off the laser.
-          2. Prompt for an output folder (remembered for the session).
+          1. Ask where to save, and create this run's folder.
+          2. Prompt to turn off the laser.
           3. Switch camera to internal trigger (no Arduino upload side-effect).
           4. Collect N1 frames via frame_ready → _on_scos_frame.
           5. _finish_dark_cal() fires automatically when N1 frames are in.
-        """
-        # Step 1: ask user to turn off the laser
-        reply = QMessageBox.question(
-            self,
-            "Calibration — Step 1 of 2: Dark Frames",
-            "Please turn off the laser.\n\n"
-            "Click OK when the laser is off and the measurement area is dark.",
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-        )
-        if reply != QMessageBox.StandardButton.Ok:
-            # User cancelled — revert Start SCOS button
-            self.btn_start_scos.blockSignals(True)
-            self.btn_start_scos.setChecked(False)
-            self.btn_start_scos.setText("Start SCOS")
-            self.btn_start_scos.blockSignals(False)
-            self.btn_save.setEnabled(True)
-            return
 
-        # Step 2: choose (or reuse) the parent folder, then create this run's
+        Steps 1 and 2 are in that order because the protocol puts them in it:
+        `SCOS_protocol.md:11-17` reads G[DU/e] from the table, then "Ask for
+        recording name and location. Create appropriate folder.", and only
+        then the "Please turn off the Laser" pop-up. `docs/session_tab` says
+        the same in other words — saving is arranged "at the very beginning of
+        the session". It also matters in the room: everything done at the
+        keyboard should happen before the lights go out, not while the
+        operator is standing in the dark hunting for a folder.
+        """
+        # Step 1: choose (or reuse) the parent folder, then create this run's
         # session folder inside it. Everything this session produces —
         # calibration, results, figure — goes in there and nowhere else, so a
         # second run can never mix its files into the first run's output.
@@ -1083,16 +1115,11 @@ class MainWindow(QMainWindow):
                 self, "Choose folder to save this session's results"
             )
             if not folder:
-                self.btn_start_scos.blockSignals(True)
-                self.btn_start_scos.setChecked(False)
-                self.btn_start_scos.setText("Start SCOS")
-                self.btn_start_scos.blockSignals(False)
-                self.btn_save.setEnabled(True)
+                self._reset_start_button()
                 return
             self._output_root = Path(folder)
 
-        session_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_folder = self._output_root / f"scos_{session_ts}"
+        session_folder = self._output_root / self._session_folder_name()
         try:
             session_folder.mkdir(parents=True, exist_ok=False)
         except OSError as exc:
@@ -1110,6 +1137,27 @@ class MainWindow(QMainWindow):
         self._session_folder = session_folder
         logger.info("Session folder created: %s", session_folder)
         self.status.showMessage(f"Session folder: {session_folder}")
+
+        # Step 2: ask user to turn off the laser
+        reply = QMessageBox.question(
+            self,
+            "Calibration — Step 1 of 2: Dark Frames",
+            "Please turn off the laser.\n\n"
+            "Click OK when the laser is off and the measurement area is dark.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Ok:
+            # The folder exists by now and nothing was ever written to it.
+            # rmdir only removes an empty directory, so a folder that somehow
+            # already has something in it is left alone rather than deleted.
+            try:
+                session_folder.rmdir()
+                logger.info("Run cancelled — removed empty %s", session_folder)
+            except OSError:
+                logger.warning("Run cancelled — left %s in place", session_folder)
+            self._session_folder = None
+            self._reset_start_button()
+            return
 
         # Step 3: disable external trigger without triggering Arduino upload
         self._dark_cal_trigger_was_on = self.chk_trigger.isChecked()

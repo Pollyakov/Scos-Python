@@ -212,6 +212,13 @@ lab recording: the swapped reading agrees with `totMask` on 49.4 % of pixels, th
 one on 99.3 %. Real-camera sessions are unaffected — there is no `Mask.mat` and the
 operator sets the ROI in the GUI.
 
+IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
+part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder
+(created there and then, named from the **Recording name** field plus a timestamp), and
+only then "Please turn off the laser". Anything that needs the keyboard happens before the
+room goes dark. `tests/test_recording_name.py` asserts the order by recording which dialog
+opens first — don't reorder them to make a code path tidier.
+
 ## Future Protocol Design
 
 The full target measurement protocol (multi-phase calibration with dark + bright frames, ROI shrink, `var_bright` noise term, rBFi normalization, recording-length limits, etc.) is documented in [docs/SCOS_protocol.md](docs/SCOS_protocol.md). The current code implements only a subset — assume features described there are NOT yet present unless this CLAUDE.md says otherwise.
