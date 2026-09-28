@@ -116,6 +116,10 @@ class MainWindow(QMainWindow):
         # "pulsation" mode still falls back to the mean until task 10 lands.
         self._bfi_norm_method: str          = "mean"
         self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
+        # Guard against a measurement that can never start because every
+        # corrected kappa^2 is <= 0 (see _abort_on_invalid_k2).
+        self._n_invalid_k2:        int  = 0
+        self._invalid_k2_reported: bool = False
         self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
         self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
         self._measurement_duration_s: float       = float('inf') # ∞ = run until Stop SCOS
@@ -1127,6 +1131,8 @@ class MainWindow(QMainWindow):
         self._bfi_norm            = None
         self._bfi_norm_method     = "mean"
         self._bfi_norm_buffer     = []
+        self._n_invalid_k2        = 0
+        self._invalid_k2_reported = False
         self._measuring_start_time = None  # set later when normalization ends
 
         # Shrink the ROI mask so no κ² pixel has its filter window straddle the
@@ -1339,6 +1345,69 @@ class MainWindow(QMainWindow):
         if self._recorder is not None and self.chk_save_frames.isChecked():
             self._recorder.append_frame(frame)
 
+    # Grace period added to the normalization window before the all-negative
+    # kappa^2 guard fires. Long enough that a slow first second cannot trip it,
+    # short enough that the operator is not left staring at an empty plot.
+    _INVALID_K2_GRACE_S = 2.0
+    # ...and a floor on how many results must have arrived, so one stray sample
+    # with a late timestamp cannot abort a run on its own.
+    _INVALID_K2_MIN_SAMPLES = 10
+
+    def _abort_on_invalid_k2(self, t: float) -> bool:
+        """Stop a measurement whose corrected κ² is never positive.
+
+        BFi is 1/κ², so a non-positive corrected κ² yields no value at
+        all. If *every* frame is like that, `_bfi_norm_buffer` stays empty, the
+        normalization constant is never computed, and MEASURING_INIT never
+        advances to MEASURING. Before this guard the app just sat there: an
+        empty plot, "Normalizing - 22.3 / 5 s" frozen on screen, and a results
+        file that is schema-valid but all NaN with no rBFi. The only trace was
+        one WARNING in app.log, which nobody reads during a session.
+
+        The cause is nearly always a dark calibration taken with light on the
+        sensor: dark_var then carries the live signal's variance, and
+        `var_im - G*mean - spVar - dark_var - 1/12` is negative everywhere.
+
+        Returns True when it has aborted the run, so the caller stops
+        processing this result.
+        """
+        self._n_invalid_k2 += 1
+        if (self._invalid_k2_reported
+                or self._bfi_norm_buffer                       # some frames were usable
+                or t < self._norm_seconds + self._INVALID_K2_GRACE_S
+                or self._n_invalid_k2 < self._INVALID_K2_MIN_SAMPLES):
+            return False
+
+        self._invalid_k2_reported = True
+        logger.error(
+            "Corrected kappa^2 was <= 0 for all %d results in the first %.1f s "
+            "— no BFi can be computed; aborting the measurement",
+            self._n_invalid_k2, t,
+        )
+        folder = self._session_folder
+        # Stop first, show the dialog second. Stopping moves the state out of
+        # MEASURING_INIT, so results already queued behind this one are dropped
+        # by the guard at the top of _on_scos_result instead of stacking more
+        # dialogs up behind this modal one.
+        self.btn_start_scos.setChecked(False)   # triggers _toggle_scos(False)
+        self._calib_label.setText("Aborted — corrected κ² ≤ 0")
+        where = (f"saved in\n{folder}\n\n" if folder is not None
+                 else "not saved.\n\n")
+        QMessageBox.critical(
+            self, "Corrected κ² Is Negative",
+            f"Every frame in the first {t:.0f} seconds has a corrected κ² "
+            f"of zero or less, so no blood-flow value can be computed and the "
+            f"measurement cannot start.\n\n"
+            "This almost always means light reached the sensor during the dark "
+            "calibration — the laser still on, room lights on, or OK clicked "
+            f"before the laser went out.\n\n"
+            "The run has been stopped and the raw data collected so far is "
+            + where
+            + "Make sure the measurement area is dark, then press Start SCOS "
+            "again to recalibrate.",
+        )
+        return True
+
     def _on_scos_result(self, t: float, k2_raw: float, k2_corr: float,
                         mean_i: float, proc_ms: float):
         """Receives SCOS result from the worker thread — runs on the GUI thread."""
@@ -1387,6 +1456,9 @@ class MainWindow(QMainWindow):
                 self._time_left_label.show()
 
         bfi_raw = 1.0 / k2_corr if k2_corr > 0 else None
+        if bfi_raw is None and self._state == State.MEASURING_INIT:
+            if self._abort_on_invalid_k2(t):
+                return
         if bfi_raw is not None:
             if self._state == State.MEASURING_INIT:
                 self._bfi_norm_buffer.append((t, bfi_raw))   # collect; don't plot yet

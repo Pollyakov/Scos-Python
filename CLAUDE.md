@@ -107,6 +107,15 @@ python -m pytest tests/
 
 A pre-commit hook runs all tests before each commit; failures block the commit.
 
+IMPORTANT: a test module that builds a `MainWindow` must create the `QApplication` **before** `gui.main_window` is imported, at module level:
+```python
+_app = QApplication.instance() or QApplication([])
+from gui.main_window import MainWindow
+```
+Importing that module pulls in pyqtgraph, and constructing the application afterwards kills the interpreter outright — no traceback, no pytest output, exit code 127, which looks like a broken command rather than a crash. See `tests/test_gain_table.py` and `tests/test_invalid_k2_guard.py`.
+
+Modal dialogs are blocked suite-wide by `tests/conftest.py`: any `QMessageBox` or `QFileDialog` a test reaches raises instead of opening. A test that legitimately drives one must monkeypatch that specific call (the `dialogs` fixture is the pattern).
+
 ## Architecture
 
 ```
@@ -164,6 +173,8 @@ Known camera parameters:
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
+
+IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* frame is like that the measurement can never leave `MEASURING_INIT`. `MainWindow._abort_on_invalid_k2()` catches this and stops the run with an error naming the likely cause — a dark calibration taken with light on the sensor. Before it existed the app sat silently on an empty plot and wrote an all-NaN results file. In `--mock-folder` playback this is guaranteed **whenever the live calibration runs**: that mode cannot switch a laser off, so Start SCOS's dark calibration collects the laser-on recording and overwrites the good calibration `_auto_load_folder_calibration()` had already loaded from the `_dark` folder. The mode itself is fine — measured 2026-09-27, the auto-loaded arrays alone give κ²_corr ≈ 0.0104 on the same frames, within 1.3 % of MATLAB. See todo D6.
 
 ## Future Protocol Design
 

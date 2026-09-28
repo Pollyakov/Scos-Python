@@ -35,6 +35,7 @@ Last updated: 2026-09-03 (items 17, 18, and the A3 rewrite added; see docs/revie
 | 19 | Real sustained-overload test | `tests/test_pipeline.py` gains `TestSustainedOverload`, closing merged-worklist task 4 (the old `test_inflight_capped_under_sustained_overload` only covered item count, not memory). Memory is measured exactly, via a `weakref` to every submitted frame — the alive count *is* the number of frames the pipeline still holds — rather than by noisy RSS sampling; frames are the lab's real 700×700 uint16 size. Flooding a stalled 2-worker pipeline with 60 frames: **capped (shipped)** retains 25 frames / 24.5 MB with 35 drops counted; **uncapped (pre-fix)** retains all 60 / 58.8 MB with **0** drops counted — Review B's silent leak, reproduced. The uncapped case is kept as a permanent negative control so the cap can't be removed, nor the bound widened, without a red test. Verified it fails on broken code: neutering the semaphore made it fail with "retained 60 frames (58.8 MB)… expected <= 32". Tests only — no production code touched. Suite 194/194. |
 | 20 | Frame intake off the GUI thread + capture-time timestamps | Closes merged-worklist task 5. `frame_ready` now carries `(frame, t_capture)` — `t_capture` is `time.monotonic()` taken at the grab, in all three real emitters (`camera.py`, `mock_camera.py`, `folder_camera.py`; `h5_replay._NullCamera` only stubs the signal and never emits). `RealtimePipeline.on_frame()` is direct-connected to that signal so intake executes on the **camera** thread: a full queue now blocks the grab loop (real backpressure, absorbed by Pylon's `MaxNumBuffer=20`) instead of freezing the GUI or piling frames into Qt's unbounded event queue. The wait is capped (`put_timeout_s`, 1.5 s) and a frame lost to that cap is counted — an unbounded wait would hang `CameraThread.stop()`, which calls `wait()` with no timeout, and with it the GUI. `overload_detected(depth)` fires once per episode at 80 % fill (re-arms below 50 %). `timeVec` is built from capture time relative to the first captured frame; `t0_wall` is latched alongside it for task 9's absolute `startTime`. Camera warnings (now the *expected* overload symptom) were demoted from a modal dialog to status bar + `app.log` during a session. **Verified end-to-end:** with the GUI handler stalled at 150 ms/frame against a 20 Hz source, `timeVec` keeps the camera's ~59 ms cadence; the pre-change design produced 151 ms gaps — a 20 Hz recording described as 6.6 Hz, which is a wrong heart rate out of the FFT. Suite 209/209; offline MATLAB dark/bright 4/4 at <2 %. |
 | 21 | One session folder + real FINISHED transition | Closes merged-worklist task 8 (`gui/main_window.py` only). `_cal_output_folder` split into `_output_root` (parent, asked once per window) and `_session_folder` (a fresh `scos_<timestamp>/` per run) — dark cal, bright cal and results now land together, so two runs can't interleave files. The second `QFileDialog` inside `_start_recorder`, which used to pop up *mid-measurement*, is gone. Stop SCOS and the duration auto-stop both now go FINISHED → `_finish_session()` → PREVIEW; cancelling an unfinished calibration still goes straight to PREVIEW, since there are no results to finalize. `_finish_session()` deliberately runs while the recorder is still open — that is where E1/E2's close-time `rBFi` write, E3's laser popup and E4's figure save attach. New `tests/test_session_lifecycle.py` (7 tests); the two FINISHED tests were confirmed to fail against the old path. Suite 216/216. |
+| 22 | Abort a run whose corrected κ² is never positive | Found in a mock-folder rehearsal on 2026-09-26: all 704 results came back at κ² ≈ −0.0029, so `bfi_raw = 1/κ²` was never computed, `_bfi_norm_buffer` stayed empty, and the session never advanced out of `MEASURING_INIT`. The app showed an empty plot and a frozen "Normalizing — 22.3 / 5 s" for 22 s and said nothing; stopping it produced a schema-valid `rBfi_results.h5` with an all-NaN `bfi` and no `rBFi`, the only trace being one WARNING in `app.log`. **That run's cause was specific to playback** (`--mock-folder` cannot switch the laser off, so the "dark" frames were the laser-on recording — `spIm` came out as symmetric noise around zero, proving both collectors drew from the same stream; see D6, the mode is not broken, Start SCOS just discards a good calibration). **The silence was not:** room light, a laser still settling, or OK clicked a beat early give the same picture on real hardware. New `MainWindow._abort_on_invalid_k2()` stops the run and shows an error naming the likely cause and the folder the raw data went to. It fires only once all three hold: no usable frame so far, `t` past `norm_seconds + 2 s`, and at least 10 results in — so a stalled pipeline or one stray late sample cannot abort a good run. The stop goes through `btn_start_scos.setChecked(False)`, the same funnel as the duration auto-stop, so an aborted session is finalized exactly like a manual one. New `tests/test_invalid_k2_guard.py` (8 tests), 4 of which were confirmed to fail with the guard removed. Suite 245/245. |
 
 ---
 
@@ -361,6 +362,39 @@ result (it means `MaxNumBuffer=20` is giving enough slack).
 
 ---
 
+#### D6 · Start SCOS destroys the auto-loaded calibration in `--mock-folder`
+
+`_auto_load_folder_calibration()` loads a correct calibration when a recording folder is
+replayed: `dark_mean`/`dark_var` streamed from the `_dark` folder, `spVar` from
+`smoothingCoefficients.mat`, the ROI mask from `Mask.mat`, and `processor.scale = 64`. Start
+SCOS then runs the live dark and bright calibrations on top and overwrites all of it — and in
+playback there is no laser to switch off, so those 60 "dark" frames are the laser-on recording.
+Two independent faults follow: `dark_var` carries the live signal's variance, and `dark_mean`
+is in raw units while `process()` divides the frame by 64.
+
+Result: corrected κ² is negative in every frame and the run aborts (see Done item 22). A
+mock-folder rehearsal therefore cannot currently reach MEASURING, which is exactly what that
+mode exists to rehearse.
+
+**Measured 2026-09-27** — this is not a limit of the mode. Feeding the same main TIFFs through
+a processor holding only the auto-loaded calibration gives `dark_mean` = 99.3 DU (the BL100DU
+baseline, i.e. genuinely dark), `dark_var` = 5.6, and κ²_corr ≈ 0.0104 against MATLAB's
+0.0105 — a 1.3 % match. The calibration is good; Start SCOS simply throws it away.
+
+**Two ways to fix, pick one:**
+
+1. *Skip the live calibration in playback* and keep the auto-loaded arrays. Cheapest, but
+   `Calibration.h5` is written inside `_finish_dark_cal` / `_finish_bright_cal`, so skipping
+   them leaves the session folder without the very file whose layout the rehearsal is meant to
+   prove. The auto-loaded arrays would have to be routed through `write_calibration()` too.
+2. *Serve dark frames from the dark folder.* Have `FolderMockCamera` play the `_dark` TIFFs
+   while the state is `DARK_CAL`. Every prompt, collector, folder dialog and file write then
+   runs exactly as on real hardware and gets frames that really are dark — a faithful
+   rehearsal instead of a bypassed one. More work, and bright calibration still has no clean
+   source, since the main recording was made with a subject in place.
+
+---
+
 ### Future Phases (post-v0)
 
 These are the next development phases after v0 is tagged.
@@ -403,7 +437,7 @@ A1 (shrink_mask) → A2 (GrabStrategy) → A3 (blocking queue)
   → E1 (normalization) → E2 (HDF5 format) → E3 (laser popup) → E4 (plot save) → E5 (tag v0)
   → B1 (overload dialog) → B2 (disk space) → B3 (persist GUI settings)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4 (any order)
+  → D1/D2/D3/D4/D6 (any order)
   → F1 (raw frames) → F2 (long sessions) → F3 (laser control)
 ```
 
