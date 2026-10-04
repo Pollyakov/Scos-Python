@@ -13,64 +13,23 @@ SCOS (Speckle Contrast Optical Spectroscopy) — real-time GUI app that acquires
 
 SCOS measures cerebral blood flow velocity by illuminating tissue with a laser and capturing speckle patterns with a Basler camera. Frame-to-frame intensity fluctuations reveal how fast blood cells are moving.
 
-## Current Phase: Demo preparation
+## Current status
 
-We simplified the long-term real-time plan into a 2-phase demo plan.
-See [`docs/Plan_RealTime_Demo.md`](docs/Plan_RealTime_Demo.md) for the
-full demo plan and [`docs/Plan_RealTime_Demo_Short.md`](docs/Plan_RealTime_Demo_Short.md)
-for the ideas-only summary. The long-term plan (`docs/Plan_RealTime.pdf`,
-`docs/Full_Plan_RealTime.pdf`, `docs/Plan_RealTime_Patches.md`) is still
-the post-demo direction.
-
-**Phase 1 — COMPLETE.** Both mock cameras implemented and tested.
-- Synthetic TIFF (no real data needed):
-  ```
-  python tools/synth_tiff.py --out scratch/mock.tif --frames 1200
-  python main.py --mock-tiff scratch/mock.tif
-  ```
-- Real lab recording folder (auto-loads calibration + mask):
-  ```
-  python main.py --mock-folder "path/to/expT5ms_Gain24dB_BL100DU_FR40Hz_005"
-  ```
-
-**Phase 2 — TODO.** Connect the real Basler camera + laser:
-  ```
-  python main.py          # no flag → uses real CameraThread
-  python check_camera.py  # smoke-test first
-  ```
-
-**Math bugs fixed:**
-1. Missing `bright_var` (spVar) term in corrected formula — added `calibrate_bright()`
-2. Biased variance estimator → fixed to unbiased (×N²/(N²−1))
-3. Dark variance not spatially smoothed → now applies `uniform_filter`
-4. Wrong `sat_capacity` (was 10400, correct value for a2A1920-160umPRO is **11117 e-**)
-   — diagnosed via Phase-0 PTC analysis. Superseded on 2026-09-22: G now comes from the
-   measured table, so no saturation capacity enters a measurement at all.
+Work is tracked in [`docs/todo.md`](docs/todo.md) — the only task list (rig-session prep
+at the top, then the backlog, then Done). Run modes: `python main.py` (real camera; run
+`python check_camera.py` first), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
+`--mock-h5 <results file>`.
 
 **Math validation result (against MATLAB reference, 600 real frames):**
 - Raw κ²: **0.45% error** ✓
 - Corrected κ²: **1.2% error** ✓ (G from the measured table for SN 40513592, spVar from smoothingCoefficients.mat,
   dark calibration from 600 dark frames)
 
-**Architecture target:** 3 threads + 2 queues:
-- Thread 1: Camera capture (pypylon RetrieveResult)
-- Thread 2: Processor (κ² with noise correction)
-- Main thread: GUI (QTimer reads result_queue every 1000 ms)
-
-**Code organization target:**
-- `core/` — pure logic (math, frame source, session state machine, pipeline)
-- `gui/` — PyQt6 widgets only, no math
-- Existing `camera.py` and `processor.py` will be refactored into
-  `core/camera_source.py` and `core/scos_math.py` respectively.
-
 **Key parameters for THIS lab:**
 - Frame size: 700 × 700 pixels
 - Frame rate: ~20 Hz (target)
 - Recording duration: up to several hours
 - Camera: Basler GigE via pypylon
-
-**State machine for session:**
-IDLE → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING → FINISHED
 
 ## What NOT to do
 - Don't add features in the old `processor.py` — write new code in `core/`
@@ -83,10 +42,6 @@ IDLE → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING → FINISHED
 ```bash
 # Windows setup
 setup.bat
-# Or manually:
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
 
 # Run app
 python main.py
@@ -105,16 +60,11 @@ python bench_processor.py --width 2448 --height 2048 --window 7 --duration 30 --
 python -m pytest tests/
 ```
 
-A pre-commit hook runs all tests before each commit; failures block the commit.
+A pre-commit hook runs the **fast** tests (`-m "not slow"`) before each commit; failures block
+the commit. The 4 slow offline MATLAB tests run only with the plain command above.
 
-IMPORTANT: a test module that builds a `MainWindow` must create the `QApplication` **before** `gui.main_window` is imported, at module level:
-```python
-_app = QApplication.instance() or QApplication([])
-from gui.main_window import MainWindow
-```
-Importing that module pulls in pyqtgraph, and constructing the application afterwards kills the interpreter outright — no traceback, no pytest output, exit code 127, which looks like a broken command rather than a crash. See `tests/test_gain_table.py` and `tests/test_invalid_k2_guard.py`.
-
-Modal dialogs are blocked suite-wide by `tests/conftest.py`: any `QMessageBox` or `QFileDialog` a test reaches raises instead of opening. A test that legitimately drives one must monkeypatch that specific call (the `dialogs` fixture is the pattern).
+Test-writing gotchas (QApplication import order, blocked modal dialogs, config
+isolation) are in [`tests/CLAUDE.md`](tests/CLAUDE.md), which loads when working in `tests/`.
 
 ## Architecture
 
@@ -143,16 +93,6 @@ Still on the GUI thread, by design for now: the dark/bright calibration collecto
 raw-frame HDF5 write (tasks 14/16). Intake backpressure bounds Qt's queued-connection event
 queue only while a measurement is running; during DARK_CAL / BRIGHT_CAL it is unbounded as
 before.
-
-## Key Modules
-
-- `camera.py` — CameraThread wraps pypylon. Supports Mono8/10/12, hardware trigger (Line2), live parameter changes
-- `processor.py` — SCOSProcessor: local variance via `cv2.blur` (falls back to `scipy.ndimage.uniform_filter` when OpenCV is absent; `dark_var` smoothing always uses `uniform_filter`), noise corrections (shot `G·⟨I⟩`, dark, bright/spVar, quantization 1/12)
-- `gui/main_window.py` — wires camera, processor, GUI controls, session state machine and the session output files; also the manual "Save SCOS Data" .mat/.npz export
-- `gui/image_widget.py` — pyqtgraph ImageItem + circle ROI (auto-detect or manual drag)
-- `gui/plot_widget.py` — real-time 1/κ² time-series plot (incremental append, no full redraw)
-
-**Dependencies:** PyQt6 for GUI, pyqtgraph for fast image/plot rendering, pypylon for Basler cameras, numpy/scipy for computation, pyserial for Arduino communication, tifffile/h5py for file I/O.
 
 ## Critical Gotchas
 
