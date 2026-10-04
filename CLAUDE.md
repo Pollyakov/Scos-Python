@@ -147,8 +147,8 @@ before.
 ## Key Modules
 
 - `camera.py` — CameraThread wraps pypylon. Supports Mono8/10/12, hardware trigger (Line2), live parameter changes
-- `processor.py` — SCOSProcessor: local variance via `scipy.ndimage.uniform_filter`, noise corrections (shot, dark, quantization)
-- `gui/main_window.py` — wires camera, processor, GUI controls, .mat/.npz export
+- `processor.py` — SCOSProcessor: local variance via `cv2.blur` (falls back to `scipy.ndimage.uniform_filter` when OpenCV is absent; `dark_var` smoothing always uses `uniform_filter`), noise corrections (shot `G·⟨I⟩`, dark, bright/spVar, quantization 1/12)
+- `gui/main_window.py` — wires camera, processor, GUI controls, session state machine and the session output files; also the manual "Save SCOS Data" .mat/.npz export
 - `gui/image_widget.py` — pyqtgraph ImageItem + circle ROI (auto-detect or manual drag)
 - `gui/plot_widget.py` — real-time 1/κ² time-series plot (incremental append, no full redraw)
 
@@ -169,7 +169,8 @@ Known camera parameters:
 | Lab demo camera (700×700) | 12 | Must be added to `CamerasMeasuredGain.csv` before it can be used |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
-- Save format matches MATLAB convention: .mat with keys `scosTime`, `scosData` (κ²), `frameRate`, `exposureTime`, `Gain`
+- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png`
+- The manual "Save SCOS Data" button is a separate, older export: .mat with keys `scosTime`, `scosData` (κ²), `frameRate`, `exposureTime`, `Gain` (or the same as .npz)
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
@@ -182,7 +183,8 @@ camera outruns that handler a backlog builds in Qt's event queue — 60 to 130 f
 40 Hz, measured. Every one of them was captured *before* the operator clicked OK on the
 laser prompt, so without this the bright calibration is built from laser-off frames.
 `MainWindow._flush_stale_frames()` is called after each prompt and drops the difference
-between what the camera has emitted (`camera.frames_emitted`, on all three emitters) and
+between what the camera has emitted (`camera.frames_emitted` — kept by all three camera
+classes, bumped once per frame just before `frame_ready`) and
 what this window has received. Any new frame source must keep that counter.
 
 Scope of that measurement: it was taken in a **headless** run where the laser prompt

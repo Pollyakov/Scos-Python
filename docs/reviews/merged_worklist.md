@@ -34,7 +34,7 @@ against it; findings are folded into tasks 9, 10, 12, 16, and Claim S5.
 
 ---
 
-## Status (last updated: 2026-09-07)
+## Status (last updated: 2026-10-04 — rows 11 and 12 reconciled with the code)
 
 Legend: ✅ done · 🔄 in progress · ⬜ not started. Update this table, and the matching
 task heading below, whenever a task starts or finishes — that's the only way this stays
@@ -60,7 +60,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | 9 | Save the real result in the required schema | ✅ Done — see note in task 9 |
 | 10 | Short-vs-long normalization (E1) | ✅ Done — see note in task 10 |
 | 11 | End-of-session laser popup + intensity check (E3) | ✅ Done — see note in task 11 |
-| 12 | Save plot figure at end of session (E4) | ⬜ Not started |
+| 12 | Save plot figure at end of session (E4) | ✅ Done — commit `f11e544`, see task 12 |
 | 13 | Tag version 0 (E5) | ⬜ Not started |
 
 **Phase 2 — Recording, long sessions, unattended runs**
@@ -81,7 +81,7 @@ trustworthy as a living document instead of a snapshot of 2026-07-26.
 | # | Task | Status |
 |---|---|---|
 | 22 | float64 check on the corrected numerator | ⬜ Not started |
-| 23 | Fix protocol typo (bright cal "turn off" → "on") | ⬜ Not started |
+| 23 | Fix protocol typo (bright cal "turn off" → "on") | ✅ Done 2026-10-04 — corrected in place with a dated note |
 | 24 | Extract pure math into `core/scos_math.py` (C1) | ⬜ Not started |
 | 25 | Project tooling lock-in | ⬜ Not started |
 
@@ -710,7 +710,7 @@ final render removed — each one caught. Full suite 280/280 fast, 4/4 slow.
 
 ---
 
-### 11. End-of-session laser popup + 90 % intensity-drop check (E3)
+### 11. End-of-session laser popup + 90 % intensity-drop check (E3) — ✅ DONE
 
 - **Goal:** Prompt *"Measurement has ended. Please turn off the laser,"* then capture one
   frame and confirm mean ROI intensity dropped by ≥ 90 %; warn if it did not.
@@ -768,7 +768,7 @@ has to be loud.
 
 ---
 
-### 12. Save the plot figure at end of session (E4)
+### 12. Save the plot figure at end of session (E4) — ✅ DONE
 
 - **Goal:** Write `rBFi_fig.png` into the session folder and show the path.
 - **Source:** Review A (T8 = `todo.md` E4).
@@ -952,7 +952,7 @@ Phase 0 immediately.*
 
 ---
 
-### 23. Fix the protocol typo (bright calibration says "turn off")
+### 23. Fix the protocol typo (bright calibration says "turn off") — ✅ DONE
 
 - **Goal:** `docs/SCOS_protocol.md:27` should say turn the laser **on** for bright
   calibration.

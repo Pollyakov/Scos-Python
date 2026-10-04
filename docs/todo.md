@@ -1,6 +1,8 @@
 # SCOS — Implementation Backlog
 
-Last updated: 2026-09-03 (items 17, 18, and the A3 rewrite added; see docs/reviews/merged_worklist.md for the full task list these come from)
+Last updated: 2026-10-04 (doc/code audit: Done item 4, A3, E2's file table, F1 and the
+execution order corrected against the code; see docs/reviews/merged_worklist.md for the
+full task list these come from)
 
 > **Reconciliation note (vs. 2026-05-12 version):**
 > Items 5, 6, 7, and 16 from the previous version have landed and are reclassified below.
@@ -17,15 +19,15 @@ Last updated: 2026-09-03 (items 17, 18, and the A3 rewrite added; see docs/revie
 | 1 | Auto-save to HDF5 wired into GUI | Folder picker on Start SCOS, status bar shows path |
 | 2 | `HDF5Recorder` class (`core/recorder.py`) | Buffered writes, flushes every 300 points; `save_calibration()` and `append_frame()` also implemented |
 | 3 | `closeEvent` flush | `recorder.close()` called before window exit |
-| 4 | Metadata saved with session | fps, gain, exposure, window, ROI, sat_capacity → HDF5 `metadata` group |
+| 4 | Metadata saved with session | Two groups, by instruction (2026-09-23). `Params` holds the supervisor's ten fields (`frameRate`, `exposureTime`, `gain`, `windowSize`, `ROI`, `bitDepth`, the three normalization fields, `gitCommit`); `metadata` holds engineering provenance only (`camera_sn`, `camera_model`, `gain_du_per_e`, `gain_source`). **`satCapacity` is excluded from both** — see the Critical Gotchas in CLAUDE.md. Built in `MainWindow._start_recorder()`, written by `core/recorder.py`. |
 | 5 | rBFI normalization — "seconds" mode | `MEASURING_INIT` collects `norm_seconds` of BFI, computes mean, divides all subsequent values. **"Pulsation lower level" mode logs a warning and falls back to mean — see E1 below.** |
 | 6 | Full state machine | `State` enum (IDLE → PREVIEW → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING → FINISHED/ERROR) wired in `gui/main_window.py` via `_set_state()`. Colored status indicator in GUI. |
-| 7 | `core/pipeline.py` | `RealtimePipeline`: drop-oldest 20-frame `_input_q` + `ThreadPoolExecutor` (configurable workers) for parallel processing, with an `_inflight_sem` semaphore capping in-flight work so a slow patch can't grow memory without bound. Results emitted in submission order. `dropped_count` now shown in the GUI Info panel and logged on change. **See item A3 below — moving intake off the GUI thread is still open.** |
+| 7 | `core/pipeline.py` | `RealtimePipeline`: drop-oldest 20-frame `_input_q` + `ThreadPoolExecutor` (configurable workers) for parallel processing, with an `_inflight_sem` semaphore capping in-flight work so a slow patch can't grow memory without bound. Results emitted in submission order. `dropped_count` now shown in the GUI Info panel and logged on change. Intake moved off the GUI thread in item 20, which closed the last open half of A3. |
 | 8 | `core/session.py` | `State` enum, `SessionConfig` dataclass, `DarkCalCollector` (Welford online stats), `BrightCalCollector` |
 | 9 | Phase 1 — mock cameras | `mock_camera.py` (TIFF stack), `folder_camera.py` (real lab folder, auto-loads calibration), `h5_replay.py` (replays saved HDF5). CLI flags: `--mock-tiff`, `--mock-folder`, `--mock-h5` |
 | 10 | `tools/synth_tiff.py` | Generates synthetic Rayleigh-distributed TIFF stacks for offline development |
 | 11 | `logging` module | All debug/info output goes to `logging`; session log written to `app.log` |
-| 12 | Math bugs fixed | `bright_var` (spVar) term added; unbiased variance estimator; `dark_var` spatially smoothed; `sat_capacity` corrected to 11117 e⁻ for a2A1920-160umPRO |
+| 12 | Math bugs fixed | `bright_var` (spVar) term added; unbiased variance estimator; `dark_var` spatially smoothed; `sat_capacity` corrected to 11117 e⁻ for a2A1920-160umPRO. **That last one was superseded on 2026-09-22:** G[DU/e] now always comes from `CamerasMeasuredGain.csv`, so no saturation capacity enters a measurement at all (`test_mode_sat_capacity` is synthetic-source only). |
 | 13 | Phase 2 — real camera partial validation | App ran on real system at 40 Hz; processing time ~13 ms per frame (~12 ms headroom). Camera + laser streaming confirmed working. |
 | 14 | Processing workers GUI control | `spn_workers` spinbox in SCOS group (range 1–8, default 3). Pipeline recreated on Start SCOS with the selected count. Tooltip shows machine core count. |
 | 15 | `shrink_mask_for_window` — ROI edge fix | `processor.shrink_mask_for_window(mask, window)` erodes the ROI by `window//2+1` px. Applied at MEASURING_INIT start; shrunk mask used for κ² only, full mask kept for display. Erosion size logged. 4 new tests. |
@@ -65,7 +67,13 @@ policy, correctness beats everything.
 
 ---
 
-#### A3 · Cap in-flight work; don't just block `put()`
+#### ~~A3 · Cap in-flight work; don't just block `put()`~~ — ✅ DONE (see items 7 and 20 in Done table)
+
+> Both halves have landed: `_inflight_sem` caps submitted-but-uncollected work
+> (`core/pipeline.py:208`), and intake moved to the camera thread against a bounded
+> blocking queue with `overload_detected` at 80 % (item 20). **Tier A is therefore
+> complete.** The history below is kept because it records why the obvious fix was the
+> wrong one.
 
 **Why it matters:** `_DropOldestQueue` (in `core/pipeline.py`) is bounded and its drops are
 counted — but that was never the actual leak. The `ThreadPoolExecutor`'s internal queue and
@@ -134,10 +142,11 @@ logs a warning and falls back to mean at `gui/main_window.py:1124`).
 
 | File | Contents |
 |---|---|
-| `rBFi_results.h5` | `startTime`, `timeVec`, `rBFi`, `Intensity`, `Params` (struct/group) |
-| `rBFi_fig.png` | Saved screenshot of the BFI plot at session end |
-| `DarkCalibration.h5` | `mean_dark`, `var_dark`, `n_frames`, `window_size` |
-| `BrightCalibration.h5` | `sp_im`, `bright_var`, `n_frames`, `window_size` |
+| `rBfi_results.h5` | `startTime`, `timeVec`, `rBFi`, `Intensity`, `Params` (group), plus `k2_raw`, `k2_corr`, `bfi` and a `metadata` group |
+| `rBfi_fig.png` | The rBFi curve at session end (`PlotWidget.save_png()`) |
+| `Calibration.h5` | One file, two groups: `dark` and `bright` |
+
+*Filenames above are what the code actually writes (`rBfi_`, lower-case f — her spelling), verified 2026-10-04. The supervisor replaced the two separate calibration files with one `Calibration.h5` on 2026-09-23; the original PDF's `DarkCalibration.h5` / `BrightCalibration.h5` no longer apply.*
 
 **DONE 2026-09-23** — see merged_worklist task 9 for the full note. The schema now matches
 the supervisor's spec and her answers of 2026-09-23:
@@ -181,8 +190,9 @@ paragraph was written.
 
 At `FINISHED`, export the BFI time-series plot to a PNG file in the same output folder:
 ```python
-exporter = pg.exporters.ImageExporter(self.plot_widget.scene())
-exporter.export(str(output_folder / "rBFi_fig.png"))
+# As implemented: PlotWidget.save_png(), rendered from the plot item at a fixed
+# 1600 px, called after _finalize_normalization() so the curve matches the saved
+# constant. Writes <session folder>/rBfi_fig.png.
 ```
 Show the saved path in the status bar.
 
@@ -412,8 +422,15 @@ These are the next development phases after v0 is tagged.
 
 Add an option to save every raw camera frame to HDF5 during a session. One frame at 700×700
 uint16 ≈ 1 MB. At 40 Hz for 30 min ≈ 72 GB — so this requires disk-space check (B2) first.
-The `HDF5Recorder.append_frame()` method already exists; just needs to be wired into the
-GUI via the existing `chk_save_frames` checkbox.
+**Already wired, 2026-10-04 audit:** `MainWindow._on_scos_frame()` calls
+`self._recorder.append_frame(frame)` whenever `chk_save_frames` is ticked
+(`gui/main_window.py:1818`). What is actually left here is not the wiring:
+
+- the write is **synchronous on the GUI thread**, gzip included — that is worklist task 14;
+- there is no disk-space guard in front of it (B2), and the box is reachable today;
+- no decision yet on every frame vs every K-th (open question 13).
+
+The checkbox defaults to off, so none of this bites unless an operator ticks it.
 
 ---
 
@@ -440,7 +457,7 @@ signal HIGH → wait → measure.
 ## Execution order summary
 
 ```
-A1 (shrink_mask) → A2 (GrabStrategy) → A3 (blocking queue)
+~~A1 (shrink_mask)~~ → ~~A2 (GrabStrategy)~~ → ~~A3 (in-flight cap)~~   [Tier A complete]
   → ~~E1 (normalization)~~ → ~~E2 (HDF5 format)~~ → ~~E3 (laser popup)~~ → ~~E4 (plot save)~~ → E5 (tag v0)
   → B1 (overload dialog) → B2 (disk space) → B3 (persist GUI settings)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
