@@ -1,5 +1,14 @@
 # SCOS — Merged Worklist (Review A + Review B)
 
+> **❄ FROZEN 2026-10-04 — archive only, do not track status here.**
+> All open tasks moved into [`docs/todo.md`](../todo.md), now the single working list; the
+> map at the bottom of that file says where each task number went (6 → D5, 7 → D7,
+> 14 → F4, 19 → B4, 22 → A4, 25 → D2; the rest were already todo items or are done).
+> This file is kept for what todo.md does not hold: the evidence from both reviews, why
+> each fix was chosen over the alternatives, and the per-task notes that commits and
+> todo.md's Done table point to ("see worklist task 9"). Status markers below are as of
+> the freeze.
+
 Merged: 2026-07-26. This document **only reorganizes** the two existing reviews
 (`Review_Findings_A.md` — scientific correctness & measurement session;
 `Review_Findings_B.md` — pipeline, timing & reliability) into one execution order.
