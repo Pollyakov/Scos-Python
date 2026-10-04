@@ -21,7 +21,7 @@ session, not before.**
 | 0 | Message to Vika | Open questions 7–16 from `docs/open_questions.md`, implemented defaults stated so she can just confirm; flag #11 (stop before the normalization window closes → no `rBFi`). Confirm the session's gain (dB) and bit depth match a row of `CamerasMeasuredGain.csv`. | 20 min | ✅ Sent 2026-10-04 |
 | 1a | Docs ↔ code audit | todo, worklist, CLAUDE.md, protocol typo (bright cal said "turn off") | — | ✅ `7c89dbc`, `794d384` |
 | 1b | **B3** — persist GUI settings | see B3 below; also remember `output_root` (dialog still shown) | 1 h 45 m | ✅ Done item 30 |
-| 1c | **B2-lite** — disk pre-flight | refuse to start below a free-space threshold, show free space; skip the mid-session monitor | 40 min | |
+| 1c | ~~**B2-lite** — disk pre-flight~~ → **Save Frames disabled** | Dropped 2026-10-04: without raw frames a session writes < 50 MB even over 3 h, so a free-space check would almost never fire. The one way to fill a disk was the "Save Frames" checkbox (~70 GB/h at 20 Hz) — now greyed out until F1; raw frames are not wanted yet. B2 returns together with F1. | 10 min | ✅ `tests/test_save_frames_disabled.py` |
 | 2 | Simulation checklist | what the operator does and should see in a `--mock-folder` session, dialog by dialog; the expected (low) mock κ²_corr — the bright cal there comes from a subject-in-place recording, spVar ≈ 2.3× too large, which is the dataset, not a bug | 45 min | |
 | 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | |
 | 3b | Scenario: slowdown / backpressure | slowed `process()`: `overload_detected` once per episode, drops counted and visible, memory flat, **`timeVec` keeps capture cadence** | 1 h 30 m | |
@@ -457,10 +457,12 @@ uint16 ≈ 1 MB. At 40 Hz for 30 min ≈ 72 GB — so this requires disk-space c
 (`gui/main_window.py:1818`). What is actually left here is not the wiring:
 
 - the write is **synchronous on the GUI thread**, gzip included — that is worklist task 14;
-- there is no disk-space guard in front of it (B2), and the box is reachable today;
+- there is no disk-space guard in front of it (B2);
 - no decision yet on every frame vs every K-th (open question 13).
 
-The checkbox defaults to off, so none of this bites unless an operator ticks it.
+**The checkbox is disabled (greyed out, still visible — the protocol lists it) since
+2026-10-04**, so none of this can bite before F1. Re-enabling it is part of F1, together
+with B2 and F4; `tests/test_save_frames_disabled.py` must be updated then.
 
 ---
 
@@ -499,7 +501,7 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 ## Execution order summary
 
 ```
-▶ rig-session prep (above): 0 → 1a ✅ → 1b (B3) ✅ → 1c (B2-lite) → 2 → 3a → 3f → 3b–3e → 4 → 5a → 5b
+▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 → 3a → 3f → 3b–3e → 4 → 5a → 5b
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → A4 (float64 test)
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0)

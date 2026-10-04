@@ -338,8 +338,17 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.btn_start_scos)
 
+        # Disabled until F1 (todo.md): a ticked box writes ~1 MB per frame
+        # (~70 GB/hour at 20 Hz), synchronously on the GUI thread (F4), with no
+        # disk-space check in front of it (B2). Kept visible because the
+        # protocol lists it among the SCOS parameters (SCOS_protocol.md:9).
         self.chk_save_frames = QCheckBox("Save Frames")
         self.chk_save_frames.setChecked(False)
+        self.chk_save_frames.setEnabled(False)
+        self.chk_save_frames.setToolTip(
+            "Not available yet: saving raw frames needs a disk-space check\n"
+            "and a background writer first (todo.md F1)."
+        )
         layout.addWidget(self.chk_save_frames)
 
         self.btn_save = QPushButton("Save Data...")
