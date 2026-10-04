@@ -174,6 +174,7 @@ Known camera parameters:
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
+- Settings: `scos_config.json` is the **committed defaults and is never written by the app**; the operator's last-used settings go to the gitignored `scos_config.local.json` on close (`MainWindow._save_config()`), real camera only (`CameraThread.persists_settings`). Delete it to reset. Tests are redirected to a private copy by `tests/conftest.py` (`SCOS_CONFIG_DIR`).
 
 IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* frame is like that the measurement can never leave `MEASURING_INIT`. `MainWindow._abort_on_invalid_k2()` catches this and stops the run with an error naming the likely cause — a dark calibration taken with light on the sensor. Before it existed the app sat silently on an empty plot and wrote an all-NaN results file. Fixed for `--mock-folder` playback on 2026-09-28; see the next note.
 

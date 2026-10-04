@@ -161,6 +161,12 @@ class MainWindow(QMainWindow):
         # in that one folder — see merged_worklist.md #8 and docs/session_tab.
         self._output_root:    Path | None = None
         self._session_folder: Path | None = None
+        # The folder chosen in a previous launch (B3). Only ever the folder
+        # dialog's *starting directory* — it is deliberately not loaded into
+        # _output_root, because _output_root being None is what makes the
+        # dialog appear, and writing a session into the previous subject's
+        # folder without being asked is worse than one extra click.
+        self._last_output_root: Path | None = None
 
         # Camera & processor
         self.camera    = camera if camera is not None else CameraThread()
@@ -434,14 +440,49 @@ class MainWindow(QMainWindow):
     # Config loading
     # ------------------------------------------------------------------
 
-    def _load_config(self):
-        """Load default values from scos_config.json into GUI widgets."""
-        config_path = Path(__file__).resolve().parent.parent / "scos_config.json"
+    # ------------------------------------------------------------------
+    # Settings persistence (todo.md B3)
+    # ------------------------------------------------------------------
+    #
+    # Two files. scos_config.json is tracked by git and holds the defaults; the
+    # app never writes it. scos_config.local.json (gitignored) holds what the
+    # operator last used and overrides the defaults key by key. Writing the
+    # tracked file instead would leave the rig's working tree permanently dirty
+    # and turn every `git pull` there into a possible conflict. Deleting the
+    # local file resets the app to the defaults.
+
+    CONFIG_FILENAME       = "scos_config.json"
+    LOCAL_CONFIG_FILENAME = "scos_config.local.json"
+
+    @staticmethod
+    def _config_dir() -> Path:
+        # SCOS_CONFIG_DIR exists for the test suite (tests/conftest.py), so
+        # that hundreds of w.close() calls never touch the real files.
+        override = os.environ.get("SCOS_CONFIG_DIR")
+        return Path(override) if override else Path(__file__).resolve().parent.parent
+
+    @staticmethod
+    def _read_json(path: Path) -> dict:
+        """A missing or unreadable file is simply no settings, never a crash."""
         try:
-            with open(config_path, "r") as f:
-                cfg = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            logger.warning("Ignoring unreadable config %s: %s", path, exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _load_config(self):
+        """Fill the widgets from the defaults, then from the operator's last settings."""
+        d = self._config_dir()
+        cfg = self._read_json(d / self.CONFIG_FILENAME)
+        cfg.update(self._read_json(d / self.LOCAL_CONFIG_FILENAME))
+
+        root = cfg.get("output_root")
+        if isinstance(root, str) and root:
+            self._last_output_root = Path(root)
 
         for key, apply_fn in {
             "pixel_format":    lambda v: self.cmb_format.setCurrentText(str(v)),
@@ -464,6 +505,64 @@ class MainWindow(QMainWindow):
                     apply_fn(cfg[key])
                 except (ValueError, TypeError):
                     pass
+
+    def _current_settings(self) -> dict:
+        """The widget values, under exactly the keys _load_config() reads."""
+        cfg = {
+            "pixel_format":             self.cmb_format.currentText(),
+            "exposure_ms":              float(self.spn_exposure.value()),
+            "gain_db":                  float(self.spn_gain.value()),
+            "frame_rate_hz":            float(self.spn_fps.value()),
+            "trigger_delay_us":         float(self.spn_trigger_delay.value()),
+            "external_trigger":         bool(self.chk_trigger.isChecked()),
+            "window_size":              int(self.spn_window.value()),
+            "n_dark_frames":            int(self.spn_n1.value()),
+            "n_bright_frames":          int(self.spn_n2.value()),
+            "measurement_duration_min": float(self.spn_duration.value()),
+            "norm_type":                ("seconds" if self.cmb_norm_type.currentIndex() == 0
+                                         else "pulsation"),
+            "norm_seconds":             int(self.spn_norm_seconds.value()),
+            "n_workers":                int(self.spn_workers.value()),
+        }
+        root = self._output_root or self._last_output_root
+        if root is not None:
+            cfg["output_root"] = str(root)
+        # The recording name is deliberately absent: it names one subject's
+        # session, and carrying it into the next launch would mislabel the next.
+        return cfg
+
+    def _save_config(self) -> bool:
+        """Write the operator's settings to the local override file.
+
+        Only for a real camera — see CameraThread.persists_settings. Written to
+        a temp file and swapped in with os.replace, which is atomic, so a crash
+        mid-write can never leave a half-written file that breaks the next
+        launch. Keys this version does not know about are preserved.
+        """
+        cam = self.camera
+        is_playback = (self._h5_replay is not None
+                       or hasattr(cam, "get_calibration_mat")      # --mock-folder
+                       or getattr(cam, "is_synthetic", False))     # --mock-tiff
+        if is_playback or not getattr(cam, "persists_settings", False):
+            return False
+        path = self._config_dir() / self.LOCAL_CONFIG_FILENAME
+        cfg = self._read_json(path)
+        cfg.update(self._current_settings())
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(cfg, f, indent=4)
+                f.write("\n")
+            os.replace(tmp, path)
+        except OSError:
+            logger.exception("Could not save settings to %s", path)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        logger.info("Settings saved to %s", path)
+        return True
 
     # ------------------------------------------------------------------
     # State machine
@@ -1112,12 +1211,14 @@ class MainWindow(QMainWindow):
         self._session_folder = None
         if self._output_root is None:
             folder = QFileDialog.getExistingDirectory(
-                self, "Choose folder to save this session's results"
+                self, "Choose folder to save this session's results",
+                str(self._last_output_root) if self._last_output_root else "",
             )
             if not folder:
                 self._reset_start_button()
                 return
             self._output_root = Path(folder)
+            self._last_output_root = self._output_root
 
         session_folder = self._output_root / self._session_folder_name()
         try:
@@ -2304,4 +2405,9 @@ class MainWindow(QMainWindow):
         if self._recorder is not None:
             self._recorder.close()
             self._recorder = None
+        # After the recorder: a settings write must never cost a session its data.
+        try:
+            self._save_config()
+        except Exception:
+            logger.exception("Saving settings failed")
         event.accept()

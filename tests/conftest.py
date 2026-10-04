@@ -13,9 +13,14 @@ drives one of these paths must monkeypatch the specific call it expects, which
 also documents what the operator would have seen.
 """
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+_REPO = Path(__file__).resolve().parent.parent
 
 
 _BLOCKED = (
@@ -40,3 +45,23 @@ def no_modal_dialogs(monkeypatch):
                 raise AssertionError(_BLOCKED.format(cls=_cls.__name__, name=_name))
 
             monkeypatch.setattr(cls, name, staticmethod(_blocked))
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(monkeypatch, tmp_path_factory):
+    """Point MainWindow at a private copy of the config for every test.
+
+    MainWindow saves settings on close (todo.md B3), and the suite closes
+    windows hundreds of times — none of that may reach the real files. The
+    committed defaults are copied in, so loading behaves exactly as it does
+    for the app; the operator's local override file is NOT copied, so a
+    developer's own settings cannot change test results.
+    """
+    # Its own directory, not inside tmp_path: tests use tmp_path as a results
+    # folder and assert on exactly what lands in it.
+    cfg_dir = tmp_path_factory.mktemp("config")
+    src = _REPO / "scos_config.json"
+    if src.exists():
+        shutil.copy(src, cfg_dir / "scos_config.json")
+    monkeypatch.setenv("SCOS_CONFIG_DIR", str(cfg_dir))
+    return cfg_dir

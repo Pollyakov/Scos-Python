@@ -22,3 +22,8 @@ app.log
 # committed by accident on 2026-09-28 and had to be renamed and cleaned up;
 # this is here so the same cannot happen to the editing log.
 docs/english_editing_log.md
+
+# The operator's last-used settings (todo.md B3). scos_config.json holds the
+# committed defaults and is never written by the app.
+scos_config.local.json
+scos_config.local.json.tmp

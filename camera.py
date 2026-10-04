@@ -26,6 +26,13 @@ class CameraThread(QThread):
 
     DISPLAY_FPS_CAP = 30.0
 
+    # Only a real camera's settings are worth remembering between launches.
+    # Playback sources read their recording's exposure/gain/fps back into the
+    # GUI, and saving those would start the next rig session with a
+    # recording's settings. MainWindow._save_config() checks for this marker
+    # positively, so a new frame source never starts writing by accident.
+    persists_settings = True
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running      = False
