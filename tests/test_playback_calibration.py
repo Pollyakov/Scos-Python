@@ -130,11 +130,20 @@ class TestPlaybackSource:
         n_dark = len(frames)
 
         cam.set_playback_source("main")
-        qapp_processing(lambda: len(frames) >= n_dark + 3)
+        # Wait for main frames to actually arrive, not for "N more frames":
+        # frame_ready is a queued connection, so dark frames emitted before the
+        # switch can still be in Qt's event queue — on a loaded machine enough
+        # of them to satisfy a count. (That backlog is real, and is what
+        # MainWindow._flush_stale_frames() exists for.)
+        dark, main = DARK_DU << SHIFT, MAIN_DU << SHIFT
+        qapp_processing(lambda: frames.count(main) >= 3)
         cam.stop()
 
-        assert frames[0] == DARK_DU << SHIFT
-        assert frames[-1] == MAIN_DU << SHIFT
+        assert frames[0] == dark
+        first_main = frames.index(main)
+        assert set(frames[:first_main]) == {dark}
+        # The switch is clean: once the recording starts, no dark frame follows.
+        assert set(frames[first_main:]) == {main}
 
 
 @pytest.fixture
