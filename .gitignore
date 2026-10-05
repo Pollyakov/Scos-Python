@@ -15,8 +15,13 @@ scratch/
 # it only ever describes the last run on one machine.
 app.log
 
-# Claude Code memory
-.claude/
+# Claude Code: keep personal settings (settings.local.json and anything else)
+# out of git, but track the project's own skills, commands and agents so they
+# are backed up and exist on every clone, e.g. the lab PC.
+.claude/*
+!.claude/skills/
+!.claude/commands/
+!.claude/agents/
 
 # Personal working notes, not project documentation. questions_for_vika.md was
 # committed by accident on 2026-09-28 and had to be renamed and cleaned up;
