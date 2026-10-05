@@ -16,22 +16,25 @@ simulation, the machinery the day depends on. Nothing in Tier C, B1, D1–D4, D7
 in before the session — every change adds risk. **E5 (tag v0) comes after a successful
 session, not before.**
 
-| # | Task | What it is | Est. | Status |
-|---|---|---|---|---|
-| 0 | Message to Vika | Open questions 7–16 from `docs/open_questions.md`, implemented defaults stated so she can just confirm; flag #11 (stop before the normalization window closes → no `rBFi`). Confirm the session's gain (dB) and bit depth match a row of `CamerasMeasuredGain.csv`. | 20 min | ✅ Sent 2026-10-04 |
-| 1a | Docs ↔ code audit | todo, worklist, CLAUDE.md, protocol typo (bright cal said "turn off") | — | ✅ `7c89dbc`, `794d384` |
-| 1b | **B3** — persist GUI settings | see B3 below; also remember `output_root` (dialog still shown) | 1 h 45 m | ✅ Done item 30 |
-| 1c | ~~**B2-lite** — disk pre-flight~~ → **Save Frames disabled** | Dropped 2026-10-04: without raw frames a session writes < 50 MB even over 3 h, so a free-space check would almost never fire. The one way to fill a disk was the "Save Frames" checkbox (~70 GB/h at 20 Hz) — now greyed out until F1; raw frames are not wanted yet. B2 returns together with F1. | 10 min | ✅ `tests/test_save_frames_disabled.py` |
-| 2 | Simulation checklist | what the operator does and should see in a `--mock-folder` session, dialog by dialog; the expected (low) mock κ²_corr — the bright cal there comes from a subject-in-place recording, spVar ≈ 2.3× too large, which is the dataset, not a bug | 45 min | ✅ [`simulation_checklist.md`](simulation_checklist.md) — numbers from a headless run 2026-10-04 (κ²_corr 0.0070 vs MATLAB 0.0105, positive 304/304); open: 60 or 600 cal frames on the rig? |
-| 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | |
-| 3b | Scenario: slowdown / backpressure | slowed `process()`: `overload_detected` once per episode, drops counted and visible, memory flat, **`timeVec` keeps capture cadence** | 1 h 30 m | |
-| 3c | Scenario: overload recovery | restore speed: flag re-arms below 50 %, drops stop | 45 min | |
-| 3d | Scenario: compressed long run | looped playback for minutes: recorder flushes, memory flat, plot responsive | 1 h + run | |
-| 3e | Output verification | after every scenario: `rBFi` present, length = `timeVec`, all ten `Params`, figure, both `Calibration.h5` groups | 45 min | |
-| 3f | **Hands-on GUI pass** (user) | one full `--mock-folder` session with real windows — the only test of the real modal-dialog path (nested event loop) | 45–60 min | |
-| 4 | Fix what turns up | budget. Already found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only) | ~2 h | |
-| 5a | Real-rig checklist | first five minutes at the rig: **D5** (Pylon skipped frames, intake under overload), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it | 45 min | |
-| 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does | 45 min | |
+| # | Task | What it is | Est. | Actual | Status |
+|---|---|---|---|---|---|
+| 0 | Message to Vika | Open questions 7–16 from `docs/open_questions.md`, implemented defaults stated so she can just confirm; flag #11 (stop before the normalization window closes → no `rBFi`). Confirm the session's gain (dB) and bit depth match a row of `CamerasMeasuredGain.csv`. | 20 min | — | ✅ Sent 2026-10-04 |
+| 1a | Docs ↔ code audit | todo, worklist, CLAUDE.md, protocol typo (bright cal said "turn off") | — | — | ✅ `7c89dbc`, `794d384` |
+| 1b | **B3** — persist GUI settings | see B3 below; also remember `output_root` (dialog still shown) | 1 h 45 m | — | ✅ Done item 30 |
+| 1c | ~~**B2-lite** — disk pre-flight~~ → **Save Frames disabled** | Dropped 2026-10-04: without raw frames a session writes < 50 MB even over 3 h, so a free-space check would almost never fire. The one way to fill a disk was the "Save Frames" checkbox (~70 GB/h at 20 Hz) — now greyed out until F1; raw frames are not wanted yet. B2 returns together with F1. | 10 min | — | ✅ `tests/test_save_frames_disabled.py` |
+| 2 | Simulation checklist | what the operator does and should see in a `--mock-folder` session, dialog by dialog; the expected (low) mock κ²_corr — the bright cal there comes from a subject-in-place recording, spVar ≈ 2.3× too large, which is the dataset, not a bug | 45 min | — | ✅ [`simulation_checklist.md`](simulation_checklist.md) — numbers from a headless run 2026-10-04 (κ²_corr 0.0070 vs MATLAB 0.0105, positive 304/304); calibration frames set to the protocol's 600 (`683da41`) |
+| 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad; a copy patched to auto-answer the E3 "Measurement Ended" pop-up, without which it hangs, ran on 2026-10-04) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | | |
+| 3b | Scenario: slowdown / backpressure | slowed `process()`: `overload_detected` once per episode, drops counted and visible, memory flat, **`timeVec` keeps capture cadence** | 1 h 30 m | | |
+| 3c | Scenario: overload recovery | restore speed: flag re-arms below 50 %, drops stop | 45 min | | |
+| 3d | Scenario: compressed long run | looped playback for minutes: recorder flushes, memory flat, plot responsive | 1 h + run | | |
+| 3e | Output verification | after every scenario: `rBFi` present, length = `timeVec`, all ten `Params`, figure, both `Calibration.h5` groups | 45 min | | |
+| 4a | Fix what turns up before 3f | K1–K3 plus anything 3b–3e find. Found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only) | | 2 h | |
+| 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | |
+| 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | |
+| 5a | Real-rig checklist | first five minutes at the rig: **D5** (Pylon skipped frames, intake under overload), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it | 45 min | | |
+| 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does | 45 min | | |
+
+**Order changed 2026-10-05 (user's decision):** the hands-on pass 3f now comes after the automated scenarios and the K1–K3 fixes, so it tests the code that will actually go to the rig — fixing K1–K3 after it would change exactly the dialogs and status messages it checks. Remaining estimate ≈ 11 h 20 m, about 1 h 15 m of it hands-on. If time runs short, 3d goes first. **Actual** is filled in by `/wrap-up` (approximate, from session and commit times).
 
 ---
 
@@ -501,7 +504,7 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 ## Execution order summary
 
 ```
-▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 → 3a → 3f → 3b–3e → 4 → 5a → 5b
+▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 ✅ → 3a → 3b–3e → 4a → 3f → 4b → 5a → 5b
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → A4 (float64 test)
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0)
