@@ -1,6 +1,6 @@
 # SCOS — Implementation Backlog
 
-Last updated: 2026-10-04 — **this is now the only working task list.** It absorbed the open
+Last updated: 2026-10-06 — **this is now the only working task list.** It absorbed the open
 items of `docs/reviews/merged_worklist.md`, which is frozen as an archive of the review
 evidence and the reasoning behind each task (map at the bottom of this file).
 
@@ -23,7 +23,7 @@ session, not before.**
 | 1b | **B3** — persist GUI settings | see B3 below; also remember `output_root` (dialog still shown) | 1 h 45 m | — | ✅ Done item 30 |
 | 1c | ~~**B2-lite** — disk pre-flight~~ → **Save Frames disabled** | Dropped 2026-10-04: without raw frames a session writes < 50 MB even over 3 h, so a free-space check would almost never fire. The one way to fill a disk was the "Save Frames" checkbox (~70 GB/h at 20 Hz) — now greyed out until F1; raw frames are not wanted yet. B2 returns together with F1. | 10 min | ~25 min | ✅ Done item 31 |
 | 2 | Simulation checklist | what the operator does and should see in a `--mock-folder` session, dialog by dialog; the expected (low) mock κ²_corr — the bright cal there comes from a subject-in-place recording, spVar ≈ 2.3× too large, which is the dataset, not a bug | 45 min | ~45 min | ✅ [`simulation_checklist.md`](simulation_checklist.md) — numbers from a headless run 2026-10-04 (κ²_corr 0.0070 vs MATLAB 0.0105, positive 304/304); calibration frames set to the protocol's 600 (`683da41`) |
-| 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad; a copy patched to auto-answer the E3 "Measurement Ended" pop-up, without which it hangs, ran on 2026-10-04) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | | |
+| 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad; a copy patched to auto-answer the E3 "Measurement Ended" pop-up, without which it hangs, ran on 2026-10-04) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | | ✅ [`tools/rehearsal.py`](../tools/rehearsal.py) — every dialog stubbed and answered by title (unknown ones fail, never hang), watchdog `--timeout`, isolated config, ~30 checks (dialog order, laser-off check, dark cal from dark frames and bright cal from laser-on ones, files, Params, lengths, κ² > 0). Scenarios are hooks in `SCENARIOS`; only `normal` so far |
 | 3b | Scenario: slowdown / backpressure | slowed `process()`: `overload_detected` once per episode, drops counted and visible, memory flat, **`timeVec` keeps capture cadence** | 1 h 30 m | | |
 | 3c | Scenario: overload recovery | restore speed: flag re-arms below 50 %, drops stop | 45 min | | |
 | 3d | Scenario: compressed long run | looped playback for minutes: recorder flushes, memory flat, plot responsive | 1 h + run | | |
@@ -31,7 +31,7 @@ session, not before.**
 | 4a | Fix what turns up before 3f | K1–K3 plus anything 3b–3e find. Found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only) | | 2 h | |
 | 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | |
 | 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | |
-| 5a | Real-rig checklist | first five minutes at the rig: **D5** (Pylon skipped frames, intake under overload), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it | 45 min | | |
+| 5a | Real-rig checklist | first five minutes at the rig: **D5** (Pylon skipped frames, intake under overload), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | |
 | 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does | 45 min | | |
 
 **Order changed 2026-10-05 (user's decision):** the hands-on pass 3f now comes after the automated scenarios and the K1–K3 fixes, so it tests the code that will actually go to the rig — fixing K1–K3 after it would change exactly the dialogs and status messages it checks. Remaining estimate ≈ 11 h 20 m, about 1 h 15 m of it hands-on. If time runs short, 3d goes first. **Actual** is filled in by `/wrap-up` (approximate, from session and commit times).
@@ -445,6 +445,38 @@ pool **with** the in-flight cap (`_inflight_sem`); going single-thread would rem
 
 ---
 
+#### D8 · Faster dark-calibration collector *(found 2026-10-06, rig prep 3a)*
+
+The calibration collectors run on the GUI thread, one frame at a time. When they are slower
+than the camera, the frames they have not reached yet queue up in Qt's event queue and are
+dropped by `_flush_stale_frames()` at the next prompt. Measured with `tools/rehearsal.py` on
+the 2.4-Mpx, 40 Hz playback, 600 frames each:
+
+| | per frame | 600 frames | frames queued, then flushed |
+|---|---|---|---|
+| dark (`DarkCalCollector`, mean **and** variance) | 113 ms in the app, 89 ms collector alone | 68 s | 1555 (≈ 7 GB of uint16 frames held in memory) |
+| bright (`BrightCalCollector`, mean only) | 67 ms in the app, 34 ms collector alone | 40 s | — |
+
+The frames that *are* used are the right ones — the queue is first-in first-out, so the
+collector takes the first 600 captured after OK, consecutive, as MATLAB does. The cost is
+time and memory, not accuracy.
+
+**Not** "skip frames as they arrive": it would keep memory flat but not shorten the
+calibration (the arithmetic is the limit: 600 × 113 ms either way), and it would spread the
+600 frames over a minute instead of 15 s, letting slow sensor drift into `dark_var`.
+
+**Do instead:** rewrite `DarkCalCollector.add_frame()`'s Welford update in place with
+preallocated buffers — it currently allocates four temporary 19 MB arrays per frame. Same
+arithmetic, so results must not change. **Done when:** per-frame time is measured before
+and after on 1216 × 1936 frames, `tests/test_dark_cal_offline.py` still passes, and the
+dark arrays match the old collector's on the same frames.
+
+**Probably unnecessary on the rig:** 700 × 700 at 20 Hz scales to ≈ 24 ms of work per frame
+against a 50 ms budget. Decide after the rig check in step 5a. Moving the collectors off the
+GUI thread altogether is the bigger alternative and a threading change — not before v0.
+
+---
+
 ### Future Phases (post-v0)
 
 These are the next development phases after v0 is tagged.
@@ -504,13 +536,13 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 ## Execution order summary
 
 ```
-▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 ✅ → 3a → 3b–3e → 4a → 3f → 4b → 5a → 5b
+▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 ✅ → 3a ✅ → 3b–3e → 4a → 3f → 4b → 5a → 5b
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → A4 (float64 test)
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0)
   → B1 (overload dialog) → B2 (full disk monitor) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4/D7 (any order); D5 at the rig; ~~D6~~
+  → D1/D2/D3/D4/D7/D8 (any order; D8 sooner if step 5a finds a big flush); D5 at the rig; ~~D6~~
   → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread)
 ```
 

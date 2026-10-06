@@ -10,11 +10,13 @@ tests replace with stubs.
 How to read each step: **Do** → **Expect** → **If not**. Tick the boxes as you go.
 Anything that does not match — even if it looks harmless — goes into step 4.
 
-> **The numbers below are real.** They come from a headless run of this exact sequence on
-> 2026-10-04 (Dark/Bright Frames 60, normalization 3 s, 10 s of measurement): the whole
-> session completed, every file was written, and corrected κ² was positive in 304 of 304
-> points. Your values will differ a little, because the recording loops and the 60 bright
-> frames land wherever the playback happens to be.
+> **The numbers below are real.** They come from headless runs of this exact sequence
+> (normalization 3 s, 10 s of measurement): on 2026-10-04 with Dark/Bright Frames 60, and on
+> 2026-10-05 with both 60 and 600 using `tools/rehearsal.py`. Every run completed, every file
+> was written, and corrected κ² was positive at every point (304/304 with 60 frames, 305/305
+> with 600). **Some values depend on the frame count**, so those are given for both 60 and
+> 600. Your values will differ a little, because the recording loops and the bright frames
+> land wherever the playback happens to be.
 >
 > **What that run covered, and what it didn't.** It confirmed A2–A3, B1–B8, B10 and
 > section C (except the "over 2 min → mean" half of C5). Sections D, E, F and G, step B9,
@@ -34,8 +36,21 @@ Anything that does not match — even if it looks harmless — goes into step 4.
   ```
 - **Results folder:** make an empty folder somewhere easy to find (e.g. `Desktop\scos_rehearsal`).
 - **Dark/Bright Frames = 600** — the protocol default (`SCOS_protocol.md:20`), and the
-  committed default since 2026-10-04 (it was 60, a testing shortcut). Each calibration
-  takes about 15 s at 40 Hz — longer if this PC plays the 2.4-Mpx frames slower than that.
+  committed default since 2026-10-04 (it was 60, a testing shortcut).
+- **How long each calibration takes depends on the frame count and on how fast this PC
+  is.** The shortest possible is frames ÷ 40 Hz, when the PC keeps up with the playback;
+  on a slower PC it takes several times that, because every frame is processed on the GUI
+  thread. The **dark** calibration is the slower of the two — it computes each pixel's mean
+  *and* variance, the bright one only the mean (todo D8).
+
+  | Frames | Range | Measured on the dev PC, 2026-10-05 |
+  |---|---|---|
+  | 60  | ≈ 2–6 s each   | dark ≈ 4–5 s, bright ≈ 3–4 s |
+  | 600 | ≈ 15–70 s each | dark ≈ 69 s, bright ≈ 41 s |
+
+  While it runs, the "Dark cal: n / 600" counter may climb slowly (≈ 9 per second for
+  dark on the dev PC) — that is the PC, not a hang. On the rig (700 × 700 at 20 Hz)
+  600 frames should take about 30 s each.
 
 ### Three things that look wrong but are normal
 
@@ -43,10 +58,22 @@ Anything that does not match — even if it looks harmless — goes into step 4.
    overwrites every other message there — see known issue K1 below.
 2. **During the measurement the live image updates only every 2.5 s.** On purpose, to save
    GUI time. The FPS, κ² and ⟨I⟩ labels keep moving.
-3. **Corrected κ² is lower than MATLAB's** — about **0.007** here, against MATLAB's **0.0105**
-   for this recording. Not a bug: the recording was made with a subject in place, so the
-   bright calibration taken from it contains the subject's speckle and its `spVar` comes out
-   about 2.3× too large; a larger `spVar` subtracted from the numerator gives a smaller κ².
+3. **Corrected κ² is lower than MATLAB's** (**0.0105** for this recording), and **how much
+   lower depends on the frame count**:
+
+   | Bright Frames | corrected κ² | 1/κ² | `spVar` (mean in ROI) |
+   |---|---|---|---|
+   | 60  | ≈ 0.0070–0.0076 (three runs) | ≈ 130–145 | ≈ 1.2 |
+   | 600 | ≈ 0.0085 (one run)           | ≈ 115–120 | ≈ 0.5 |
+
+   Two causes, neither a bug. **The dataset:** the recording was made with a subject in
+   place, so the bright calibration taken from it contains the subject's speckle and its
+   `spVar` comes out too large (about 2.3×); a larger `spVar` subtracted from the numerator
+   gives a smaller κ². **The frame count:** `spVar` is measured on the *average* of the
+   bright frames, and the random noise left in an average of N frames shrinks only as 1/N —
+   with 60 frames enough is left to be counted as part of `spVar`, so κ² comes out lower than
+   with 600. That is why the protocol asks for 600, and why raw κ² (≈ 0.093) is the same
+   either way.
    On the rig the bright calibration is taken with the subject removed. The accuracy check
    against MATLAB lives in the offline tests (`tests/test_dark_cal_offline.py`,
    `tests/test_bright_cal_offline.py`), not here.
@@ -76,11 +103,11 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B1 | Click **Start SCOS** | **First pop-up: "Estimated G[DU/e]"** — "CameraSN 40513592 Mono10 is in the G[DU/e] table, but not at 24 dB … G was rescaled from the closest measured gain (G=1.4597 DU/e)". Normal: the table has this camera at 16/18/20 dB only. Click OK. | "Can't calculate SCOS … was not found" → the serial was not read from the recording; step 4 |
 | ☐ B2 | — | **Second: the folder dialog** "Choose folder to save this session's results". Pick your empty folder. | |
 | ☐ B3 | — | **Third: "Calibration — Step 1 of 2: Dark Frames"** — "Please turn off the laser." Click **OK**. This order (G → folder → laser) is the protocol's, `SCOS_protocol.md:11-17`. | Any other order → step 4 (it is asserted by `tests/test_recording_name.py`) |
-| ☐ B4 | Watch | The parameter boxes turn dark grey (locked). The live image goes **darker** — playback switches to the dark folder — and **⟨I⟩ drops to ≈ 99 DU**. The label counts **"Dark cal: n / 600"**. You may briefly see **"Discarding N buffered frames…"** — normal, those were captured before you clicked OK. | ⟨I⟩ stays ≈ 121 during dark cal → playback did not switch; the run will then abort at B8 |
+| ☐ B4 | Watch | The parameter boxes turn dark grey (locked). The live image goes **darker** — playback switches to the dark folder — and **⟨I⟩ drops to ≈ 99 DU**. The label counts **"Dark cal: n / 600"** — slowly on this PC (see "Before you start"). You may briefly see **"Discarding N buffered frames…"** — normal, those were captured before you clicked OK. | ⟨I⟩ stays ≈ 121 during dark cal → playback did not switch; the run will then abort at B8 |
 | ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser and remove the subject…". Click **OK**. | |
-| ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"** | |
+| ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **hundreds or thousands** (1555 with 600 frames on the dev PC) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |
-| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ² ≈ 0.007, always positive**; 1/κ² ≈ 140. "Dropped: 0" ideally. | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). Note "Dropped" if it is not 0 — playback frames are 2.4 Mpx, heavier than the rig's 700 × 700, so this PC may not keep up at 40 Hz |
+| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. "Dropped: 0" ideally. | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). Note "Dropped" if it is not 0 — playback frames are 2.4 Mpx, heavier than the rig's 700 × 700, so this PC may not keep up at 40 Hz |
 | ☐ B9 | Let it run **at least 2½ minutes** | When the recording passes **120 s**, the plot's x-axis switches from **seconds to minutes** | |
 | ☐ B10 | Click **Stop SCOS** | Pop-up **"Measurement Ended — Please turn off the laser."** Click **OK**. Playback switches to the dark folder for one frame to check the laser went off; in playback that check **passes silently** (no second pop-up). | A **"Laser May Still Be On"** pop-up → step 4, with the numbers it shows |
 | ☐ B11 | Watch | Parameters unlock, button reads **Start SCOS**, the image is bright again (back on the recording). | Image stays dark → playback was not restored to the recording |
@@ -97,7 +124,7 @@ the repo folder also has it: search "Session folder created".
 | ☐ C3 | `rBfi_fig.png` | Opens; shows the same curve as the plot, x-axis in minutes for a run over 2 min |
 | ☐ C4 | `rBfi_results.h5` (open with HDFView, or ask Claude to print it) | datasets `startTime`, `timeVec`, `rBFi`, `Intensity`, `k2_raw`, `k2_corr`, `bfi`, groups `Params` and `metadata`. `Params` has ten fields: frameRate 40, exposureTime 5, gain 24, windowSize 7, ROI, bitDepth 10, normalizationConstant, normalizationMethod, normalizationWindowSec, gitCommit. **No `satCapacity` anywhere.** |
 | ☐ C5 | Normalization | Run **over 2 min** → `normalizationMethod` = `mean` and rBFi hovers around **1**. (A run **under** 2 min uses `percentile5` instead, so rBFi sits mostly **above 1** — 1.64 on average in the 10-s headless run. Both are MATLAB's rule, `SCOSvsTime_WithNoiseSubtraction_Ver2.m:505`.) |
-| ☐ C6 | `Calibration.h5` | groups **`dark`** (`mean_dark` ≈ 99.3 DU, `var_dark`, `mask`) and **`bright`** (`spIm` ≈ 22 DU inside the ROI, `spVar`), each with `n_frames` = 600 |
+| ☐ C6 | `Calibration.h5` | groups **`dark`** (`mean_dark` ≈ 99.3 DU, `var_dark`, `mask`) and **`bright`** (`spIm` ≈ 22 DU inside the ROI, `spVar` ≈ 0.5 with 600 frames / ≈ 1.2 with 60), each with `n_frames` = your frame count |
 
 ---
 
