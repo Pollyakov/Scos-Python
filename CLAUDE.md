@@ -121,15 +121,16 @@ IMPORTANT: a corrected κ² that is ≤ 0 yields no BFi at all, and if *every* f
 
 IMPORTANT: **calibration frames are discarded until the camera's backlog is gone.**
 The dark/bright collectors run on the GUI thread behind a queued connection, so when the
-camera outruns that handler a backlog builds in Qt's event queue — 60 to 130 frames at
-40 Hz, measured. Every one of them was captured *before* the operator clicked OK on the
+camera outruns that handler a backlog builds in Qt's event queue — from tens to over a
+thousand frames, depending on the calibration length and the PC's speed (measurements in
+todo D8). Every one of them was captured *before* the operator clicked OK on the
 laser prompt, so without this the bright calibration is built from laser-off frames.
 `MainWindow._flush_stale_frames()` is called after each prompt and drops the difference
 between what the camera has emitted (`camera.frames_emitted` — kept by all three camera
 classes, bumped once per frame just before `frame_ready`) and
 what this window has received. Any new frame source must keep that counter.
 
-Scope of that measurement: it was taken in a **headless** run where the laser prompt
+Scope of those measurements: they were taken in **headless** runs where the laser prompt
 returns instantly. A real modal dialog runs a nested event loop that keeps delivering
 queued frames while nobody is collecting them, so on the rig the backlog at the moment OK
 is clicked is probably much smaller — and the lab camera is 700x700 at 20 Hz, roughly a
