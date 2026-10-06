@@ -11,6 +11,9 @@ and the decision is marked provisional — each of those is a constant or a one-
 results-file schema (worklist task 9) is therefore unblocked, with one new ambiguity that the
 answer to 4 created: see question 16. Questions 7–15 are wanted but not urgent.
 
+**Status 2026-10-06: questions 7–16 were sent to the supervisor on 2026-10-04** (rig-session
+prep step 0). Anything written after that goes under **"F. Still unsent"** until it is sent.
+
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
 internal engineering decision, not a scientific or spec one.
 
@@ -98,6 +101,22 @@ bright"*. But `docs/session_tab` lists the session folder as containing **two** 
 `DarkCalibration.h5` **and** `BrightCalibration.h5`, and worklist task 9 was written against
 that. Which is it: one combined file (proposed name `Calibration.h5`, with a `dark` group and
 a `bright` group), or the two separate files named in `session_tab`?
+
+---
+
+## F. Still unsent
+
+**17. Should `spVar` keep the leftover temporal noise of the bright average?** *(Low priority
+— raised 2026-10-06; send after the rig session.)* `spVar` is the local variance of the
+**average** of the N bright frames. Averaging does not remove each frame's random noise
+(shot noise, read noise, dynamic speckle); it only divides it by N, so `spVar` contains that
+leftover as well as the real illumination non-uniformity. Measured on the lab recording
+(`tools/rehearsal.py`, 2026-10-05): `spVar` ≈ 1.22 with N = 60 and ≈ 0.51 with N = 600, which
+fits *real ≈ 0.44 + 47 / N* DU², where 47 matches the variance of a single frame (raw κ² ×
+⟨I⟩² ≈ 0.093 × 21.9² ≈ 45). At N = 600 the leftover is ≈ 0.08 DU² and lowers κ²_corr by about
+**1.9 %**; at N = 60 by about 18 %. The MATLAB script computes `spVar` the same way, so Python
+and MATLAB agree. Is this intended, or should the leftover — about the single-frame variance
+divided by N — be subtracted from `spVar`?
 
 ---
 
