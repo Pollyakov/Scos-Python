@@ -127,6 +127,11 @@ class MainWindow(QMainWindow):
         # reference, and it decides mean vs percentile at close.
         self._last_result_t:   float        = 0.0
         self._bfi_norm_buffer: list[tuple[float, float]] = []  # (t, bfi_raw) during MEASURING_INIT
+        # Length of the baseline window the constant was actually computed
+        # over, for Params.normalizationWindowSec. Usually the spinbox's
+        # _norm_seconds; shorter when the run was stopped before the window
+        # closed (open question 11, see _normalize_early_stop).
+        self._bfi_norm_window_s: float      = 0.0
         # Guard against a measurement that can never start because every
         # corrected kappa^2 is <= 0 (see _abort_on_invalid_k2).
         self._n_invalid_k2:        int  = 0
@@ -1057,7 +1062,13 @@ class MainWindow(QMainWindow):
         `bfi / provisional`; multiplying by `provisional / final` turns it into
         `bfi / final` with one pass over a list that is already in memory,
         which matters for a multi-hour recording.
+
+        A run stopped before the window closed has no constant yet; it is
+        normalized here on whatever it collected (_normalize_early_stop).
         """
+        if not self._bfi_norm and self._bfi_norm_buffer:
+            self._normalize_early_stop()
+
         # Whatever else happens below, the session ends with the curve fully
         # drawn: up to a second of points can still be sitting in the plot's
         # buffer, and task 12 saves this figure to a file.
@@ -1101,6 +1112,54 @@ class MainWindow(QMainWindow):
             "constant %.6g (was %.6g by %s), plot rescaled by %.6g",
             self._last_result_t, method, final, previous, previous_method,
             previous / final,
+        )
+
+    def _normalize_early_stop(self) -> None:
+        """Normalize a run that was stopped before its baseline window closed.
+
+        Open question 11, answered by the supervisor on 2026-10-07: "normalize
+        on whatever data exists". Before that, such a run wrote raw `bfi` and no
+        `rBFi` at all, which is what a short test run at the rig would produce.
+
+        The whole recording is the baseline window, so the constant comes from
+        every BFi value in `_bfi_norm_buffer`, and the method is picked on the
+        final length directly — there is no provisional constant to correct.
+        `normalizationWindowSec` records the span actually used, not the
+        spinbox value: the file must not describe a baseline that never
+        happened.
+
+        Those points were collected but never plotted (MEASURING_INIT plots
+        nothing until the window closes), so they are drawn here; otherwise the
+        saved figure would be empty.
+        """
+        method = choose_norm_method(
+            duration_s       = self._last_result_t,
+            force_percentile = self._norm_type == "pulsation",
+        )
+        try:
+            constant = normalization_constant(
+                [b for _, b in self._bfi_norm_buffer], method)
+        except ValueError:
+            logger.exception("Stopped before the baseline window closed and "
+                             "the BFi collected so far cannot be normalized")
+            return
+        if not constant or not np.isfinite(constant):
+            logger.error("Stopped before the baseline window closed; constant "
+                         "is %r — no rBFi", constant)
+            return
+
+        self._bfi_norm          = constant
+        self._bfi_norm_method   = method
+        self._bfi_norm_window_s = self._last_result_t
+        for t_buf, bfi_buf in self._bfi_norm_buffer:
+            self.plot_widget.append(t_buf, bfi_buf / constant)
+        self._calib_label.setText(
+            f"Normalized on {self._last_result_t:.1f} s (stopped early)")
+        logger.warning(
+            "Stopped at %.1f s, before the %.0f s baseline window closed — "
+            "normalized on the %d BFi values collected: constant %.6g by %s",
+            self._last_result_t, self._norm_seconds,
+            len(self._bfi_norm_buffer), constant, method,
         )
 
     # `session_tab` names this file `rBfi_fig.fig` — MATLAB's own figure format,
@@ -1169,16 +1228,18 @@ class MainWindow(QMainWindow):
     def _write_rbfi(self) -> None:
         """Finalize the results file: rBFi plus the normalization fields.
 
-        Runs inside _finish_session(), while the recorder is still open. A
-        session that never reached MEASURING has no normalization constant, so
-        there is nothing to normalize by and the file keeps raw `bfi` only —
-        the same state a crash leaves behind, which the supervisor accepted.
+        Runs inside _finish_session(), while the recorder is still open. A run
+        stopped before the baseline window closed has already been normalized
+        on what it collected (_finalize_normalization). Only a session with no
+        valid BFi at all has no constant: there is nothing to normalize by and
+        the file keeps raw `bfi` only — the same state a crash leaves behind,
+        which the supervisor accepted.
         """
         if self._recorder is None:
             return
         if not self._bfi_norm:
             logger.warning(
-                "No normalization constant (session never left MEASURING_INIT) "
+                "No normalization constant (no valid BFi in this session) "
                 "— results file keeps raw BFi with no rBFi"
             )
             return
@@ -1186,10 +1247,11 @@ class MainWindow(QMainWindow):
             self._recorder.write_rbfi(
                 norm_constant  = self._bfi_norm,
                 method         = self._bfi_norm_method,
-                window_seconds = self._norm_seconds,
+                window_seconds = self._bfi_norm_window_s,
             )
-            logger.info("rBFi written — constant=%.6g method=%s window=%.0f s",
-                        self._bfi_norm, self._bfi_norm_method, self._norm_seconds)
+            logger.info("rBFi written — constant=%.6g method=%s window=%.1f s",
+                        self._bfi_norm, self._bfi_norm_method,
+                        self._bfi_norm_window_s)
         except Exception:
             # Never let the finalization step lose the data already on disk.
             logger.exception("Could not write rBFi; raw BFi is still in the file")
@@ -1492,6 +1554,7 @@ class MainWindow(QMainWindow):
         self._bfi_norm            = None
         self._bfi_norm_method     = NORM_METHOD_MEAN
         self._bfi_norm_buffer     = []
+        self._bfi_norm_window_s   = 0.0
         self._last_result_t       = 0.0
         self._n_invalid_k2        = 0
         self._invalid_k2_reported = False
@@ -2107,6 +2170,7 @@ class MainWindow(QMainWindow):
                     bfi_values = [b for _, b in self._bfi_norm_buffer]
                     self._bfi_norm = normalization_constant(
                         bfi_values, self._bfi_norm_method)
+                    self._bfi_norm_window_s = self._norm_seconds
                     logger.info(
                         "Normalization window closed at %.1f s — provisional "
                         "constant %.6g by %s over %d points",

@@ -153,7 +153,7 @@ the repo folder also has it: search "Session folder created".
 | ☐ F2 | Start SCOS → **Cancel** at "Please turn off the laser" | The session folder that was just created is **removed again**; parameters unlocked |
 | ☐ F3 | Start SCOS → OK → click **Stop SCOS while "Dark cal: n / …" is counting** | **Today: see K3** — image stays dark |
 | ☐ F4 | Start SCOS → OK → **Cancel** at "Please turn on the laser" | **Today: see K2** — parameters stay locked. To unlock: run F5 to the end, or relaunch |
-| ☐ F5 | Stop SCOS during **normalization** (before "Normalized ✓") | Run ends; files written; per open question 11 there is **no `rBFi`** worth using — note what you see |
+| ☐ F5 | Stop SCOS during **normalization** (before "Normalized ✓"), e.g. at 3 s of a 5 s window | Run ends; the status-bar label reads **"Normalized on 3.0 s (stopped early)"** (your number); the plot shows the curve; all three files written. In `rBfi_results.h5`, `rBFi` **is present** and `Params` → `normalizationWindowSec` is the time you stopped at (≈ 3), **not** the spinbox's 5; `normalizationMethod` = `percentile5` (always, since the window spinbox stops at 60 s — far under the 2-min rule). Vika's answer to open question 11 (2026-10-07): normalize on whatever data exists |
 
 ## G · Close and relaunch
 

@@ -20,8 +20,10 @@ Three decisions were taken on 2026-09-28 where the port had a choice:
   * **"Pulsation lower level" forces the percentile** whatever the length.
     The automatic rule applies only in the default "Number of seconds" mode.
 
-Whether those match what Vika wants is still open (questions 10 and 11 in
-docs/open_questions.md); the reference is what we follow until she answers.
+The first was confirmed by the supervisor on 2026-10-07 (question 10 in
+docs/open_questions.md). Her answer to question 11 added a fourth rule: a run
+stopped before the window closes is normalized on whatever it collected
+(TestEarlyStop).
 
 MATLAB's `prctile` is not numpy's default percentile, and the difference lands
 directly in the divisor of every point in the results file — so it is tested
@@ -322,15 +324,119 @@ class TestResultsFileGetsTheFinalValues:
             np.testing.assert_allclose(f["rBFi"][:], f["bfi"][:] / expected,
                                        rtol=1e-9)
 
-    def test_an_unnormalized_session_is_left_alone(self, window, dialogs):
-        # Stopped before the baseline window closed: there is no constant to
-        # re-pick, and _finalize_normalization must not invent one.
-        window._on_scos_result(0.5, 0.09, 0.1, 500.0, 1.0)
+
+class TestEarlyStop:
+    """Stopped before the baseline window closed — open question 11.
+
+    The supervisor's answer (2026-10-07): "normalize on whatever data exists".
+    Until then such a run wrote raw `bfi` and no `rBFi`, which is exactly what
+    a short test run at the rig would have produced.
+    """
+
+    def _stop_at(self, window, seconds):
+        _run(window, seconds)
+        assert window._state is State.MEASURING_INIT, (
+            "the test needs a run that never reached the end of its window"
+        )
         assert window._bfi_norm is None
+        window._finish_session()
+        window._stop_recorder()
+
+    def test_rbfi_is_written_from_what_was_collected(self, window, dialogs,
+                                                      tmp_path):
+        import h5py
+
+        self._stop_at(window, 3.0)               # window is 5 s
+
+        # Under 120 s, so MATLAB's rule picks the 5th percentile — over every
+        # BFi value the run produced, because the whole run was the baseline.
+        expected = normalization_constant(_baseline_bfi(window),
+                                          NORM_METHOD_PERCENTILE)
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert "rBFi" in f, "an early stop must still produce rBFi"
+            p = f["Params"].attrs
+            assert p["normalizationMethod"] == NORM_METHOD_PERCENTILE
+            assert p["normalizationConstant"] == pytest.approx(expected)
+            np.testing.assert_allclose(f["rBFi"][:], f["bfi"][:] / expected,
+                                       rtol=1e-9)
+
+    def test_params_records_the_window_actually_used(self, window, dialogs,
+                                                      tmp_path):
+        import h5py
+
+        self._stop_at(window, 3.0)
+
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(3.0), (
+                "the baseline was 3 s of data; writing the spinbox's 5 s would "
+                "describe a window that never happened"
+            )
+
+    def test_the_collected_points_are_plotted(self, window, dialogs):
+        _run(window, 3.0)
+        assert len(window.plot_widget.get_data()[1]) == 0, (
+            "MEASURING_INIT plots nothing until the window closes"
+        )
 
         window._finalize_normalization()
 
+        buffer = window._bfi_norm_buffer
+        _, rbfi = window.plot_widget.get_data()
+        assert len(rbfi) == len(buffer) > 0, (
+            "without these points the saved figure would be empty"
+        )
+        np.testing.assert_allclose(
+            rbfi, np.array([b for _, b in buffer]) / window._bfi_norm, rtol=1e-9)
+        # Not left frozen on the "Normalizing — 3.0 / 5 s" countdown.
+        assert "stopped early" in window._calib_label.text()
+
+    def test_the_stop_button_path_writes_it(self, window, dialogs, monkeypatch,
+                                            tmp_path):
+        """Through _toggle_scos, as the Stop SCOS button runs it.
+
+        The other tests call _finish_session() directly; this one goes through
+        disable_intake, the state change to FINISHED and _stop_recorder too.
+        The laser-off check has its own tests and is stubbed out here.
+        """
+        import h5py
+
+        monkeypatch.setattr(window, "_laser_off_check", lambda mask: None)
+        _run(window, 3.0)
+        assert window._state is State.MEASURING_INIT
+
+        window._toggle_scos(False)
+
+        assert window._state is State.PREVIEW
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert "rBFi" in f
+            assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(3.0)
+        assert len(window.plot_widget.get_data()[1]) > 0
+
+    def test_no_valid_bfi_still_writes_no_rbfi(self, window, dialogs, tmp_path):
+        import h5py
+
+        # Every corrected kappa^2 <= 0: no BFi at all, so nothing to divide by.
+        for i in range(20):
+            window._on_scos_result(i / 40.0, 0.09, -0.003, 500.0, 1.0)
+        window._finish_session()
+        window._stop_recorder()
+
         assert window._bfi_norm is None
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert "rBFi" not in f
+            assert f["bfi"].shape == (20,)
+
+    def test_a_completed_window_still_records_the_spinbox_length(
+            self, window, dialogs, tmp_path):
+        import h5py
+
+        # The run went past its window: the early-stop path must not touch it.
+        _run(window, 8.0)
+        window._finish_session()
+        window._stop_recorder()
+
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(5.0)
 
 
 class TestManualExport:

@@ -18,9 +18,9 @@ prep step 0). Anything written after that goes under **"F. Still unsent"** until
 Eight are settled and moved to "Answered" at the bottom. Two are still open:
 **9**, because she replied with a question of her own, and **14**, because she asked for a
 size estimate before setting any limits. Both are in section B below, with the follow-up
-to send. One answer changes code that already exists: **11**. Up to now, stopping before the
-normalization window ends wrote no `rBFi`. Now it has to normalize on whatever data exists
-(todo rig-prep row 4c).
+to send. One answer changed code that already existed: **11**. Stopping before the
+normalization window ends used to write no `rBFi`; it now normalizes on whatever data
+exists (todo rig-prep row 4c, implemented the same day).
 
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
 internal engineering decision, not a scientific or spec one.
@@ -172,8 +172,10 @@ item 23.
 **11. Stopping before the normalization window ends — CHANGED: normalize on whatever data
 exists.** It used to write no `rBFi` in that case. → todo rig-prep row 4c. When it is built,
 the window recorded in `Params` must be the span actually used, not the spinbox value. If the
-run has no valid BFi at all, there is still nothing to normalize and no `rBFi`. The code to
-change is `_finalize_normalization()` and `_write_rbfi()` in `gui/main_window.py`.
+run has no valid BFi at all, there is still nothing to normalize and no `rBFi`.
+*Implemented 2026-10-07* (todo Done item 37): `_normalize_early_stop()` in
+`gui/main_window.py`; `normalizationWindowSec` records the span actually used; tests in
+`tests/test_normalization.py` (`TestEarlyStop`).
 
 **12. The Frames folder — one file per frame.** Use the format that is most efficient to
 write, store and read, given that the full raw data must be kept. Format still to be chosen
