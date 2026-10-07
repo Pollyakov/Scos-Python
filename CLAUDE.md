@@ -89,6 +89,9 @@ thread — not the GUI thread (merged_worklist task 5). A slow `process()` there
 bounded queue and back-pressures the grab loop (visible: `overload_detected`, `Dropped: N`,
 Pylon skipped-frame warnings) instead of lagging the GUI. Each frame's timestamp is taken at
 capture on the **monotonic** clock, so GUI scheduling jitter can never enter `timeVec`.
+On the real camera "at capture" means *when retrieved from Pylon's buffer* — the same
+instant within milliseconds unless frames are waiting in those buffers under overload
+(todo D5).
 
 Still on the GUI thread, by design for now: the dark/bright calibration collectors and the
 raw-frame HDF5 write (tasks 14/16). Intake backpressure bounds Qt's queued-connection event

@@ -107,7 +107,7 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser and remove the subject…". Click **OK**. | |
 | ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **hundreds or thousands** (1555 with 600 frames on the dev PC) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |
-| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. "Dropped: 0" ideally. | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). Note "Dropped" if it is not 0 — playback frames are 2.4 Mpx, heavier than the rig's 700 × 700, so this PC may not keep up at 40 Hz |
+| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig's 700 × 700 is ≈ 5× lighter), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled…"** that is gone within 2½ s (K4). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
 | ☐ B9 | Let it run **at least 2½ minutes** | When the recording passes **120 s**, the plot's x-axis switches from **seconds to minutes** | |
 | ☐ B10 | Click **Stop SCOS** | Pop-up **"Measurement Ended — Please turn off the laser."** Click **OK**. Playback switches to the dark folder for one frame to check the laser went off; in playback that check **passes silently** (no second pop-up). | A **"Laser May Still Be On"** pop-up → step 4, with the numbers it shows |
 | ☐ B11 | Watch | Parameters unlock, button reads **Start SCOS**, the image is bright again (back on the recording). | Image stays dark → playback was not restored to the recording |
@@ -183,6 +183,21 @@ so you will meet each of them; confirm or refute.
   only). Neither Stop SCOS (920-925) nor Stop Video (757-759) during `DARK_CAL` switches
   playback back to `"main"`, so the preview stays dark until the next Start SCOS. Same class
   of bug that Done item 28 fixed for the laser-off check.
+
+Found by the slowdown rehearsal (rig prep 3b, 2026-10-06), seen in a headless run:
+
+- **K4 · The overload warning vanishes too** — same cause as K1. During a measurement
+  `_on_display_frame` rewrites the status bar every 2.5 s, so "SCOS overload — input queue…"
+  is gone within 2.5 s; 3 s after it fired the bar shows "Frame #…". "Dropped: N" (red, always
+  visible) and `app.log` keep the record. Fix together with K1.
+- **K5 · Closing the window while processing is far behind leaves the pipeline running.**
+  `RealtimePipeline.stop()` queues its stop marker *behind* the waiting frames, so the
+  pipeline first processes the whole backlog (up to 20 queued + 6 in flight) — results
+  nobody will use, since Stop SCOS already ended the session — while `closeEvent` waits only
+  2 s. With processing slowed to ≈ 0.75 s a frame it needed 3.7 s more, and at Python's exit
+  it died mid-task with "cannot schedule new futures after interpreter shutdown". The session
+  files are already written by then. Needs processing slower than ≈ 230 ms a frame with 3
+  workers; the rig's 700 × 700 frames are far below that.
 
 ## What this rehearsal cannot test
 

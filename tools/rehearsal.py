@@ -11,6 +11,7 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal.py                     # 600 + 600 cal frames
     venv\\Scripts\\python.exe tools/rehearsal.py --cal-frames 60     # quick run
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario normal --measure-seconds 30
+    venv\\Scripts\\python.exe tools/rehearsal.py --scenario slowdown --cal-frames 60
 
 What it can NOT test: the real modal dialogs. Every QMessageBox / QFileDialog
 call is replaced by a stub that records it and answers the way an operator
@@ -27,7 +28,8 @@ unstubbed "Measurement Ended" prompt:
     after --timeout seconds, whatever it is stuck on.
 
 Scenarios (--scenario) are sets of hooks around the same session; see
-SCENARIOS at the bottom. Rig prep steps 3b-3d add theirs there.
+SCENARIOS at the bottom: `normal` (3a) and `slowdown` (3b, see Slowdown);
+rig prep steps 3c-3d add theirs there.
 """
 
 import argparse
@@ -183,8 +185,353 @@ class Scenario:
     extra_checks:   Callable = _noop
 
 
+def _private_bytes() -> int | None:
+    """This process's committed private memory, in bytes (Windows; else None).
+
+    Private bytes rather than the working set: it counts every live NumPy
+    buffer whether or not Windows has paged it out, so a frame backlog shows
+    up in it however memory-starved the machine is.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    *[(n, ctypes.c_size_t) for n in (
+                        "PeakWorkingSetSize", "WorkingSetSize",
+                        "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                        "PagefileUsage", "PeakPagefileUsage", "PrivateUsage")]]
+
+    get_process = ctypes.windll.kernel32.GetCurrentProcess
+    get_process.restype = wintypes.HANDLE
+    get_info = ctypes.windll.psapi.GetProcessMemoryInfo
+    get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Counters), wintypes.DWORD]
+    c = _Counters()
+    c.cb = ctypes.sizeof(c)
+    return int(c.PrivateUsage) if get_info(get_process(), ctypes.byref(c), c.cb) else None
+
+
+def _log_text() -> str:
+    """Everything logged so far to the run's rehearsal.log."""
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.FileHandler):
+            h.flush()
+            return Path(h.baseFilename).read_text(encoding="utf-8")
+    return ""
+
+
+class Slowdown:
+    """Rig prep 3b — a pipeline that cannot keep up, then one that stops dead.
+
+    Phases, all inside MEASURING (calibration and normalization run at full
+    speed, so the session itself stays valid):
+
+      full   FULL_S at full speed — the baseline must not be overloaded, or
+             "once per episode" below would be counting an older episode.
+      slow   every process() call takes SLOW_DELAY_S longer: the pipeline
+             manages ≈ N_WORKERS / (proc + delay) frames/s against PLAYBACK_HZ.
+             The input queue fills, overload_detected fires once, and the
+             blocking intake throttles the camera — nothing may be dropped yet,
+             because a queue slot still frees well inside the 1.5 s put cap.
+      stall  one process() call sleeps STALL_S. Results are collected in order,
+             so that one frame holds every slot; the camera's put() times out
+             every 1.5 s and each timeout evicts — and must count — a frame.
+      after  slow again for AFTER_S, so results flow and the Dropped label
+             refreshes (it is rewritten once a second, from a result) before
+             Stop SCOS, which is pressed while still overloaded.
+
+    Playback runs at PLAYBACK_HZ, not the recording's 40 Hz, because on the
+    dev PC the 2.4 Mpx pipeline tops out near 21 frames/s: at 40 Hz the
+    "normal" run is itself overloaded from its first seconds and there is no
+    clean baseline to slow down from. Set on the camera directly, not through
+    the FPS box, so Params.frameRate still reports the recording's rate.
+
+    What it can NOT show — the real camera under overload (todo D5): the mock
+    has no frame buffer, so a blocked put() simply delays the next "capture".
+    A Basler keeps exposing into Pylon's 20 buffers, and once they are full
+    the driver loses frames — which, under GrabStrategy_OneByOne, nothing
+    counts: GetNumberOfSkippedImages() does not include them. And
+    camera.py stamps t_capture after RetrieveResult, so frames that waited in
+    those buffers during a stall get the time they were *retrieved* — bunched
+    together — not the time they were exposed. Here timeVec is checked against
+    the stamps the frame source made; on the rig, check that the saved timeVec
+    stays evenly spaced through a deliberate overload.
+    """
+
+    PLAYBACK_HZ  = 10.0
+    N_WORKERS    = 3
+    SLOW_DELAY_S = 0.6     # 3 workers → ≈ 4 frames/s against 10 offered
+    STALL_S      = 8.0
+    FULL_S       = 3.0
+    SLOW_S       = 6.0     # before the stall; the queue fills in ≈ 3–4 s
+    AFTER_S      = 4.0
+    PUT_CAP_S    = 1.5     # RealtimePipeline.enable_intake's put_timeout_s
+    STATUS_AFTER_S = 3.0   # is the overload warning still on screen this late?
+
+    def __init__(self) -> None:
+        import threading
+        self.lock    = threading.Lock()
+        self.delay_s = 0.0
+        self.stall_s = 0.0          # pending stall, taken by the next process()
+        self.stall_began: float | None = None
+        self.stall_ended: float | None = None
+        self.phase   = "init"       # calibration + normalization, until during_measure
+        self.stamps:    list[float] = []                  # every t_capture emitted
+        self.overloads: list[tuple[float, int, str]] = []  # (when, depth, phase)
+        self.arrivals:  list[tuple[float, float]] = []    # (when, t) at the GUI
+        self.memory:    list[tuple[float, int, int, str]] = []  # (when, bytes, depth, phase)
+        self.dropped_before_stall: int | None = None
+        self.dropped_after:  int | None = None
+        self.label_after:    str | None = None
+        self.status_after:   str | None = None
+        self._last_sample = 0.0
+
+    # -- hooks ---------------------------------------------------------------
+
+    def before_start(self, w, cam, args) -> None:
+        from PyQt6.QtCore import Qt
+
+        w.spn_workers.setValue(self.N_WORKERS)
+        cam.set_frame_rate(self.PLAYBACK_HZ)
+
+        # Runs on the camera thread, beside the pipeline's own intake slot:
+        # the stamp each frame carried out of the frame source.
+        def _stamp(_frame, t_capture):
+            self.stamps.append(t_capture)
+        cam.frame_ready.connect(_stamp, Qt.ConnectionType.DirectConnection)
+
+        # Start SCOS connects the new pipeline to `w._on_overload` by attribute
+        # lookup, so an instance attribute set now is what gets connected.
+        original_overload = w._on_overload
+
+        def _overload(depth):
+            self.overloads.append((time.monotonic(), depth, self.phase))
+            original_overload(depth)
+        w._on_overload = _overload
+
+        # The pipeline is rebuilt from this processor at Start SCOS.
+        original_process = w.processor.process
+
+        def _process(frame, mask):
+            out = original_process(frame, mask)
+            with self.lock:
+                stall, self.stall_s = self.stall_s, 0.0
+            if stall:
+                self.stall_began = time.monotonic()
+                time.sleep(stall)
+                self.stall_ended = time.monotonic()
+            elif self.delay_s:
+                time.sleep(self.delay_s)
+            return out
+        w.processor.process = _process
+
+    def during_measure(self, w, cam, args, pump) -> None:
+        from PyQt6.QtCore import Qt
+
+        def _arrived(t, *_rest):
+            self.arrivals.append((time.monotonic(), t))
+        w._scos_worker.result_ready.connect(_arrived, Qt.ConnectionType.QueuedConnection)
+
+        def sample():
+            now = time.monotonic()
+            if now - self._last_sample >= 0.2:
+                self._last_sample = now
+                mem = _private_bytes()
+                if mem is not None:
+                    self.memory.append((now, mem, w._scos_worker.queue_depth, self.phase))
+            if (self.overloads and self.status_after is None
+                    and now >= self.overloads[0][0] + self.STATUS_AFTER_S):
+                self.status_after = w.status.currentMessage()
+
+        def wait(seconds, label):
+            end = time.monotonic() + seconds
+            pump(lambda: (sample(), time.monotonic() >= end)[1], seconds + 60, label)
+
+        self.phase = "full"
+        wait(self.FULL_S, f"{self.FULL_S:.0f} s at full speed ({cam.frame_rate:g} Hz playback)")
+
+        self.phase = "slow"
+        self.delay_s = self.SLOW_DELAY_S
+        wait(self.SLOW_S, f"{self.SLOW_S:.0f} s slowed by {self.SLOW_DELAY_S} s/frame")
+        self.dropped_before_stall = w._scos_worker.dropped_count
+
+        self.phase = "stall"
+        with self.lock:
+            self.stall_s = self.STALL_S
+        end = time.monotonic() + self.STALL_S + 30
+        pump(lambda: (sample(), self.stall_ended is not None
+                      or time.monotonic() > end)[1],
+             self.STALL_S + 60, f"one {self.STALL_S:.0f} s stall")
+
+        self.phase = "after"
+        wait(self.AFTER_S, f"{self.AFTER_S:.0f} s slow again after the stall")
+        self.dropped_after = w._scos_worker.dropped_count
+        self.label_after   = w.lbl_dropped.text()
+        if self.status_after is None:
+            self.status_after = w.status.currentMessage()
+        # Stop SCOS is pressed with the pipeline still slowed, as an operator
+        # would press it on a machine that cannot keep up.
+
+    def extra_checks(self, w, run: Run, folder, args) -> None:
+        import h5py
+        import numpy as np
+
+        pipe = w._scos_worker
+        print("\nChecks — slowdown / backpressure")
+        print("       overload warnings (queue depth @ phase): "
+              + (", ".join(f"{d}@{ph}" for _, d, ph in self.overloads) or "none"))
+
+        before = [o for o in self.overloads if o[2] in ("init", "full")]
+        run.check(not before,
+                  f"no overload at full speed before the slowdown — a clean baseline "
+                  f"({len(before)} fired)")
+        during = [o for o in self.overloads if o[2] not in ("init", "full")]
+        run.check(len(during) == 1,
+                  f"overload_detected fired exactly once for the one episode "
+                  f"(fired {len(during)}×)")
+        depths = [d for t, _, d, _ in self.memory
+                  if self.overloads and t > self.overloads[0][0]]
+        if depths:
+            print(f"       queue depth after the warning: min {min(depths)}, "
+                  f"max {max(depths)} of {pipe.queue_maxsize} "
+                  f"(re-arms only at ≤ {int(pipe._OVERLOAD_LOW * pipe.queue_maxsize)})")
+
+        run.check(self.dropped_before_stall == 0,
+                  f"slow but not stalled: capture throttled, nothing dropped "
+                  f"({self.dropped_before_stall} dropped)")
+        stall = (self.stall_ended - self.stall_began
+                 if self.stall_began and self.stall_ended else None)
+        run.check(stall is not None and stall >= self.STALL_S * 0.9,
+                  f"the stall happened ({stall or 0:.1f} s)")
+        dropped = pipe.dropped_count
+        run.check(dropped > 0,
+                  f"the stall dropped frames, and counted them ({dropped}; "
+                  f"each one is a {self.PUT_CAP_S} s put() timeout)")
+        run.check(self.label_after == f"Dropped: {self.dropped_after}",
+                  f"Dropped label shows the count ({self.label_after!r}, "
+                  f"count {self.dropped_after})")
+        run.check("frame(s) dropped from the input queue" in _log_text(),
+                  "the drops are logged in app.log")
+        run.check("overload" in (self.status_after or "").lower(),
+                  f"overload warning still on the status bar "
+                  f"{self.STATUS_AFTER_S:.0f} s after it fired "
+                  f"(shows {self.status_after!r})")
+        run.check(pipe.error_count == 0, f"no processing errors ({pipe.error_count})")
+
+        # timeVec against the stamps the frame source made, and the gaps
+        # against the drop counter — the core of "keeps capture cadence".
+        t0 = pipe.t0_capture
+        res = folder / "rBfi_results.h5" if folder is not None else None
+        if not run.check(t0 is not None and res is not None and res.exists(),
+                         "results file and t=0 available"):
+            return
+        with h5py.File(res, "r") as f:
+            t_file = f["timeVec"][:]
+        # Same float64 subtraction the pipeline does, so equality is exact.
+        stamps = np.asarray(self.stamps, dtype=np.float64) - t0
+        is_stamp = np.isin(t_file, stamps)
+        run.check(bool(is_stamp.all()),
+                  f"every timeVec value is a capture stamp minus t0 "
+                  f"({int((~is_stamp).sum())} of {len(t_file)} are not)")
+        inside  = stamps[(stamps >= t_file[0]) & (stamps <= t_file[-1])]
+        missing = np.setdiff1d(inside, t_file)
+        run.check(len(missing) == dropped + pipe.error_count,
+                  f"every frame missing from timeVec is a counted drop "
+                  f"({len(missing)} missing, {dropped} dropped + "
+                  f"{pipe.error_count} errors)")
+        if len(missing):
+            print(f"       missing at t = {', '.join(f'{m:.2f}' for m in missing[:12])}"
+                  f"{' …' if len(missing) > 12 else ''} s")
+        gaps = np.diff(t_file)
+        print(f"       timeVec spacing: median {np.median(gaps) * 1000:.0f} ms, "
+              f"max {gaps.max():.2f} s  (playback {1000 / self.PLAYBACK_HZ:.0f} ms)")
+
+        # The guard that keeps the timestamp checks from passing vacuously:
+        # results must really have arrived late. Stamped on arrival, they
+        # would all be off by this much.
+        lags = [arr - (t0 + t) for arr, t in self.arrivals]
+        max_lag = max(lags) if lags else 0.0
+        run.check(max_lag >= 2.0,
+                  f"results reached the GUI up to {max_lag:.1f} s after capture, "
+                  f"yet timeVec holds the capture times")
+
+        self._check_memory(w, run)
+
+    def _check_memory(self, w, run: Run) -> None:
+        """Bounded while the queue fills, flat once it is full.
+
+        Memory legitimately rises by the frames the pipeline holds — queue,
+        in flight, one with the dispatcher and one in the camera's put(). On
+        top of that sit short spikes of up to ≈ 150 MB (worker temporaries,
+        the GUI's float64 copy of a frame for its ⟨I⟩/p5/p95 labels), so
+        single samples are too noisy to judge by: the 2026-10-06 clean runs
+        peaked anywhere from 165 to 247 MB above full speed. Each phase is
+        therefore judged by its median: no phase may sit more than twice the
+        held frames above full speed (clean ≈ +80 MB; the unbounded-in-flight
+        mutation +410 MB), and once the queue is full (slow phase, after the
+        warning) the level must stop climbing. A leak fails both.
+        """
+        import numpy as np
+
+        if not self.memory:
+            print("       memory: not measured (Windows only)")
+            return
+        pipe     = w._scos_worker
+        info     = w.camera.get_info()
+        frame_mb = info["width"] * info["height"] * 2 / 2**20   # uint16 frames
+        held     = pipe.queue_maxsize + 2 * self.N_WORKERS + 2
+        for ph in ("full", "slow", "stall", "after"):
+            mb = [m / 2**20 for _, m, _, p in self.memory if p == ph]
+            if mb:
+                print(f"       memory {ph:5s} {len(mb):3d} samples: median "
+                      f"{np.median(mb):.0f}, min {min(mb):.0f}, max {max(mb):.0f} MB")
+
+        def median_mb(keep) -> float | None:
+            mb = [m / 2**20 for t, m, _, p in self.memory if keep(t, p)]
+            return float(np.median(mb)) if mb else None
+
+        full_mb  = median_mb(lambda t, p: p == "full")
+        loaded   = [m for ph in ("slow", "stall", "after")
+                    if (m := median_mb(lambda t, p, ph=ph: p == ph)) is not None]
+        peak_mb  = max(m for _, m, _, _ in self.memory) / 2**20
+        bound_mb = 2 * held * frame_mb
+        rise_mb  = (max(loaded) - full_mb) if loaded and full_mb is not None else None
+        run.check(rise_mb is not None and rise_mb <= bound_mb,
+                  f"memory bounded under overload: highest phase median "
+                  f"{'n/a' if rise_mb is None else f'{rise_mb:+.0f} MB'} above full speed "
+                  f"(single-sample peak {peak_mb - (full_mb or 0):+.0f}), bound "
+                  f"{bound_mb:.0f} MB (2 × {held} held frames × {frame_mb:.1f} MB)")
+
+        # From the warning on, the queue is full. Without a warning, the second
+        # half of the slow phase — so a leak that also hides the overload
+        # still fails this check on its own numbers.
+        slow_t = [t for t, _, _, p in self.memory if p == "slow"]
+        t_full = (self.overloads[0][0] if self.overloads
+                  else (slow_t[0] + slow_t[-1]) / 2 if slow_t else None)
+        full_q = median_mb(lambda t, p: p == "slow" and t_full and t > t_full)
+        after_mb = median_mb(lambda t, p: p == "after")
+        rise     = (after_mb - full_q) if full_q is not None and after_mb is not None else None
+        limit_mb = 10 * frame_mb
+        run.check(rise is not None and rise <= limit_mb,
+                  f"memory flat once the queue is full: "
+                  f"{'n/a' if rise is None else f'{rise:+.0f} MB'} from the slow "
+                  f"phase to the end, limit {limit_mb:.0f} MB (10 frames)")
+
+
+_slowdown = Slowdown()
+
 SCENARIOS: dict[str, Scenario] = {
     "normal": Scenario("one clean session at full speed"),
+    "slowdown": Scenario(
+        f"processing slowed, then stalled once, during the measurement "
+        f"(playback at {Slowdown.PLAYBACK_HZ:g} Hz)",
+        before_start=_slowdown.before_start,
+        during_measure=_slowdown.during_measure,
+        extra_checks=_slowdown.extra_checks,
+    ),
 }
 
 
@@ -326,6 +673,19 @@ def rehearse(args, run: Run) -> Path | None:
     finally:
         w.close()
         app.processEvents()
+        # closeEvent gives the pipeline 2 s. A thread still running after
+        # that is killed by interpreter shutdown, mid-task — so report it,
+        # then let it finish, so the run itself ends cleanly.
+        print("\nChecks — shutdown")
+        pipe = w._scos_worker
+        still_running = pipe.isRunning()
+        if still_running:
+            t_close = time.monotonic()
+            pipe.wait(120_000)
+            print(f"       pipeline thread needed {time.monotonic() - t_close:.1f} s "
+                  f"more after the window closed")
+        run.check(not still_running,
+                  "SCOS pipeline thread had stopped when the window closed")
     return folder
 
 
