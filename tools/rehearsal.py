@@ -284,7 +284,7 @@ class Slowdown:
         self.dropped_before_stall: int | None = None
         self.dropped_after:  int | None = None
         self.label_after:    str | None = None
-        self.status_after:   str | None = None
+        self.status_log: list[tuple[float, str]] = []   # every status-bar change
         self._last_sample = 0.0
 
     # -- hooks ---------------------------------------------------------------
@@ -300,6 +300,13 @@ class Slowdown:
         def _stamp(_frame, t_capture):
             self.stamps.append(t_capture)
         cam.frame_ready.connect(_stamp, Qt.ConnectionType.DirectConnection)
+
+        # Every status-bar change, so the K4 check sees an overwrite whenever it
+        # happens. A single read STATUS_AFTER_S after the warning was a race:
+        # "Frame #…" is rewritten at most every 2.5 s and only when a display
+        # frame arrives, which during the stall is every ≈ 1.5 s.
+        w.status.messageChanged.connect(
+            lambda msg: self.status_log.append((time.monotonic(), msg)))
 
         # Start SCOS connects the new pipeline to `w._on_overload` by attribute
         # lookup, so an instance attribute set now is what gets connected.
@@ -326,27 +333,38 @@ class Slowdown:
             return out
         w.processor.process = _process
 
-    def during_measure(self, w, cam, args, pump) -> None:
+    def _watch_arrivals(self, w) -> None:
         from PyQt6.QtCore import Qt
 
         def _arrived(t, *_rest):
             self.arrivals.append((time.monotonic(), t))
         w._scos_worker.result_ready.connect(_arrived, Qt.ConnectionType.QueuedConnection)
 
-        def sample():
-            now = time.monotonic()
-            if now - self._last_sample >= 0.2:
-                self._last_sample = now
-                mem = _private_bytes()
-                if mem is not None:
-                    self.memory.append((now, mem, w._scos_worker.queue_depth, self.phase))
-            if (self.overloads and self.status_after is None
-                    and now >= self.overloads[0][0] + self.STATUS_AFTER_S):
-                self.status_after = w.status.currentMessage()
+    def _sample(self, w) -> None:
+        """Called on every pump iteration: memory every 0.2 s."""
+        now = time.monotonic()
+        if now - self._last_sample >= 0.2:
+            self._last_sample = now
+            mem = _private_bytes()
+            if mem is not None:
+                self.memory.append((now, mem, w._scos_worker.queue_depth, self.phase))
+
+    def _wait(self, w, pump, seconds, label) -> None:
+        end = time.monotonic() + seconds
+        pump(lambda: (self._sample(w), time.monotonic() >= end)[1], seconds + 60, label)
+
+    def _wait_for(self, w, pump, ready, timeout_s, label) -> None:
+        """Wait until ready() — or timeout_s, without failing: the checks then
+        report what did not happen, which says more than a TimeoutError."""
+        end = time.monotonic() + timeout_s
+        pump(lambda: (self._sample(w), ready() or time.monotonic() > end)[1],
+             timeout_s + 60, label)
+
+    def during_measure(self, w, cam, args, pump) -> None:
+        self._watch_arrivals(w)
 
         def wait(seconds, label):
-            end = time.monotonic() + seconds
-            pump(lambda: (sample(), time.monotonic() >= end)[1], seconds + 60, label)
+            self._wait(w, pump, seconds, label)
 
         self.phase = "full"
         wait(self.FULL_S, f"{self.FULL_S:.0f} s at full speed ({cam.frame_rate:g} Hz playback)")
@@ -356,27 +374,34 @@ class Slowdown:
         wait(self.SLOW_S, f"{self.SLOW_S:.0f} s slowed by {self.SLOW_DELAY_S} s/frame")
         self.dropped_before_stall = w._scos_worker.dropped_count
 
-        self.phase = "stall"
-        with self.lock:
-            self.stall_s = self.STALL_S
-        end = time.monotonic() + self.STALL_S + 30
-        pump(lambda: (sample(), self.stall_ended is not None
-                      or time.monotonic() > end)[1],
-             self.STALL_S + 60, f"one {self.STALL_S:.0f} s stall")
+        self._stall(w, pump)
 
         self.phase = "after"
         wait(self.AFTER_S, f"{self.AFTER_S:.0f} s slow again after the stall")
         self.dropped_after = w._scos_worker.dropped_count
         self.label_after   = w.lbl_dropped.text()
-        if self.status_after is None:
-            self.status_after = w.status.currentMessage()
         # Stop SCOS is pressed with the pipeline still slowed, as an operator
         # would press it on a machine that cannot keep up.
 
-    def extra_checks(self, w, run: Run, folder, args) -> None:
-        import h5py
-        import numpy as np
+    def _status_replaced(self) -> tuple[float | None, tuple[float, str] | None]:
+        """When the first overload warning appeared on the status bar, and what
+        replaced it within STATUS_AFTER_S — (seconds after, text) — if anything."""
+        shown = next((t for t, m in self.status_log if "overload" in m.lower()), None)
+        if shown is None:
+            return None, None
+        for t, m in self.status_log:
+            if shown < t <= shown + self.STATUS_AFTER_S and "overload" not in m.lower():
+                return shown, (t - shown, m)
+        return shown, None
 
+    def _stall(self, w, pump) -> None:
+        self.phase = "stall"
+        with self.lock:
+            self.stall_s = self.STALL_S
+        self._wait_for(w, pump, lambda: self.stall_ended is not None,
+                       self.STALL_S + 30, f"one {self.STALL_S:.0f} s stall")
+
+    def extra_checks(self, w, run: Run, folder, args) -> None:
         pipe = w._scos_worker
         print("\nChecks — slowdown / backpressure")
         print("       overload warnings (queue depth @ phase): "
@@ -413,14 +438,25 @@ class Slowdown:
                   f"count {self.dropped_after})")
         run.check("frame(s) dropped from the input queue" in _log_text(),
                   "the drops are logged in app.log")
-        run.check("overload" in (self.status_after or "").lower(),
+        shown, replaced = self._status_replaced()
+        run.check(shown is not None and replaced is None,
                   f"overload warning still on the status bar "
                   f"{self.STATUS_AFTER_S:.0f} s after it fired "
-                  f"(shows {self.status_after!r})")
+                  + ("(never shown)" if shown is None else
+                     "" if replaced is None else
+                     f"(replaced after {replaced[0]:.1f} s by {replaced[1]!r})"))
         run.check(pipe.error_count == 0, f"no processing errors ({pipe.error_count})")
+        self._check_timevec(w, run, folder)
+        self._check_memory(w, run)
 
-        # timeVec against the stamps the frame source made, and the gaps
-        # against the drop counter — the core of "keeps capture cadence".
+    def _check_timevec(self, w, run: Run, folder) -> None:
+        """timeVec against the stamps the frame source made, and the gaps
+        against the drop counter — the core of "keeps capture cadence"."""
+        import h5py
+        import numpy as np
+
+        pipe    = w._scos_worker
+        dropped = pipe.dropped_count
         t0 = pipe.t0_capture
         res = folder / "rBfi_results.h5" if folder is not None else None
         if not run.check(t0 is not None and res is not None and res.exists(),
@@ -456,7 +492,10 @@ class Slowdown:
                   f"results reached the GUI up to {max_lag:.1f} s after capture, "
                   f"yet timeVec holds the capture times")
 
-        self._check_memory(w, run)
+    # Phases that run overloaded, and the one judged "flat" against the
+    # slow phase's full-queue level — a subclass may override both.
+    LOADED_PHASES = ("slow", "stall", "after")
+    FLAT_PHASE    = "after"
 
     def _check_memory(self, w, run: Run) -> None:
         """Bounded while the queue fills, flat once it is full.
@@ -481,7 +520,7 @@ class Slowdown:
         info     = w.camera.get_info()
         frame_mb = info["width"] * info["height"] * 2 / 2**20   # uint16 frames
         held     = pipe.queue_maxsize + 2 * self.N_WORKERS + 2
-        for ph in ("full", "slow", "stall", "after"):
+        for ph in ("full", *self.LOADED_PHASES):
             mb = [m / 2**20 for _, m, _, p in self.memory if p == ph]
             if mb:
                 print(f"       memory {ph:5s} {len(mb):3d} samples: median "
@@ -492,7 +531,7 @@ class Slowdown:
             return float(np.median(mb)) if mb else None
 
         full_mb  = median_mb(lambda t, p: p == "full")
-        loaded   = [m for ph in ("slow", "stall", "after")
+        loaded   = [m for ph in self.LOADED_PHASES
                     if (m := median_mb(lambda t, p, ph=ph: p == ph)) is not None]
         peak_mb  = max(m for _, m, _, _ in self.memory) / 2**20
         bound_mb = 2 * held * frame_mb
@@ -510,13 +549,14 @@ class Slowdown:
         t_full = (self.overloads[0][0] if self.overloads
                   else (slow_t[0] + slow_t[-1]) / 2 if slow_t else None)
         full_q = median_mb(lambda t, p: p == "slow" and t_full and t > t_full)
-        after_mb = median_mb(lambda t, p: p == "after")
+        after_mb = median_mb(lambda t, p: p == self.FLAT_PHASE)
         rise     = (after_mb - full_q) if full_q is not None and after_mb is not None else None
         limit_mb = 10 * frame_mb
         run.check(rise is not None and rise <= limit_mb,
                   f"memory flat once the queue is full: "
                   f"{'n/a' if rise is None else f'{rise:+.0f} MB'} from the slow "
-                  f"phase to the end, limit {limit_mb:.0f} MB (10 frames)")
+                  f"phase to the {self.FLAT_PHASE} phase, limit {limit_mb:.0f} MB "
+                  f"(10 frames)")
 
 
 _slowdown = Slowdown()
