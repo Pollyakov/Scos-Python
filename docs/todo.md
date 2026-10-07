@@ -25,10 +25,11 @@ session, not before.**
 | 2 | Simulation checklist | what the operator does and should see in a `--mock-folder` session, dialog by dialog; the expected (low) mock κ²_corr — the bright cal there comes from a subject-in-place recording, spVar ≈ 2.3× too large, which is the dataset, not a bug | 45 min | ~45 min | ✅ [`simulation_checklist.md`](simulation_checklist.md) — numbers from a headless run 2026-10-04 (κ²_corr 0.0070 vs MATLAB 0.0105, positive 304/304); calibration frames set to the protocol's 600 (`683da41`) |
 | 3a | Rehearsal harness in `tools/` | promote the headless `e2e_rehearsal.py` (2026-09-28 scratchpad; a copy patched to auto-answer the E3 "Measurement Ended" pop-up, without which it hangs, ran on 2026-10-04) to a committed, parameterised script with assertions and a scenario flag | 1 h 15 m | ~30 min (+ ~20 min follow-up docs) | ✅ Done item 32 — [`tools/rehearsal.py`](../tools/rehearsal.py) — every dialog stubbed and answered by title (unknown ones fail, never hang), watchdog `--timeout`, isolated config, ~30 checks (dialog order, laser-off check, dark cal from dark frames and bright cal from laser-on ones, files, Params, lengths, κ² > 0). Scenarios are hooks in `SCENARIOS`; only `normal` so far |
 | 3b | Scenario: slowdown / backpressure | slowed `process()`: `overload_detected` once per episode, drops counted and visible, memory flat, **`timeVec` keeps capture cadence** | 1 h 30 m | ~1 h (2026-10-06 21:05–22:00; approximate) | ✅ Done item 33 — `--scenario slowdown`; all its checks pass except two real findings left failing for 4a (**K4**, and **K5** — fixed 2026-10-07, Done item 35; now only K4 fails); plus a D5 note on how the real camera stamps frames under overload |
-| 3c | Scenario: overload recovery | restore speed: flag re-arms below 50 %, drops stop | 45 min | | ✅ Done item 36 — `--scenario recovery`, all checks pass; plus a unit test for the 50 % mark, and the 3b K4 check made deterministic (it had passed by luck once) |
+| 3c | Scenario: overload recovery | restore speed: flag re-arms below 50 %, drops stop | 45 min | ~50 min (2026-10-07 ≈ 13:10–14:01, incl. the K4-check fix; approximate) | ✅ Done item 36 — `--scenario recovery`, all checks pass; plus a unit test for the 50 % mark, and the 3b K4 check made deterministic (it had passed by luck once) |
 | 3d | Scenario: compressed long run | looped playback for minutes: recorder flushes, memory flat, plot responsive | 1 h + run | | |
 | 3e | Output verification | after every scenario: `rBFi` present, length = `timeVec`, all ten `Params`, figure, both `Calibration.h5` groups | 45 min | | |
 | 4a | Fix what turns up before 3f | K1–K3 plus anything 3b–3e find. Found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only). Found by 3b: **K4** the overload warning is overwritten the same way (≤ 2.5 s on screen) — fix with K1; `--scenario slowdown`'s K4 check is the acceptance test, and it watches `status.messageChanged` for the word "overload" — if the fix moves the warning to its own label, move the check with it, or it reports "(never shown)"; ~~**K5** closing the window while processing is far behind leaves the pipeline thread running past `closeEvent`'s 2 s (it drains a backlog nobody will use)~~ ✅ fixed 2026-10-07, Done item 35 | | 2 h | |
+| 4c | rBFi on an early stop (open question 11) | **Vika's answer of 2026-10-07 changes existing behaviour.** Stop SCOS before the normalization window closes currently writes raw `bfi` but **no `rBFi`**. Her answer: normalize on whatever data exists. Build: at stop in `MEASURING_INIT`, compute the constant from `_bfi_norm_buffer` (method still chosen by `choose_norm_method` on `timeVec(end)`), write `rBFi`, and draw the buffered points before `render_now()`/`save_png()` so the figure is not blank. The window written to `Params` must be the span **actually used**, not the spinbox's `norm_seconds`. No finite BFi at all → still no `rBFi`, keep that warning. Update tests that expect "no rBFi" on an early stop, `simulation_checklist.md`, and what 5b says about stopping early. Matters at the rig: a short test run stopped early is exactly this case. **Position not decided yet:** proposed before 3d | 45 min | | |
 | 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | |
 | 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | |
 | 5a | Real-rig checklist | first five minutes at the rig: **D5** ("Camera clock accepted" in `app.log`, `time_source = "camera"` in the results file, lost-frame counting and intake under a deliberate overload — new code since 2026-10-07), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | |
@@ -240,6 +241,14 @@ with 4 options (least-disruptive first):
 Before starting a recording, call `shutil.disk_usage(output_folder)` and refuse to start
 if free space < some threshold (e.g. 5 GB). During a session, check every few minutes and
 stop gracefully if space drops below 1 GB. Show remaining disk space in the status bar.
+
+**2026-10-07: Vika likes the check before recording** (open question 14). She asked for the
+space needed by bit depth, recording length and Save Frames. That table, and proposed
+limits (start: estimate × 1.2 + 5 GB; stop cleanly below 2 GB, checked every ~30 s), are in
+`docs/open_questions.md` question 14, waiting for her to confirm the limits. In short: without
+frames a session is < 30 MB at any length; with every frame saved at 700 × 700, 20 Hz,
+Mono10/12, it is ~1.2 GB per minute and ~70 GB per hour (half that at Mono8). The estimate
+must be uncompressed: speckle barely compresses, and a check must never underestimate.
 
 ---
 
@@ -517,6 +526,16 @@ uint16 ≈ 1 MB. At 40 Hz for 30 min ≈ 72 GB — so this requires disk-space c
 2026-10-04**, so none of this can bite before F1. Re-enabling it is part of F1, together
 with B2 and F4; `tests/test_save_frames_disabled.py` must be updated then.
 
+**Decided by Vika 2026-10-07** (open questions 12 and 13): **every frame**, saved as
+**one file per frame** in a `Frames` folder inside the session folder. Not the single
+growing `frames` dataset that `append_frame` writes today, which has to be replaced. The
+purpose is to rerun the algorithm on saved frames for research and debugging. Hours-long
+recordings are not meant to be saved this way, but the option must exist. The file format
+is to be **chosen by measurement**: write speed at 20 Hz on the lab PC, size on disk, read
+speed back into the pipeline. Candidates: uncompressed TIFF (what Pylon Viewer writes and
+`--mock-folder` already reads), TIFF with lossless compression, `.npy`. A 4 h run is
+~288 000 files, so think about subfolders.
+
 ---
 
 #### F2 · Long sessions (> 2 hours)
@@ -551,6 +570,16 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 
 ---
 
+#### F5 · Reopenable, interactive session figure *(open question 7)*
+
+Vika, 2026-10-07: `rBfi_fig.png` is fine as a first version. Later she wants a figure she
+can reopen and zoom/pan **in Python** (not MATLAB). Either save an interactive HTML file
+next to the PNG, or add a button that rebuilds the plot from `rBfi_results.h5`
+(`timeVec`, `rBFi`). `--mock-h5` reads a results file but replays it in real time through the
+live plot. It does not open a finished session in one step, so this is new work.
+
+---
+
 ## Execution order summary
 
 ```
@@ -561,7 +590,7 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
   → B1 (overload dialog) → B2 (full disk monitor) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4/D7/D8 (any order; D8 sooner if step 5a finds a big flush); D5 at the rig; ~~D6~~
-  → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread)
+  → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread) → F5 (reopenable figure)
 ```
 
 ---

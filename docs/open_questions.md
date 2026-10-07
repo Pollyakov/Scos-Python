@@ -14,93 +14,98 @@ answer to 4 created: see question 16. Questions 7–15 are wanted but not urgent
 **Status 2026-10-06: questions 7–16 were sent to the supervisor on 2026-10-04** (rig-session
 prep step 0). Anything written after that goes under **"F. Still unsent"** until it is sent.
 
+**Status 2026-10-07: she answered questions 7–16** (reply to the message of 2026-10-04).
+Eight are settled and moved to "Answered" at the bottom. Two are still open:
+**9**, because she replied with a question of her own, and **14**, because she asked for a
+size estimate before setting any limits. Both are in section B below, with the follow-up
+to send. One answer changes code that already exists: **11**. Up to now, stopping before the
+normalization window ends wrote no `rBFi`. Now it has to normalize on whatever data exists
+(todo rig-prep row 4c).
+
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
 internal engineering decision, not a scientific or spec one.
 
 ---
 
-## B. End of session — tasks 11 and 12
+## B. Still open after the answers of 2026-10-07 — follow-up to send
 
-> **Status 2026-09-28:** task 11 (the laser-off popup and the 90 % check) is implemented,
-> with reasonable defaults standing in for the answers to questions 8 and 9. Both are one
-> constant away from changing — `_LASER_OFF_DROP_FRACTION` and `_LASER_OFF_REF_SECONDS` in
-> `gui/main_window.py`. Tests: `tests/test_laser_off_check.py`.
+**9. If the laser-off check fails.** *Asked:* should a failed check block saving, or warn and
+let the operator continue? *Implemented:* warn with "Continue anyway?". **No** does not
+discard anything. It asks again to turn the laser off and repeats the check.
+*Her reply (2026-10-07):* "What are the failure scenarios? Saving what?"
 
-**7. Figure format.** `session_tab` asks for `rBfi_fig.fig`, but `.fig` is MATLAB-native and
-Python cannot write it. Is `.png` acceptable? (`timeVec` and `rBFi` are written to `rBfi_results.h5` in the same folder, so a real
-`.fig` can still be rebuilt in MATLAB from the same session.)
+> **Draft answer to send.** *Saving what:* the results file `rBfi_results.h5`. By the time
+> the check runs, the whole measurement is already recorded. `Calibration.h5` is complete.
+> `timeVec`, `k2_raw`, `k2_corr`, raw `bfi` and `Intensity` are in the results file (written
+> every 300 frames, about 15 s at 20 Hz; the rest is in memory and written at close).
+> What is written **after** the check: `rBFi` and the normalization fields of `Params`, the
+> frame counts in `metadata`, and `rBfi_fig.png`. "Blocking saving" would therefore mean
+> throwing away a recording that has already happened. The check looks at one frame taken
+> *after* the measurement, so it cannot say anything about the frames before it.
+>
+> *Failure scenarios*, i.e. the mean ROI intensity, dark-subtracted, has not fallen by 90 %
+> compared with the last 5 s of the measurement:
+> 1. The laser is still on. The operator clicked OK without switching it off, or the switch
+>    did not work.
+> 2. The laser is off, but other light reaches the sensor: room light, a monitor, a
+>    door opened during the session.
+> 3. The measured light was weak to begin with, for example a bad optical contact or a
+>    moved probe, so a 90 % fall is lost in noise.
+>
+> Two more outcomes are not failures: the check is **skipped** (and says so) when no frame
+> arrives within 2 s, or when there is no reference because the run stopped before any
+> result.
+>
+> *Our question back:* what is the check meant to protect? (a) **Laser safety**, i.e. a
+> reminder that the laser is really off. Then warning is enough, as it is now. (b) **Data
+> quality**, i.e. evidence that the dark level at the end matches the dark calibration.
+> Then we would also record the outcome — passed / failed / skipped, with both numbers — in
+> the results file's `metadata`. Today it is only in the closing status message and
+> `app.log`. Recording it there is cheap either way, and we would suggest doing it.
 
-**8. The 90 % intensity check.** "Average intensity of the picture" — whole frame, or ROI
-only? And compared against which baseline: the single last measurement value, or the mean
-over the last N seconds?
+**14. Disk-space policy.** *Asked:* how much free space should be required to start, and at
+what level should a running session stop cleanly? *Her reply (2026-10-07):* a check before
+recording is a good idea. She asked for the space needed as a function of bit depth,
+recording length, and whether frames are saved.
 
-> **Implemented default, pending your confirmation:**
-> - **ROI, not the whole frame.** It is the region the measurement actually used, and it is
->   the same quantity written as `Intensity` in `rBfi_results.h5` (your answer to question
->   3), so the before/after comparison is like for like. A whole-frame mean would be diluted
->   by background pixels that never saw laser light, making a genuine 90 % drop look smaller
->   than it is and producing false warnings.
-> - **The mean over the last 5 seconds, not the single last value.** One frame's ROI mean is
->   noisy, and a momentary shadow across the sensor on the very last frame would set the
->   reference far too low and let a laser that is still on pass the check.
-> - **Both sides are dark-subtracted**, exactly as `process()` computes `mean_i`. This one is
->   not really a choice: the camera's black level (100 DU on this rig) does not go away when
->   the laser does, so a comparison of raw DU could never fall by 90 % however completely the
->   laser was switched off — the check would fail on every single run.
-
-**9. If the check fails**, should the app block saving, or warn and let the operator
-continue? (Assumed: warn with "Continue anyway?" and continue.)
-
-> **Implemented default:** warn and continue, exactly as assumed. Answering **No** to
-> "Continue anyway?" does *not* discard the session — it re-prompts for the laser and runs
-> the check again, so the operator can fix the laser and re-verify. The data is already
-> recorded by that point; refusing to save it would punish them for a laser switch.
-
----
-
-## C. Normalization — task 10
-
-> **Status 2026-09-28:** task 10 is implemented, following the MATLAB reference for both of
-> these. Question 10 was answered provisionally as *total duration, baseline window included*
-> (`timeVec(end)`, exactly as in the reference). Question 11 keeps the existing behaviour: a
-> recording that stops before the window closes gets no `rBFi` at all. Both are one-line
-> changes if the answer differs — the rules are pure functions in `core/session.py`.
-
-**10. The 120 s short/long threshold** — measured on the total recording duration including
-the normalization window, or on the time remaining after it?
-
-**11. Recording shorter than the normalization window** — e.g. the window is 5 s but the
-operator stops at 3 s. What should happen: normalize on what exists, refuse to normalize, or
-refuse to stop?
-
----
-
-## D. Later phases — not blocking now
-
-**12. The `Frames` folder.** Individual frame files (one TIFF per frame), or the current
-approach of one growing HDF5 dataset, just placed inside that folder? This changes the I/O
-design significantly.
-
-**13. Save-frames policy.** Every frame (~280 GB over 4 hours), every K-th frame, or
-calibration frames only?
-
-**14. Disk-space policy.** How much free space should be required to allow a recording to
-start, and at what remaining threshold should a running session stop gracefully?
-
-**15. Multi-hour normalization.** Over several hours, laser drift, detector heating and
-subject motion may invalidate a fixed baseline taken from the first N seconds. Keep the
-fixed baseline, use rolling re-normalization, or save raw BFi and normalize offline?
-
----
-
-## E. New — raised by the answers of 2026-09-23
-
-**16. One calibration file, or two?** The answer to question 4 says to remove the embedded
-calibration group and write *"one separate file with 2 kinds of calibrations — dark and
-bright"*. But `docs/session_tab` lists the session folder as containing **two** files,
-`DarkCalibration.h5` **and** `BrightCalibration.h5`, and worklist task 9 was written against
-that. Which is it: one combined file (proposed name `Calibration.h5`, with a `dark` group and
-a `bright` group), or the two separate files named in `session_tab`?
+> **Estimate, computed 2026-10-07.** Raw frames are stored uncompressed, which is what a
+> free-space check must assume. Speckle compresses poorly, and a check that underestimates
+> is worse than none. Mono10 and Mono12 both arrive from the camera as 16-bit numbers
+> (2 bytes per pixel), so they need the same space. Mono8 needs half. All sizes scale
+> linearly with the frame rate. These are for **20 Hz**; at 40 Hz, double them.
+>
+> **Without saving frames**, a session writes very little. `rBfi_results.h5` holds 6 numbers
+> per frame (`timeVec`, `k2_raw`, `k2_corr`, `bfi`, `Intensity`, `rBFi`): about 3.5 MB per
+> hour, 14 MB over 4 h. `Calibration.h5` holds 5 frame-sized float32 images: at most 10 MB
+> at 700 × 700. (47 MB at 1216 × 1936 uncompressed; 23 MB was measured with gzip on
+> 2026-10-04.) The PNG is about 0.2 MB. That is **under 30 MB for any length** on the lab
+> camera.
+>
+> **With every frame saved** (lab camera, 700 × 700):
+>
+> | Length | Mono8 (0.49 MB/frame) | Mono10 / Mono12 (0.98 MB/frame) |
+> |---|---|---|
+> | 1 min | 0.6 GB | 1.2 GB |
+> | 10 min | 5.9 GB | 11.8 GB |
+> | 30 min | 17.6 GB | 35.3 GB |
+> | 1 h | 35.3 GB | 70.6 GB |
+> | 4 h | 141 GB | 282 GB |
+>
+> If the calibration frames are saved as well (600 dark + 600 bright), add 0.6 GB (Mono8) or
+> 1.2 GB (Mono10/12).
+>
+> For comparison, the a2A1920 (1216 × 1936, 4.7 MB per frame at Mono10/12) needs 5.7 GB per
+> minute, 339 GB per hour.
+>
+> **Proposed defaults, for her to confirm or change:**
+> - **Before Start SCOS:** require free space ≥ estimate × 1.2 + 5 GB. The estimate comes
+>   from the frame size, bit depth, frame rate, the recording duration set in the GUI and the
+>   Save Frames box. If the duration is "unlimited", use 4 h, the protocol's maximum.
+>   Without frames this reduces to "at least 5 GB free".
+> - **While running:** check every ~30 s. Stop the session cleanly (as if Stop SCOS were
+>   pressed, so `rBFi` and the figure are still written) when free space falls below **2 GB**.
+>
+> These are proposals, not her decision. The margin and both limits are constants.
 
 ---
 
@@ -132,6 +137,58 @@ Questions 4, 5, 6, 7 and 12 are worklist Q2, Q4, Q3, Q5 and Q6 respectively.
 Questions 13, 14 and 15 come from `Implementation_Plan.md` §9.
 
 ## Answered
+
+### End of session, normalization and files — answered 2026-10-07
+
+Reply to the message of 2026-10-04 (questions 7–16). Questions 9 and 14 are still open; see
+section B.
+
+**7. Figure format.** **`.png` is fine as a first version.** *Later* she wants a figure that
+can be reopened and explored (zoom, pan) in Python, not MATLAB. Either save an interactive
+HTML file next to the PNG, or add a button that rebuilds the plot from `rBfi_results.h5`.
+→ todo F5. Note: `--mock-h5` already reads a results file, but it *replays* it in real time
+through the live plot. It does not open a finished session in one step.
+
+**8. The 90 % laser-off check — confirmed as built.** *Asked:* "average intensity of the
+picture" — whole frame or ROI? Compared with the last value, or a mean over the last N
+seconds? *Answer:* she confirmed all three points of the built version. No change.
+- **Mean over the ROI**, not the whole frame ("it definitely should use the mean over ROI").
+  It is the same quantity saved as `Intensity`. A whole-frame mean would be diluted by
+  background pixels that never saw laser light, and a real 90 % drop would look smaller.
+- **Reference = mean of the last 5 s** of the measurement, not the single last frame ("Great").
+  One frame is noisy, and a shadow on the last frame would set the reference too low.
+- **Both values dark-subtracted** ("Of course"). The black level (~100 DU) does not go away
+  with the laser, so raw values could never fall by 90 %.
+
+In the code: `_LASER_OFF_DROP_FRACTION = 0.90`, `_LASER_OFF_REF_SECONDS = 5.0` and
+`_LASER_OFF_TIMEOUT_MS = 2000` in `gui/main_window.py`; tests in
+`tests/test_laser_off_check.py`; full story in todo Done item 28.
+
+**10. The 120 s short/long threshold — confirmed.** Measured on the total recording length,
+normalization window included (`timeVec(end)`, as in the reference). No change. The rule is
+`choose_norm_method()` in `core/session.py` (`NORM_LONG_RECORDING_S = 120.0`); todo Done
+item 23.
+
+**11. Stopping before the normalization window ends — CHANGED: normalize on whatever data
+exists.** It used to write no `rBFi` in that case. → todo rig-prep row 4c. When it is built,
+the window recorded in `Params` must be the span actually used, not the spinbox value. If the
+run has no valid BFi at all, there is still nothing to normalize and no `rBFi`. The code to
+change is `_finalize_normalization()` and `_write_rbfi()` in `gui/main_window.py`.
+
+**12. The Frames folder — one file per frame.** Use the format that is most efficient to
+write, store and read, given that the full raw data must be kept. Format still to be chosen
+(benchmark, see todo F1). This is **not** what the code does today: `append_frame` adds every
+frame to one growing `frames` dataset inside the results file.
+
+**13. Which frames — every frame.** The purpose is to rerun the algorithm on the saved frames
+for research and debugging. Hours-long recordings are not intended to be saved this way, but
+the option should exist.
+
+**15. Multi-hour normalization — keep the initial normalization.** A fixed baseline from the
+first `norm_seconds`, as now. No rolling re-normalization.
+
+**16. One calibration file — confirmed.** One `Calibration.h5` with a `dark` and a `bright`
+group, as built. `session_tab`'s two separate files no longer apply.
 
 ### Results-file schema — all six answered 2026-09-23
 
