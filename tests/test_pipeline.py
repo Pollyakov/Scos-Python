@@ -658,6 +658,40 @@ class TestCameraThreadIntake:
             pipeline.stop()
             pipeline.wait(5000)
 
+    def test_overload_warning_rearms_only_below_half_full(self):
+        """Hysteresis: once warned, the queue must fall to 50 % before it can warn again.
+
+        The rehearsal (`--scenario recovery`, rig prep 3c) proves the flag
+        re-arms end to end, but cannot see *where*: while slowed, a blocking
+        put() keeps the queue at 19-20 of 20, so a wrong low mark never shows
+        there. This drives the decision directly at each depth.
+        """
+        class _Depth:                        # stands in for the input queue
+            maxsize = 20
+            qsize   = 0
+
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        pipeline._input_q = _Depth()
+        fired = []
+        pipeline.overload_detected.connect(
+            lambda d: fired.append(d), Qt.ConnectionType.DirectConnection
+        )
+
+        def at(depth):
+            pipeline._input_q.qsize = depth
+            pipeline._check_overload()
+
+        at(15)
+        assert fired == [], "warned below the 80 % mark (16 of 20)"
+        at(16)
+        assert fired == [16], "no warning at 80 % full"
+        at(20); at(16)
+        assert fired == [16], "warned twice in one episode"
+        at(11); at(16)                       # 55 %: still the same episode
+        assert fired == [16], "re-armed above the 50 % mark — the warning would flicker"
+        at(10); at(16)                       # 50 %: episode over, a new one starts
+        assert fired == [16, 16], "did not re-arm at 50 % — a later overload goes unwarned"
+
     def test_a_wedged_pipeline_stalls_capture_only_briefly(self):
         """Worst case: nothing drains at all. Each call must still return fast.
 

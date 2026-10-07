@@ -12,6 +12,7 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal.py --cal-frames 60     # quick run
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario normal --measure-seconds 30
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario slowdown --cal-frames 60
+    venv\\Scripts\\python.exe tools/rehearsal.py --scenario recovery --cal-frames 60
 
 What it can NOT test: the real modal dialogs. Every QMessageBox / QFileDialog
 call is replaced by a stub that records it and answers the way an operator
@@ -28,8 +29,8 @@ unstubbed "Measurement Ended" prompt:
     after --timeout seconds, whatever it is stuck on.
 
 Scenarios (--scenario) are sets of hooks around the same session; see
-SCENARIOS at the bottom: `normal` (3a) and `slowdown` (3b, see Slowdown);
-rig prep steps 3c-3d add theirs there.
+SCENARIOS at the bottom: `normal` (3a), `slowdown` (3b, see Slowdown) and
+`recovery` (3c, see Recovery); rig prep step 3d adds its own there.
 """
 
 import argparse
@@ -493,7 +494,7 @@ class Slowdown:
                   f"yet timeVec holds the capture times")
 
     # Phases that run overloaded, and the one judged "flat" against the
-    # slow phase's full-queue level — a subclass may override both.
+    # slow phase's full-queue level — Recovery overrides both.
     LOADED_PHASES = ("slow", "stall", "after")
     FLAT_PHASE    = "after"
 
@@ -559,7 +560,185 @@ class Slowdown:
                   f"(10 frames)")
 
 
+class Recovery(Slowdown):
+    """Rig prep 3c — an overload that ends, then a second one.
+
+    Slowdown (3b) stops while still overloaded, so it never shows the pipeline
+    getting well again. Here, after the same slow + stall episode:
+
+      recover   full speed again. The queue must drain below the 50 % re-arm
+                mark, the overload flag must reset, the drop count must stop
+                rising and results must catch up with capture.
+      slow2     slowed again (no stall): overload_detected must fire a second
+                time. That is the end-to-end proof the flag re-armed — without
+                it a slowdown an hour into a session would go unwarned.
+      recover2  full speed until Stop SCOS, so the session ends healthy.
+
+    Episode 1 keeps the stall because slowing alone drops nothing (3b): without
+    drops, "drops stop" would be checking nothing. Warnings are assigned to
+    time windows, not to the phase string, because overload_detected reaches
+    the GUI through the event queue and the first one can land in "stall".
+
+    The K4 check (warning still on the status bar) is left to `slowdown`, where
+    it fails on purpose until 4a; a clean run of this scenario exits 0.
+    """
+
+    SETTLE_S        = 4.0    # at full speed after the queue first drains to ≤ 50 %
+    DRAIN_TIMEOUT_S = 30.0
+    SLOW2_TIMEOUT_S = 20.0   # the queue fills in ≈ 3–4 s at SLOW_DELAY_S
+    SLOW2_AFTER_S   = 2.0    # kept slow after the 2nd warning — room for a re-fire
+    LAG_OK_S        = 1.0    # capture → GUI once recovered (≈ 0.2 s at full speed)
+
+    LOADED_PHASES = ("slow", "stall", "slow2")
+    FLAT_PHASE    = "slow2"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.marks:   dict[str, float] = {}   # phase boundaries, monotonic
+        self.drops:   dict[str, int]   = {}   # dropped_count at those marks
+        self.rearmed: bool | None = None      # pipeline flag after recover
+        self.label_end: str | None = None
+
+    def _mark(self, w, name: str) -> None:
+        self.marks[name] = time.monotonic()
+        self.drops[name] = w._scos_worker.dropped_count
+
+    def during_measure(self, w, cam, args, pump) -> None:
+        self._watch_arrivals(w)
+        pipe    = w._scos_worker
+        low     = int(pipe._OVERLOAD_LOW * pipe.queue_maxsize)
+        drained = lambda: pipe.queue_depth <= low
+
+        self.phase = "full"
+        self._wait(w, pump, self.FULL_S,
+                   f"{self.FULL_S:.0f} s at full speed ({cam.frame_rate:g} Hz playback)")
+
+        # Episode 1 — as in Slowdown.
+        self._mark(w, "slow")
+        self.phase = "slow"
+        self.delay_s = self.SLOW_DELAY_S
+        self._wait(w, pump, self.SLOW_S,
+                   f"{self.SLOW_S:.0f} s slowed by {self.SLOW_DELAY_S} s/frame")
+        self._stall(w, pump)
+
+        # Recovery 1. One put() can still be mid-timeout when the stall ends,
+        # so drops are baselined when the queue first drains, not at the switch.
+        self._mark(w, "recover")
+        self.phase = "recover"
+        self.delay_s = 0.0
+        self._wait_for(w, pump, drained, self.DRAIN_TIMEOUT_S,
+                       f"queue drained to ≤ {low} at full speed")
+        self._mark(w, "drained")
+        self._wait(w, pump, self.SETTLE_S, f"{self.SETTLE_S:.0f} s recovered")
+        self.rearmed = not pipe._overloaded
+
+        # Episode 2 — slow only.
+        self._mark(w, "slow2")
+        self.phase = "slow2"
+        self.delay_s = self.SLOW_DELAY_S
+        self._wait_for(w, pump,
+                       lambda: any(t >= self.marks["slow2"] for t, *_ in self.overloads),
+                       self.SLOW2_TIMEOUT_S, "second overload warning")
+        self._wait(w, pump, self.SLOW2_AFTER_S, f"{self.SLOW2_AFTER_S:.0f} s more slowed")
+
+        # Recovery 2, then Stop SCOS at full speed.
+        self._mark(w, "recover2")
+        self.phase = "recover2"
+        self.delay_s = 0.0
+        self._wait_for(w, pump, drained, self.DRAIN_TIMEOUT_S,
+                       f"queue drained to ≤ {low} again")
+        self._mark(w, "drained2")
+        self._wait(w, pump, self.SETTLE_S, f"{self.SETTLE_S:.0f} s recovered")
+        self._mark(w, "end")
+        self.label_end = w.lbl_dropped.text()
+
+    def extra_checks(self, w, run: Run, folder, args) -> None:
+        pipe = w._scos_worker
+        m, d = self.marks, self.drops
+        print("\nChecks — overload recovery")
+        print("       overload warnings (queue depth @ phase): "
+              + (", ".join(f"{dp}@{ph}" for _, dp, ph in self.overloads) or "none"))
+        print("       phase starts (s after the slowdown) / dropped so far: "
+              + ", ".join(f"{k} {m[k] - m['slow']:.1f}/{d[k]}" for k in m))
+        if not run.check({"slow", "recover", "drained", "slow2", "recover2",
+                          "drained2", "end"} <= m.keys(), "every phase ran"):
+            return
+
+        def fired(t_from: float, t_to: float = float("inf")) -> int:
+            return sum(1 for t, *_ in self.overloads if t_from <= t < t_to)
+
+        low = int(pipe._OVERLOAD_LOW * pipe.queue_maxsize)
+        run.check(fired(0, m["slow"]) == 0,
+                  f"no overload at full speed before the slowdown — a clean baseline "
+                  f"({fired(0, m['slow'])} fired)")
+        run.check(fired(m["slow"], m["drained"]) == 1,
+                  f"episode 1: overload_detected fired exactly once "
+                  f"(fired {fired(m['slow'], m['drained'])}×)")
+        run.check(d["drained"] > 0,
+                  f"episode 1's stall dropped frames — so 'drops stop' below means "
+                  f"something ({d['drained']} dropped)")
+
+        drain_s = m["drained"] - m["recover"]
+        run.check(drain_s < self.DRAIN_TIMEOUT_S,
+                  f"speed restored → queue below the {low}/{pipe.queue_maxsize} "
+                  f"re-arm mark in {drain_s:.1f} s")
+        run.check(bool(self.rearmed),
+                  f"overload flag reset once the queue drained "
+                  f"(pipeline._overloaded = {not self.rearmed})")
+        run.check(fired(m["drained"], m["slow2"]) == 0,
+                  f"no warning while recovered ({fired(m['drained'], m['slow2'])} fired)")
+        run.check(d["slow2"] == d["drained"],
+                  f"drops stopped once recovered "
+                  f"({d['slow2'] - d['drained']} more in {self.SETTLE_S:.0f} s)")
+
+        n2 = fired(m["slow2"], m["drained2"])
+        run.check(n2 == 1,
+                  f"episode 2: the re-armed warning fired again, exactly once "
+                  f"(fired {n2}×)")
+        run.check(fired(m["drained2"]) == 0,
+                  f"no warning after the second recovery ({fired(m['drained2'])} fired)")
+        run.check(d["end"] == d["drained"],
+                  f"no frame dropped from the first recovery to Stop SCOS "
+                  f"({d['end'] - d['drained']} dropped; slow without a stall must "
+                  f"throttle, not drop)")
+        run.check(self.label_end == f"Dropped: {d['end']}",
+                  f"Dropped label shows the count ({self.label_end!r}, count {d['end']})")
+
+        # Speed restored: in the last seconds, results arrive at the playback
+        # rate and soon after capture — the backlog is really gone.
+        t0 = pipe.t0_capture or 0.0
+        base = [a - (t0 + t) for a, t in self.arrivals if a < m["slow"]]
+        tail = [(a, a - (t0 + t)) for a, t in self.arrivals
+                if a >= m["drained2"] + 1.0]
+        span = m["end"] - (m["drained2"] + 1.0)
+        rate = len(tail) / span if span > 0 else 0.0
+        lag  = max((g for _, g in tail), default=float("inf"))
+        if base:
+            print(f"       capture → GUI at full speed before the slowdown: "
+                  f"max {max(base):.2f} s")
+        run.check(lag <= self.LAG_OK_S,
+                  f"recovered: results reach the GUI ≤ {self.LAG_OK_S:.0f} s after "
+                  f"capture (max {lag:.2f} s over the last {span:.1f} s)")
+        run.check(rate >= 0.8 * self.PLAYBACK_HZ,
+                  f"recovered: {rate:.1f} results/s against {self.PLAYBACK_HZ:g} Hz playback")
+        run.check(pipe.error_count == 0, f"no processing errors ({pipe.error_count})")
+
+        self._check_timevec(w, run, folder)
+        self._check_memory(w, run)
+        # Printed, not checked: the backlog's frames are freed again (2026-10-07,
+        # recover2 vs full: +8, +38, +42 MB), but phase medians over 4 s still
+        # carry the ≈ 150 MB worker spikes, so any limit tight enough to mean
+        # something failed on noise. A growing backlog fails _check_memory.
+        import numpy as np
+        for ph in ("recover", "recover2"):
+            mb = [b / 2**20 for _, b, _, p in self.memory if p == ph]
+            if mb:
+                print(f"       memory {ph:8s} {len(mb):3d} samples: median "
+                      f"{np.median(mb):.0f}, min {min(mb):.0f}, max {max(mb):.0f} MB")
+
+
 _slowdown = Slowdown()
+_recovery = Recovery()
 
 SCENARIOS: dict[str, Scenario] = {
     "normal": Scenario("one clean session at full speed"),
@@ -569,6 +748,13 @@ SCENARIOS: dict[str, Scenario] = {
         before_start=_slowdown.before_start,
         during_measure=_slowdown.during_measure,
         extra_checks=_slowdown.extra_checks,
+    ),
+    "recovery": Scenario(
+        f"overloaded, then full speed again, then overloaded a second time "
+        f"(playback at {Recovery.PLAYBACK_HZ:g} Hz)",
+        before_start=_recovery.before_start,
+        during_measure=_recovery.during_measure,
+        extra_checks=_recovery.extra_checks,
     ),
 }
 

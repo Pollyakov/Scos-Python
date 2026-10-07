@@ -3,7 +3,7 @@ Prove the rehearsal's checks can fail: run tools/rehearsal.py with one deliberat
 
 A check that has never failed may be checking nothing. Each mutation below
 breaks one thing the `slowdown` scenario (rig prep 3b, todo Done item 33)
-claims to verify. Patches are applied in memory, in this process only;
+or the `recovery` scenario (3c, Done item 36) claims to verify. Patches are applied in memory, in this process only;
 no file is changed. A mutation run must exit 1 and name the check it was meant
 to trip. If it exits 0, that check is not doing its job.
 
@@ -12,7 +12,7 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal_mutations.py leak --out <empty folder>
 
 Anything after the mutation name is passed to tools/rehearsal.py; the
-scenario defaults to `slowdown`.
+scenario defaults to the one each mutation targets (MUTATIONS below).
 
 Mutations and the check each one must trip (measured 2026-10-06):
   latch    overload_detected without its once-per-episode latch
@@ -25,6 +25,14 @@ Mutations and the check each one must trip (measured 2026-10-06):
   leak     no cap on frames in flight, so the executor queue grows without bound
            → "memory bounded" (+410 MB) and "memory flat" (+312 MB); the
            overload warning never fires either
+  never-rearm  (recovery) the overload flag never resets once set, so a second
+           slowdown in the same session goes unwarned → "overload flag reset
+           once the queue drained" and "episode 2: the re-armed warning fired
+           again" (fired 0×)
+
+Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
+queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
+rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
 """
 
 import sys
@@ -35,7 +43,9 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "tools"))
 
-MUTATIONS = ("latch", "arrival", "uncount", "leak")
+# mutation → the scenario it runs against unless --scenario is given
+MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
+             "leak": "slowdown", "never-rearm": "recovery"}
 
 
 def apply(mutation: str) -> None:
@@ -73,6 +83,14 @@ def apply(mutation: str) -> None:
             original_init(self, processor, n_workers, max_inflight=100_000, parent=parent)
         P.RealtimePipeline.__init__ = __init__
 
+    elif mutation == "never-rearm":
+        def _check_overload(self):
+            depth = self._input_q.qsize
+            if not self._overloaded and depth >= self._OVERLOAD_HIGH * self._input_q.maxsize:
+                self._overloaded = True
+                self.overload_detected.emit(depth)
+        P.RealtimePipeline._check_overload = _check_overload
+
 
 def main() -> int:
     # The Windows console (and a pipe) defaults to cp1252, which has no → or —.
@@ -84,7 +102,7 @@ def main() -> int:
         return 2
     mutation, rest = sys.argv[1], sys.argv[2:]
     if "--scenario" not in rest:
-        rest = ["--scenario", "slowdown", *rest]
+        rest = ["--scenario", MUTATIONS[mutation], *rest]
     apply(mutation)
     import rehearsal
     sys.argv = ["rehearsal.py", *rest]
