@@ -50,7 +50,7 @@ Camera ──► frame_queue ──► Processor ─┬─► result_queue ─�
 ### Pylon settings (settled, do not change)
 - `GrabStrategy_OneByOne` (NOT `LatestImageOnly` — that drops oldest silently)
 - `MaxNumBuffer = 20`
-- Detect drops via `result.GetNumberOfSkippedImages()`
+- Detect drops via `result.GetNumberOfSkippedImages()` — *wrong under `OneByOne`, which counts nothing there; replaced by `BlockID` gaps (todo Done item 34, 2026-10-07)*
 
 ### Overload behavior — never drop silently
 

@@ -201,6 +201,6 @@ Found by the slowdown rehearsal (rig prep 3b, 2026-10-06), seen in a headless ru
 
 ## What this rehearsal cannot test
 
-The real Basler camera and Pylon's skipped-frame warnings, external trigger and the
+The real Basler camera — its lost-frame warnings and the camera-clock timestamps (todo D5) — external trigger and the
 Arduino, a real laser and room light, the 700 × 700 / 20 Hz load, and an exact gain-table
 match. Those belong to the real-rig checklist (step 5a).

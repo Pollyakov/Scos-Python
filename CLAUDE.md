@@ -70,7 +70,7 @@ isolation) are in [`tests/CLAUDE.md`](tests/CLAUDE.md), which loads when working
 ## Architecture
 
 ```
-Thread 1 (CameraThread/QThread):  pypylon grabs → stamps t_capture (time.monotonic())
+Thread 1 (CameraThread/QThread):  pypylon grabs → t_capture from the camera clock (FrameClock)
                                   → emits frame_ready(frame, t_capture)   (every frame)
                                   → emits display_ready(frame)             (≤30 FPS)
 
@@ -87,11 +87,18 @@ Thread 1 (CameraThread/QThread):  pypylon grabs → stamps t_capture (time.monot
 IMPORTANT: κ² processing runs on a worker pool, and frame **intake** runs on the camera
 thread — not the GUI thread (merged_worklist task 5). A slow `process()` therefore fills a
 bounded queue and back-pressures the grab loop (visible: `overload_detected`, `Dropped: N`,
-Pylon skipped-frame warnings) instead of lagging the GUI. Each frame's timestamp is taken at
-capture on the **monotonic** clock, so GUI scheduling jitter can never enter `timeVec`.
-On the real camera "at capture" means *when retrieved from Pylon's buffer* — the same
-instant within milliseconds unless frames are waiting in those buffers under overload
-(todo D5).
+"Camera: N frame(s) lost" warnings) instead of lagging the GUI. Each frame's timestamp is its
+capture time on the **monotonic** scale, so GUI scheduling jitter can never enter `timeVec`.
+
+IMPORTANT: on the real camera `t_capture` is the grab result's **hardware `TimeStamp`**
+(start of exposure), converted by `core/frame_clock.py` — but only after that clock has
+agreed with the PC clock within 1 % over the first 5 s after Start Video; until then, or
+for good if it never agrees, it is the PC time at `RetrieveResult()`. Never assume a tick
+rate: a wrong one stretches the whole `timeVec`. The same class counts **lost frames from
+`BlockID` gaps** — under `GrabStrategy_OneByOne`, `GetNumberOfSkippedImages()` does not
+count frames lost to full buffers. Which clock was used and how many frames were lost go
+into the results file's `metadata` (`time_source`, `frames_lost_camera`,
+`frames_dropped_queue`). Rig verification: todo D5.
 
 Still on the GUI thread, by design for now: the dark/bright calibration collectors and the
 raw-frame HDF5 write (tasks 14/16). Intake backpressure bounds Qt's queued-connection event
@@ -113,7 +120,7 @@ Known camera parameters:
 | Lab demo camera (700×700) | 12 | Must be added to `CamerasMeasuredGain.csv` before it can be used |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
-- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png`
+- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png`
 - The manual "Save SCOS Data" button is a separate, older export: .mat with keys `scosTime`, `scosData` (κ²), `frameRate`, `exposureTime`, `Gain` (or the same as .npz)
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing

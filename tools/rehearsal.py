@@ -251,14 +251,12 @@ class Slowdown:
 
     What it can NOT show — the real camera under overload (todo D5): the mock
     has no frame buffer, so a blocked put() simply delays the next "capture".
-    A Basler keeps exposing into Pylon's 20 buffers, and once they are full
-    the driver loses frames — which, under GrabStrategy_OneByOne, nothing
-    counts: GetNumberOfSkippedImages() does not include them. And
-    camera.py stamps t_capture after RetrieveResult, so frames that waited in
-    those buffers during a stall get the time they were *retrieved* — bunched
-    together — not the time they were exposed. Here timeVec is checked against
-    the stamps the frame source made; on the rig, check that the saved timeVec
-    stays evenly spaced through a deliberate overload.
+    A Basler keeps exposing into Pylon's 20 buffers and loses frames once they
+    are full. Since 2026-10-07 camera.py counts those from BlockID gaps and
+    stamps each frame with the camera's own exposure time (core/frame_clock.py),
+    so frames that waited in the buffers are not bunched — covered by
+    tests/test_camera.py on a fake Pylon camera, and by D5 at the rig. Here
+    timeVec is checked against the stamps the frame source made.
     """
 
     PLAYBACK_HZ  = 10.0

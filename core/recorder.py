@@ -203,6 +203,16 @@ class HDF5Recorder:
         if n % 10 == 9:
             self._f.flush()
 
+    def set_metadata(self, **attrs: Any) -> None:
+        """Add or overwrite engineering-provenance attributes in `metadata`.
+
+        For facts known only at the end of a session — how many frames were
+        lost and which clock `timeVec` came from — while the file is still open.
+        """
+        meta = self._f["metadata"]
+        for k, v in attrs.items():
+            meta.attrs[k] = v
+
     def write_rbfi(self, norm_constant: float, method: str,
                    window_seconds: float) -> None:
         """Compute and store the final rBFi, once, at the end of the session.

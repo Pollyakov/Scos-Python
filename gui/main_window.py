@@ -104,6 +104,9 @@ class MainWindow(QMainWindow):
         self._proc_times  = []   # rolling window of process() durations (ms)
         self._last_proc_label_time = 0.0
         self._last_logged_dropped_count = 0   # for change-triggered app.log warnings
+        # camera.frames_lost when the measurement started — the camera counts
+        # from Start Video, the label and the results file from MEASURING_INIT.
+        self._camera_lost_at_start = 0
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
         self._calib_thread:   _CalibrationLoaderThread | None = None
@@ -985,6 +988,7 @@ class MainWindow(QMainWindow):
             logger.info("Session output folder: %s", self._session_folder)
         self._finalize_normalization()
         self._write_rbfi()
+        self._write_frame_accounting()
         self._save_plot_figure()
         # Released so the next run creates its own folder rather than writing
         # into this one. The parent (_output_root) is kept, so the operator is
@@ -1128,6 +1132,37 @@ class MainWindow(QMainWindow):
             logger.info("No curve to save — figure not written")
             return
         logger.info("Plot figure saved — %d points → %s", n, path)
+
+    def _camera_frames_lost(self) -> int:
+        """Frames lost before reaching the app, as the frame source counts
+        them (camera.py, from BlockID gaps); 0 for sources that cannot lose
+        frames this way (playback)."""
+        return int(getattr(self.camera, "frames_lost", 0))
+
+    def _write_frame_accounting(self) -> None:
+        """Record in the results file which clock timeVec came from and how
+        many frames never made it into it. Runs inside _finish_session().
+
+        time_source "camera": each time is the camera's own exposure
+        timestamp. "pc": the PC clock when the frame was retrieved — the same
+        within milliseconds unless frames waited in Pylon's buffers (todo D5).
+        """
+        source  = str(getattr(self.camera, "time_source", "pc"))
+        lost    = self._camera_frames_lost() - self._camera_lost_at_start
+        dropped = int(self._scos_worker.dropped_count)
+        logger.info("Frame accounting — time source %s; %d frame(s) lost at the "
+                    "camera, %d dropped from the processing queue",
+                    source, lost, dropped)
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.set_metadata(
+                time_source          = source,
+                frames_lost_camera   = lost,
+                frames_dropped_queue = dropped,
+            )
+        except Exception:
+            logger.exception("Could not write frame accounting to the results file")
 
     def _write_rbfi(self) -> None:
         """Finalize the results file: rBFi plus the normalization fields.
@@ -1486,6 +1521,7 @@ class MainWindow(QMainWindow):
         if scos_mask is None:
             logger.warning("No ROI mask available — SCOS intake not started")
         else:
+            self._camera_lost_at_start = self._camera_frames_lost()
             self._scos_worker.enable_intake(scos_mask)
         self._start_recorder()
 
@@ -2023,7 +2059,12 @@ class MainWindow(QMainWindow):
             # log warning is only emitted when the count actually changes, so
             # a stalled pipeline doesn't spam app.log once per second.
             dropped = self._scos_worker.dropped_count
-            self.lbl_dropped.setText(f"Dropped: {dropped}")
+            lost    = self._camera_frames_lost() - self._camera_lost_at_start
+            # Two different losses: "Dropped" = the app's queue overflowed;
+            # "lost at camera" = Pylon's buffers were full (or a transfer
+            # failed) and the frame never reached the app at all.
+            self.lbl_dropped.setText(
+                f"Dropped: {dropped}" + (f" + {lost} lost at camera" if lost else ""))
             if dropped != self._last_logged_dropped_count:
                 logger.warning(
                     "SCOS pipeline overloaded — %d frame(s) dropped from the "
@@ -2214,7 +2255,8 @@ class MainWindow(QMainWindow):
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
     def _on_camera_warning(self, msg: str):
-        """Camera-side warning — most often Pylon reporting skipped frames.
+        """Camera-side warning — most often frames lost before reaching the app
+        ("Camera: N frame(s) lost", counted from BlockID gaps by FrameClock).
 
         Now that intake blocks the grab loop under overload, buffer-overflow
         warnings are the *expected* symptom of a slow patch rather than a

@@ -266,6 +266,8 @@ class TestGuiWiring:
             frame_rate    = 20.0
             trigger_mode  = "Off"
             trigger_delay = 0
+            frames_lost   = 0          # camera.py's BlockID count, since Start Video
+            time_source   = "camera"   # camera clock accepted by FrameClock
 
             def set_trigger(self, *a, **k):      pass
             def set_exposure(self, *a, **k):     pass
@@ -294,7 +296,12 @@ class TestGuiWiring:
             w.processor.bit_depth = 12
             w.processor.gain_db   = 8.0
             assert w._prepare_gain()
+            # 2 frames lost during preview/calibration, then 5 more while
+            # measuring: only those 5 belong to this measurement.
+            w.camera.frames_lost = 2
+            w._camera_lost_at_start = w._camera_frames_lost()
             w._start_recorder()
+            w.camera.frames_lost = 7
 
             for i in range(6):
                 w._recorder.append(0.05 * i, 0.1, 0.08, 500.0 + i)
@@ -318,6 +325,11 @@ class TestGuiWiring:
                 assert p["normalizationConstant"] == pytest.approx(12.5)
                 # G provenance stays in metadata, out of Params.
                 assert f["metadata"].attrs["camera_sn"] == "40513592"
+                # Which clock timeVec came from, and what never reached it
+                # (todo D5) — provenance, so metadata, not Params.
+                assert f["metadata"].attrs["time_source"] == "camera"
+                assert f["metadata"].attrs["frames_lost_camera"] == 5
+                assert f["metadata"].attrs["frames_dropped_queue"] == 0
                 np.testing.assert_allclose(f["rBFi"][:], f["bfi"][:] / 12.5)
                 assert f["rBFi"].shape == f["timeVec"].shape
         finally:

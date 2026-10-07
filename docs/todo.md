@@ -31,7 +31,7 @@ session, not before.**
 | 4a | Fix what turns up before 3f | K1–K3 plus anything 3b–3e find. Found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only). Found by 3b: **K4** the overload warning is overwritten the same way (≤ 2.5 s on screen) — fix with K1; **K5** closing the window while processing is far behind leaves the pipeline thread running past `closeEvent`'s 2 s (it drains a backlog nobody will use) — low, cannot happen at the rig's frame size; recommend after the session | | 2 h | |
 | 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | |
 | 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | |
-| 5a | Real-rig checklist | first five minutes at the rig: **D5** (Pylon skipped frames, intake under overload), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | |
+| 5a | Real-rig checklist | first five minutes at the rig: **D5** ("Camera clock accepted" in `app.log`, `time_source = "camera"` in the results file, lost-frame counting and intake under a deliberate overload — new code since 2026-10-07), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | |
 | 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does | 45 min | | |
 
 **Order changed 2026-10-05 (user's decision):** the hands-on pass 3f now comes after the automated scenarios and the K1–K3 fixes, so it tests the code that will actually go to the rig — fixing K1–K3 after it would change exactly the dialogs and status messages it checks. Remaining estimate ≈ 11 h 20 m, about 1 h 15 m of it hands-on. If time runs short, 3d goes first. **Actual** is filled in by `/wrap-up` (approximate, from session and commit times).
@@ -376,56 +376,48 @@ input before writing.
 
 ---
 
-#### D5 · Verify `GrabStrategy_OneByOne` on real hardware
+#### D5 · Verify the grab loop on real hardware — lost frames and the camera clock
 
-The `GrabStrategy_OneByOne` + `GetNumberOfSkippedImages()` change in `camera.py` cannot
-be tested with mock cameras — they bypass `camera.py`'s `run()` loop entirely.
+Mocks bypass `camera.py`'s `run()` loop entirely, so this needs the real camera. Since
+2026-10-07 (Done item 34) that loop takes each frame's **capture time from the camera's own
+clock** and **counts lost frames from the camera's frame numbers** (`core/frame_clock.py`).
+The fake-camera tests in `tests/test_camera.py` cover the logic, not the real camera.
 
-**How to verify when real camera is available:**
-1. Run `python main.py` (no mock flag).
-2. Start Video at a normal FPS (40 Hz).
-3. Confirm normal streaming works — no regressions.
-4. Deliberately overload: raise FPS to a value the system cannot sustain (e.g. 150 Hz).
-5. Check `app.log` for lines like:
-   ```
-   WARNING  camera — Camera: N frame(s) dropped (buffer overflow)
-   ```
-6. Confirm the warning also appears in the GUI status bar.
+**Why it changed (found in rig prep 3b, 2026-10-06).** Two gaps, both confirmed in Basler's
+pylon API reference for `CGrabResultData`:
+- *Lost frames were counted nowhere.* `GetNumberOfSkippedImages()` counts only under the
+  `LatestImageOnly` / `LatestImages` strategies and *"does not include the number of images
+  lost in case of a buffer underrun in the driver"*. Under `OneByOne`, which `camera.py`
+  uses, a frame lost because all 20 buffers were full produced no warning and no count.
+  (The old step "no warning at high FPS = the buffer is absorbing them" was therefore
+  wrong.) Now: a jump in `BlockID` — the camera's frame number; on GigE it runs 1…65535 and
+  wraps — is counted as lost frames, and so is a grab that arrived incomplete.
+- *Timestamps could bunch up.* `t_capture` was the PC time right after `RetrieveResult()`,
+  i.e. when a frame **left Pylon's buffer**. After a stall, frames that waited there were
+  retrieved in a burst with bunched stamps. Now: the grab result's `TimeStamp` (camera
+  ticks at the start of exposure), converted to seconds.
 
-~~If no drops occur even at high FPS, the buffer is absorbing them — that is also a valid
-result (it means `MaxNumBuffer=20` is giving enough slack).~~ **Wrong — corrected
-2026-10-06 (rig prep 3b), from Basler's pylon API reference for `CGrabResultData`:**
-`GetNumberOfSkippedImages()` counts skipped images only under the `LatestImageOnly` /
-`LatestImages` strategies, and *"does not include the number of images lost in case of a
-buffer underrun in the driver"*. Under `OneByOne`, which `camera.py` uses, a frame lost because
-all 20 buffers were full is therefore counted **nowhere**: no warning, no `Dropped: N`. So
-"no warning" at high FPS proves nothing. What does show it without a code change: the **FPS
-label** (frames actually received per second) falling below the FPS that was set, and
-irregular `np.diff(timeVec)`. The counting fix is `GetBlockID()` (frame number from the
-camera; on GigE it starts at 1 and wraps at 65535), where a jump means lost frames. With the
-`GetTimeStamp()` fix below, that is a `camera.py` change for after the session. For the
-session itself, what matters is that the lab PC keeps up: `bench_processor.py` in 5a, and
-during the run FPS ≈ the set FPS, with no "SCOS overload" message.
+**The safety rule.** The camera clock is used only after it agrees with the PC clock
+within 1 % over the first 5 s after Start Video (or after any grab restart), for the
+camera's reported tick rate (`GevTimestampTickFrequency`) or, if it reports none, for one
+of the two Basler rates (1 GHz, 125 MHz). Until then — and for good if it never agrees, the
+camera has no timestamps, or its clock runs backwards — frames get the old PC stamp, and
+`app.log` says why. A wrong tick rate would stretch the whole `timeVec`, so it is never
+guessed. A measurement starts only after both calibrations, so the check has long finished.
 
-**Also covers worklist task 6** — the camera-thread intake and capture timestamps (item 20)
-need the same real-hardware check, for the same reason: mocks bypass `camera.py`'s grab
-loop. During the overload step also confirm: the grab loop *blocks* rather than freezing the
-GUI, `overload_detected` appears in the status bar, any drop is counted (`Dropped: N`) and
-logged, and the saved `timeVec` is evenly spaced at the camera's rate.
-
-*What "evenly spaced" can and cannot show (found in rig prep 3b, 2026-10-06).* `camera.py`
-stamps `t_capture` right after `RetrieveResult()`, i.e. when a frame **leaves Pylon's
-buffer**, not when it was exposed. With no backlog the two differ by a near-constant transfer
-delay (milliseconds) and `timeVec` is right. Under overload they don't: frames that waited
-in the 20 buffers during a stall are retrieved in a burst and get **bunched** stamps, and in
-sustained overload the stamps are spaced by the processing rate while the frames the camera
-skipped leave no gap of the right size. The mock camera has no buffer, so the 3b rehearsal
-cannot show this (it checks `timeVec` against the stamps the frame source made, and they
-match exactly). On the rig: during the deliberate overload, look at `np.diff(timeVec)` —
-bursts of near-zero intervals right after a stall are this effect. It does not matter while
-the rig keeps up; if it ever must not keep up, the fix is the grab result's hardware
-`TimeStamp` instead of `time.monotonic()` (needs the camera's tick frequency) — a backlog
-item for after the session, not before.
+**How to verify at the rig** (part of step 5a):
+1. Start Video. Within ~5 s `app.log` must say **"Camera clock accepted — … MHz ticks
+   agree with the PC clock"**. "Camera clock not used — …" instead → note the reason; the
+   session is still valid (old PC stamps), but tell me.
+2. Run a short session. In `rBfi_results.h5`, `metadata` must have **`time_source =
+   "camera"`**, **`frames_lost_camera = 0`**, **`frames_dropped_queue = 0`**, and
+   `np.diff(timeVec)` must be ≈ 1/FPS (50 ms at 20 Hz) throughout.
+3. Deliberately overload — raise FPS to what the PC cannot sustain (e.g. 150 Hz) — and
+   check: the warning **"Camera: N frame(s) lost — Pylon buffers full or transfer
+   failed"** in the status bar and `app.log`; during a measurement, the label reads
+   **"Dropped: N + M lost at camera"**; the grab loop *blocks* rather than freezing the
+   GUI; `overload_detected` appears; and the gaps in `timeVec` are whole multiples of the
+   frame period (lost frames leave true-size gaps, no bunching).
 
 ---
 
@@ -593,7 +585,7 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 | 13 | Phase 2 — real camera partial validation | App ran on real system at 40 Hz; processing time ~13 ms per frame (~12 ms headroom). Camera + laser streaming confirmed working. |
 | 14 | Processing workers GUI control | `spn_workers` spinbox in SCOS group (range 1–8, default 3). Pipeline recreated on Start SCOS with the selected count. Tooltip shows machine core count. |
 | 15 | `shrink_mask_for_window` — ROI edge fix | `processor.shrink_mask_for_window(mask, window)` erodes the ROI by `window//2+1` px. Applied at MEASURING_INIT start; shrunk mask used for κ² only, full mask kept for display. Erosion size logged. 4 new tests. |
-| 16 | `GrabStrategy_OneByOne` + skipped-frame warning | `camera.py` now uses `OneByOne` + `MaxNumBuffer=20`. After each `RetrieveResult`, `GetNumberOfSkippedImages()` is checked and a `warning` signal emitted if > 0. Both test mocks updated. |
+| 16 | `GrabStrategy_OneByOne` + skipped-frame warning | `camera.py` now uses `OneByOne` + `MaxNumBuffer=20`. After each `RetrieveResult`, `GetNumberOfSkippedImages()` is checked and a `warning` signal emitted if > 0. Both test mocks updated. **Superseded by item 34 (2026-10-07):** under `OneByOne` that count never includes frames lost to full buffers, so the warning could not fire; lost frames are now counted from `BlockID` gaps. |
 | 17 | Stop silently dropping data | `core/pipeline.py`'s emitter no longer swallows a worker exception with a bare `continue` — it's now logged (with traceback) and counted via `error_count`. `core/recorder.py.append()` no longer drops a row when κ² ≤ 0 — it keeps the row and stores `bfi=NaN` (via `n_invalid`) instead, so `time` stays evenly spaced for downstream FFT-based analysis. |
 | 18 | Fix the ROI data race | `processor.py`: `set_roi()` and `process()` now publish/read one immutable `_RoiCrop` bundle via a single attribute assignment/read (atomic under the GIL) instead of 5 separate fields, so a worker thread in `process()` can no longer observe a torn mix of old/new ROI state. `gui/image_widget.py`: new `set_roi_locked()` disables the draggable circle (via `setEnabled`, which also disables its resize handles) and the Auto/Draw/Clear ROI buttons; wired into `gui/main_window.py`'s `_set_state()` so the ROI is locked for the duration of `MEASURING_INIT`/`MEASURING`. Verified the race empirically: the new concurrency test fails with ~28% of calls raising shape-mismatch errors against the old code, 0 against the fixed code. |
 | 19 | Real sustained-overload test | `tests/test_pipeline.py` gains `TestSustainedOverload`, closing merged-worklist task 4 (the old `test_inflight_capped_under_sustained_overload` only covered item count, not memory). Memory is measured exactly, via a `weakref` to every submitted frame — the alive count *is* the number of frames the pipeline still holds — rather than by noisy RSS sampling; frames are the lab's real 700×700 uint16 size. Flooding a stalled 2-worker pipeline with 60 frames: **capped (shipped)** retains 25 frames / 24.5 MB with 35 drops counted; **uncapped (pre-fix)** retains all 60 / 58.8 MB with **0** drops counted — Review B's silent leak, reproduced. The uncapped case is kept as a permanent negative control so the cap can't be removed, nor the bound widened, without a red test. Verified it fails on broken code: neutering the semaphore made it fail with "retained 60 frames (58.8 MB)… expected <= 32". Tests only — no production code touched. Suite 194/194. |
@@ -611,6 +603,7 @@ does not stall the GUI, the queue is bounded, and the offline MATLAB tests still
 | 31 | Disable "Save Frames" until raw-frame saving is ready (rig prep 1c) | Commit `10c74ce`, 2026-10-04. Replaced B2-lite (a free-space check before recording) after the user asked why a disk check was needed at all when raw frames are not saved: without them a session writes very little — `rBfi_results.h5` holds five numbers per frame (~10 MB for 3 h at 20 Hz), `Calibration.h5` a few frame-sized arrays (~10–20 MB at 700 × 700), plus a small PNG — under 50 MB, so the check would almost never fire. The one way to fill a disk was the checkbox itself: it was already wired to `HDF5Recorder.append_frame()`, writing every frame (~1 MB, ~70 GB/hour at 20 Hz) synchronously on the GUI thread (F4) with no space check (B2). Raw frames are not wanted yet, so the box is greyed out with a tooltip saying why. It stays **visible** because `SCOS_protocol.md:9` lists it among the SCOS parameters. Re-enabling it is part of F1, with B2 and F4. New `tests/test_save_frames_disabled.py` (2 tests: disabled, unchecked and visible at start-up; neither unlocking the parameters nor passing through every `State` re-enables it); mutation checked — with `setEnabled(False)` removed both fail. Suite 357/357 fast. |
 | 32 | Headless rehearsal harness `tools/rehearsal.py` (rig prep 3a) | Commits `7c4ad23` (harness) and `4f04963` (docs), 2026-10-05/06. Replaces the gitignored `scratch/e2e_rehearsal.py`, which printed values but asserted nothing, once hung on a real "Measurement Ended" dialog, and answered every `question()` with Ok — on "Laser May Still Be On" Ok means "check again", an endless loop. Drives the real `MainWindow` through a whole `--mock-folder` session (Start Video → auto-load → Start SCOS → dark → bright → normalization → measure → Stop) and checks ~30 things: protocol dialog order, dark cal from dark frames and bright cal from laser-on frames, laser-off check passed (return value captured — the status bar loses it, K1), exactly three session files, exactly the expected `rBfi_results.h5` entries and the ten `Params` with the recording's values and the right normalization method, equal series lengths, increasing `timeVec`, κ²_corr > 0, no NaN in rBFi, no `satCapacity` in either file, no uncaught exceptions. Every dialog is stubbed and answered **by title**; an unknown one is refused and reported, never left open; a faulthandler watchdog (`--timeout`) dumps all stacks and exits; config isolated to the committed defaults. Scenarios are hook sets in `SCENARIOS` (only `normal`; 3b–3d add theirs). Exit 0 = all passed. **Measured:** 60 frames — all pass, κ²_corr 0.0070–0.0076 (304/304 positive), ≈ 50 s; 600 frames — all pass, κ²_corr 0.0085 (305/305), 155 s, dark cal 69 s, bright 41 s, 1555 frames flushed at the bright prompt (→ D8). **Mutations checked:** `FolderMockCamera.set_playback_source` patched to a no-op (dark cal from laser-on frames) → 5 FAIL, exit 1; `--timeout 15` → stacks dumped, exit 1. No pytest for the harness itself — it needs the lab recording; fast suite 357 passed. |
 | 33 | Slowdown / backpressure scenario (rig prep 3b) | `tools/rehearsal.py --scenario slowdown`, 2026-10-06. The same whole session as `normal`, with two differences. **Playback at 10 Hz:** this PC's pipeline manages only ≈ 21 frames/s of 2.4 Mpx, so at 40 Hz even `normal` is overloaded from ≈ 1.5 s into normalization and there is no clean baseline to slow down from. The rate is set on the camera, not in the FPS box, so `Params.frameRate` still matches the recording. **Inside MEASURING:** 3 s at full speed → 6 s with every `process()` 0.6 s slower (≈ 4 frames/s against 10) → one 8 s stall → 4 s slow again → Stop SCOS pressed while still overloaded. Adds 15 scenario checks, plus one shutdown check that every scenario now runs ("pipeline thread had stopped when the window closed"). **Measured** (60 calibration frames, ≈ 115 s a run, 4 runs; memory numbers from the last 3): no overload at full speed; `overload_detected` fired exactly once (queue 16/20, never back below 15); **0 dropped while merely slow**, because the blocking intake slowed capture instead; the stall dropped 4 frames, which were counted, shown on the "Dropped" label and logged; every `timeVec` value is exactly a capture stamp minus t0, although results reached the GUI up to 12.9 s after capture, and the 4 frames missing from `timeVec` are exactly the 4 counted drops. Memory is judged by phase medians, because single samples spike by up to ≈ 150 MB: at most +83 MB above full speed (bound 251 MB = 2 × 28 held frames), and +0 to +1 MB from a full queue to the end. **Two real failures, left failing for 4a:** K4, the overload warning is overwritten by "Frame #…" within 2.5 s; K5, the pipeline thread was still running 3.7 s after the window closed. **Mutations (each caught):** overload latch removed → fired 44×; `timeVec` stamped on arrival at the GUI → 104 of 104 values are not capture stamps, and 132 frames missing against 4 counted; drops not counted → 4 missing against 0 counted, and nothing logged; in-flight cap removed → no overload warning, phase median +410 MB, +312 MB after the queue "filled". **Cannot show:** the real camera's buffering and how it stamps frames under overload (D5 note). Also corrected `simulation_checklist.md` B8 (expect FPS of roughly 15–25 and one overload message on this PC, not drops) and added K4/K5 to its known issues. Fast suite: 357 passed. |
+| 34 | Real camera: capture time from the camera's clock, lost frames counted (D5 follow-up to 3b) | 2026-10-07, the user's decision — the two real-camera problems 3b exposed, fixed before the rig session instead of after. **Problem 1, timestamps:** `camera.py` stamped a frame with the PC clock when it was *retrieved* from Pylon's buffer, so frames that waited there during a stall got bunched stamps. **Problem 2, lost frames:** under `GrabStrategy_OneByOne`, `GetNumberOfSkippedImages()` does not count frames lost to full buffers (Basler's API reference), so they were counted nowhere. **Fix:** new `core/frame_clock.py` (`FrameClock`, pure Python), used by `CameraThread.run()` for every grab result. Capture time = the result's `TimeStamp` (camera ticks at the start of exposure) converted to seconds on the `time.monotonic()` scale. It is used only after it agrees with the PC clock within 1 % over 5 s, for the reported tick rate or one of the Basler rates (1 GHz / 125 MHz). The check compares the *least delayed* frames of the first and last second, so one late frame or Windows' coarse pre-3.13 `time.monotonic()` cannot reject a good camera. Otherwise the PC stamp stays and `app.log` says why, so a wrong tick rate can never stretch `timeVec`. Lost frames = jumps in `BlockID` (GigE 1…65535 wrap handled; a counter restart after a grab restart is not a loss) plus incomplete grabs, each counted once. A camera without frame numbers is logged once ("Camera reports no frame numbers"). Visible as a warning at most once a second ("Camera: N frame(s) lost — Pylon buffers full or transfer failed"), on the label as "Dropped: N + M lost at camera", and in the results file's `metadata`: `time_source`, `frames_lost_camera`, `frames_dropped_queue` (provenance, so not in `Params`). The old skipped-images warning, which could never fire under `OneByOne`, is gone. **Tests:** `tests/test_frame_clock.py` (25: IDs, wrap, restart, failed grabs, clock check, the backlog test — frames retrieved in a burst keep their 50 ms exposure spacing, wrong or unknown tick rate → PC, no timestamps → PC, clock backwards → PC, a 100 ms-late first frame and 30 ms jitter on a 15.6 ms clock still accepted); `tests/test_camera.py` +4, running the real `run()` loop on a fake Pylon camera; `tests/test_results_schema.py` checks the three metadata fields. **Real pypylon 26.02.1, via Pylon's camera emulator:** `GrabResult` has `TimeStamp` and `BlockID`, and `CameraThread.run()` grabbed 60 frames in 3 s at 20 Hz. The emulator has no timestamps or frame numbers, so it fell back to the PC clock and logged both lines. **Mutations, each caught:** grab loop back on PC stamps; wrap treated as a restart; failed grab counted twice; tick rate not checked; check back to first-vs-last frame; frame accounting not written. Fast suite 386 passed, slow MATLAB tests 4/4, `normal` rehearsal passes (file says `time_source = "pc"`, 0 lost). **Not testable without the camera** — verified at the rig by D5 (step 5a). |
 
 ---
 
