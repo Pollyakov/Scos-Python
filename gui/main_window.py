@@ -891,7 +891,9 @@ class MainWindow(QMainWindow):
             # stopped nothing drains its queue, and a camera thread still
             # feeding it would stall on every frame.
             self._disconnect_pipeline_intake()
-            self._scos_worker.stop()
+            # Its results are no longer wanted: don't make it work through a
+            # backlog first (todo K5).
+            self._scos_worker.stop(discard_queued=True)
             self._scos_worker.wait(2000)
             n_workers = self.spn_workers.value()
             self._scos_worker = RealtimePipeline(self.processor, n_workers=n_workers, parent=self)
@@ -2447,7 +2449,10 @@ class MainWindow(QMainWindow):
             self._calib_thread.wait(5000)
             if self._calib_thread.isRunning():
                 self._calib_thread.terminate()
-        self._scos_worker.stop()
+        # Nothing will receive these results any more — no event loop runs
+        # after close — so drop the backlog instead of processing it, or on a
+        # machine far behind the thread outlives this 2 s wait (todo K5).
+        self._scos_worker.stop(discard_queued=True)
         self._scos_worker.wait(2000)
         if self._h5_replay is not None:
             self._h5_replay.stop()

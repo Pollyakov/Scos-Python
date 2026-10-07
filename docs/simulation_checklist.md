@@ -190,7 +190,7 @@ Found by the slowdown rehearsal (rig prep 3b, 2026-10-06), seen in a headless ru
   `_on_display_frame` rewrites the status bar every 2.5 s, so "SCOS overload — input queue…"
   is gone within 2.5 s; 3 s after it fired the bar shows "Frame #…". "Dropped: N" (red, always
   visible) and `app.log` keep the record. Fix together with K1.
-- **K5 · Closing the window while processing is far behind leaves the pipeline running.**
+- ✅ *Fixed 2026-10-07 (todo Done item 35): the pipeline now drops that backlog instead of processing it.* ~~**K5 · Closing the window while processing is far behind leaves the pipeline running.**~~
   `RealtimePipeline.stop()` queues its stop marker *behind* the waiting frames, so the
   pipeline first processes the whole backlog (up to 20 queued + 6 in flight) — results
   nobody will use, since Stop SCOS already ended the session — while `closeEvent` waits only

@@ -709,3 +709,74 @@ class TestCameraThreadIntake:
             f"30 frames into a stopped pipeline took {elapsed:.2f}s — the "
             "camera thread is still being blocked by a queue nothing drains"
         )
+
+
+# ---------------------------------------------------------------------------
+# stop(discard_queued=True) — todo K5 (found by the 3b slowdown rehearsal)
+# ---------------------------------------------------------------------------
+
+class TestStopDiscardingBacklog:
+    """When nobody will use the results (window closing, Start SCOS replacing
+    the pipeline), stopping must not first work through the backlog: on a
+    machine far behind, that outlived closeEvent's 2 s wait."""
+
+    PROC_S = 0.3
+
+    def _backlogged(self):
+        proc = _MockProcessor(sleep_range=(self.PROC_S, self.PROC_S))
+        pipeline = RealtimePipeline(proc, n_workers=3)
+        results = []
+        pipeline.result_ready.connect(
+            lambda t, *_: results.append(t), Qt.ConnectionType.DirectConnection)
+        pipeline.start()
+        for frame, mask, t in _make_frames(26):        # 20 queued + 6 in flight
+            pipeline.submit(frame, mask, t)
+        time.sleep(0.05)                               # workers busy, queue full
+        return pipeline, results
+
+    def test_finishes_after_one_round_not_the_whole_backlog(self):
+        pipeline, results = self._backlogged()
+        dropped_before = pipeline.dropped_count
+        t0 = time.monotonic()
+        pipeline.stop(discard_queued=True)
+        assert pipeline.wait(5000)
+        elapsed = time.monotonic() - t0
+        # Draining would take 26 × 0.3 s / 3 workers ≈ 2.6 s; one round is 0.3 s.
+        assert elapsed < 2 * self.PROC_S, f"stop took {elapsed:.2f} s"
+        assert len(results) <= 3                       # only the ones already running
+        # Discarded on purpose: neither drops (a measurement statistic) nor errors.
+        assert pipeline.dropped_count == dropped_before
+        assert pipeline.error_count == 0
+
+    def test_default_stop_still_delivers_everything_submitted(self):
+        pipeline, results = self._backlogged()
+        pipeline.stop()
+        assert pipeline.wait(10000)
+        assert len(results) + pipeline.dropped_count == 26
+
+
+class TestDropOldestQueueClear:
+
+    def test_clear_returns_count_and_empties(self):
+        q = _DropOldestQueue(maxsize=5)
+        for i in range(4):
+            q.put(i)
+        assert q.clear() == 4
+        assert q.qsize == 0
+        assert q.dropped_count == 0
+
+    def test_clear_wakes_a_blocked_producer(self):
+        q = _DropOldestQueue(maxsize=2)
+        q.put(1); q.put(2)
+        done = threading.Event()
+
+        def producer():
+            q.put(3, block=True, timeout=5.0)
+            done.set()
+
+        threading.Thread(target=producer, daemon=True).start()
+        time.sleep(0.05)
+        assert not done.is_set()                       # blocked: queue full
+        q.clear()
+        assert done.wait(1.0)
+        assert q.dropped_count == 0

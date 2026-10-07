@@ -124,6 +124,16 @@ class _DropOldestQueue:
             self._cond.notify_all()
             return item
 
+    def clear(self) -> int:
+        """Discard every queued frame; return how many. Wakes any producer
+        blocked in put(), which then finds room. Not counted as dropped: used
+        only when the results are no longer wanted (RealtimePipeline.stop)."""
+        with self._cond:
+            n = sum(1 for item in self._dq if item is not None)
+            self._dq.clear()
+            self._cond.notify_all()
+            return n
+
     @property
     def dropped_count(self) -> int:
         return self._dropped
@@ -207,6 +217,7 @@ class RealtimePipeline(QThread):
         # unbounded the way the bare ThreadPoolExecutor queue would.
         self._inflight_sem = threading.Semaphore(max_inflight or 2 * n_workers)
         self._error_count = 0   # frames whose processing raised — see _emit_loop
+        self._discarding  = False   # stop(discard_queued=True) was called
 
         # Camera-thread intake state. `_intake` is None whenever no measurement
         # is running, which makes on_frame() a cheap early return during
@@ -322,14 +333,39 @@ class RealtimePipeline(QThread):
     def queue_maxsize(self) -> int:
         return self._input_q.maxsize
 
-    def stop(self) -> None:
-        """Signal the pipeline to drain and exit. Call before wait().
+    def stop(self, *, discard_queued: bool = False) -> None:
+        """Signal the pipeline to exit. Call before wait().
+
+        By default it drains first: every frame already submitted is processed
+        and its result emitted (tests rely on that — no result is lost to a
+        shutdown).
+
+        discard_queued=True is for when nobody will use those results — the
+        window closing, or Start SCOS replacing this pipeline (todo K5). The
+        stop marker would otherwise sit *behind* up to 20 queued frames plus
+        the in-flight ones, and on a machine that is far behind the thread
+        outlived MainWindow.closeEvent's 2 s wait and was killed by Python's
+        shutdown mid-task. Now the queued frames are dropped, frames handed to
+        the pool but not started are cancelled, and only those already being
+        processed finish — one process() call per worker at most.
 
         Intake is closed first: once the dispatcher exits nothing drains the
         input queue, so a camera thread still feeding a dead pipeline would
         block for the full put timeout on every frame.
         """
         self._intake = None
+        if discard_queued:
+            self._discarding = True
+            n = self._input_q.clear()
+            # Handed to the pool but not started: cancel now. Only from here —
+            # the dispatcher may be blocked waiting for a slot, and a worker
+            # that frees up would otherwise start the next one first.
+            # Future.cancel() is thread-safe and refuses running futures.
+            with self._inf_cond:
+                n += sum(1 for f in self._inflight if f is not None and f.cancel())
+            if n:
+                logger.info("Pipeline stopping — %d frame(s) discarded unprocessed, "
+                            "their results are no longer wanted", n)
         self._input_q.put(None)
 
     # ------------------------------------------------------------------
@@ -354,12 +390,18 @@ class RealtimePipeline(QThread):
                 # oldest and counts it — visible backpressure instead of a
                 # silent, unbounded memory leak.
                 self._inflight_sem.acquire()
+                if self._discarding:            # stop(discard_queued=True)
+                    self._inflight_sem.release()
+                    continue                    # the next get() is the sentinel
                 fut = pool.submit(_worker_fn, frame, mask, t, self._processor)
                 with self._inf_cond:
                     self._inflight.append(fut)
                     self._inf_cond.notify()
+            if self._discarding:
+                # Submitted but not started: cancel. Running ones finish.
+                pool.shutdown(wait=True, cancel_futures=True)
         # ThreadPoolExecutor.__exit__ calls shutdown(wait=True) — all futures
-        # are resolved before we reach here.
+        # are resolved (or cancelled) before we reach here.
         with self._inf_cond:
             self._inflight.append(None)   # sentinel to unblock emitter
             self._inf_cond.notify()
@@ -378,6 +420,10 @@ class RealtimePipeline(QThread):
                 break
             try:
                 t, k2_raw, k2_corr, mean_i, proc_ms = item.result()
+            except concurrent.futures.CancelledError:
+                # Cancelled by stop(discard_queued=True): not an error.
+                self._inflight_sem.release()
+                continue
             except GainTableError as e:
                 self._inflight_sem.release()
                 self.error_occurred.emit(str(e))
