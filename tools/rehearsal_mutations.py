@@ -40,6 +40,12 @@ Rig prep 3e — the numbers in the results file, not just their presence:
   meta-drops  (slowdown) frames_dropped_queue written as 0 although frames
            were dropped → "metadata.frames_dropped_queue = 0 (GUI counter N)"
 
+Rig prep 4a — status-bar messages that must stay on screen:
+  frame-text  (slowdown) every displayed frame written to the status bar
+           again, as before the K1/K4 fix → "closing message still on the
+           status bar 3 s after Stop SCOS" and "overload warning still on the
+           status bar 3 s after it fired"
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -56,7 +62,8 @@ sys.path.insert(0, str(_REPO / "tools"))
 # mutation → the scenario it runs against unless --scenario is given
 MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "leak": "slowdown", "never-rearm": "recovery",
-             "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown"}
+             "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown",
+             "frame-text": "slowdown"}
 
 
 def apply(mutation: str) -> None:
@@ -131,6 +138,17 @@ def apply(mutation: str) -> None:
                 attrs["frames_dropped_queue"] = 0
             original(self, **attrs)
         HDF5Recorder.set_metadata = set_metadata
+
+    elif mutation == "frame-text":
+        from gui.main_window import MainWindow
+        original = MainWindow._on_display_frame
+
+        def _on_display_frame(self, frame):
+            before = self._frame_count
+            original(self, frame)
+            if self._frame_count != before:      # the frame was displayed
+                self.status.showMessage(f"Frame #{self._frame_count}")
+        MainWindow._on_display_frame = _on_display_frame
 
 
 def main() -> int:

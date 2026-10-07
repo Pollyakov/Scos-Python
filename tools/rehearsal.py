@@ -71,6 +71,9 @@ RESULTS_GROUPS   = {"Params", "metadata"}
 METADATA_FIELDS  = {"camera_sn", "camera_model", "gain_du_per_e", "gain_source",
                     "time_source", "frames_lost_camera", "frames_dropped_queue"}
 SESSION_FILES    = {"Calibration.h5", "rBfi_results.h5", "rBfi_fig.png"}
+# How long preview keeps playing after Stop SCOS before Stop Video, so the K1
+# check sees displayed frames arrive after the closing message.
+CLOSING_HOLD_S   = 3.0
 
 # Dialog titles, as MainWindow spells them.
 T_GAIN_WARNING = "Estimated G[DU/e]"
@@ -98,6 +101,9 @@ class Run:
     exceptions: list[str]              = field(default_factory=list)
     frames:     Counter                = field(default_factory=Counter)
     laser_off_result: object           = "never ran"
+    closing_message:  str              = ""   # status bar right after Stop SCOS
+    closing_later:    str              = ""   # ... and CLOSING_HOLD_S later
+    display_frames_after_stop: int     = 0
     failures:   list[str]              = field(default_factory=list)
 
     def check(self, ok: bool, what: str) -> bool:
@@ -816,7 +822,8 @@ def rehearse(args, run: Run) -> Path | None:
     cam.frame_ready.connect(_spy, Qt.ConnectionType.QueuedConnection)
 
     # The laser-off check reports its outcome only through the closing status
-    # message, which K1 overwrites — so capture its return value directly.
+    # message — so capture its return value directly as well, in case that
+    # message is lost again (K1).
     original_laser_check = w._laser_off_check
 
     def _laser_check(mask):
@@ -876,6 +883,15 @@ def rehearse(args, run: Run) -> Path | None:
         print("Stop SCOS")
         w.btn_start_scos.setChecked(False)
         final_state = w._state
+        # K1: the closing message must outlast the frames that keep arriving
+        # in PREVIEW — before the fix, the next displayed frame replaced it.
+        run.closing_message = w.status.currentMessage()
+        frames_at_stop = w._frame_count
+        t_stop = time.monotonic()
+        pump(lambda: time.monotonic() - t_stop >= CLOSING_HOLD_S,
+             CLOSING_HOLD_S + 10, f"{CLOSING_HOLD_S:.0f} s of preview after Stop SCOS")
+        run.closing_later = w.status.currentMessage()
+        run.display_frames_after_stop = w._frame_count - frames_at_stop
         w.btn_start_video.setChecked(False)
         app.processEvents()
 
@@ -901,6 +917,12 @@ def rehearse(args, run: Run) -> Path | None:
                       f"({bright_du:.1f} DU is nearer {main_ref:.1f} than {dark_ref:.1f})")
         run.check(run.laser_off_result is None,
                   f"laser-off check passed (returned {run.laser_off_result!r})")
+        run.check(run.closing_message.startswith("Session finished")
+                  and run.closing_later == run.closing_message
+                  and run.display_frames_after_stop > 0,
+                  f"closing message still on the status bar {CLOSING_HOLD_S:.0f} s "
+                  f"after Stop SCOS, over {run.display_frames_after_stop} displayed "
+                  f"frame(s) (K1; now {run.closing_later!r})")
         verify_outputs(run, folder, w, cam, args, wall_start)
         scenario.extra_checks(w, run, folder, args)
     finally:

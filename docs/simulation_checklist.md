@@ -22,6 +22,8 @@ Anything that does not match — even if it looks harmless — goes into step 4.
 > section C (except the "over 2 min → mean" half of C5). Sections D, E, F and G, step B9,
 > and the known issues K1–K3 are written from reading the code, not from a run. If one of
 > those doesn't match, the checklist may be wrong rather than the app — note it either way.
+> K1–K4 were fixed on 2026-10-07 (rig prep 4a, todo Done item 39); the steps below expect
+> the fixed behaviour.
 
 ---
 
@@ -54,8 +56,10 @@ Anything that does not match — even if it looks harmless — goes into step 4.
 
 ### Three things that look wrong but are normal
 
-1. **The status bar at the bottom keeps flickering "Frame #… shape=… min=… max=…".** It
-   overwrites every other message there — see known issue K1 below.
+1. **The right-hand end of the status bar keeps counting "Frame #… min=… max=…".** That is
+   the live frame readout, in a field of its own. Messages appear on the left and stay until
+   the next one replaces them (K1, fixed 2026-10-07) — if one flickers away within a second,
+   note it.
 2. **During the measurement the live image updates only every 2.5 s.** On purpose, to save
    GUI time. The FPS, κ² and ⟨I⟩ labels keep moving.
 3. **Corrected κ² is lower than MATLAB's** (**0.0105** for this recording), and **how much
@@ -107,15 +111,15 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser and remove the subject…". Click **OK**. | |
 | ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **hundreds or thousands** (1555 with 600 frames on the dev PC) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |
-| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig's 700 × 700 is ≈ 5× lighter), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled…"** that is gone within 2½ s (K4). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
+| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig's 700 × 700 is ≈ 5× lighter), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled… (at HH:MM:SS)"**. It stays until another message replaces it — it is the record of an event at that time, not the current state (K4, fixed 2026-10-07). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
 | ☐ B9 | Let it run **at least 2½ minutes** | When the recording passes **120 s**, the plot's x-axis switches from **seconds to minutes** | |
 | ☐ B10 | Click **Stop SCOS** | Pop-up **"Measurement Ended — Please turn off the laser."** Click **OK**. Playback switches to the dark folder for one frame to check the laser went off; in playback that check **passes silently** (no second pop-up). | A **"Laser May Still Be On"** pop-up → step 4, with the numbers it shows |
-| ☐ B11 | Watch | Parameters unlock, button reads **Start SCOS**, the image is bright again (back on the recording). | Image stays dark → playback was not restored to the recording |
+| ☐ B11 | Watch | Parameters unlock, button reads **Start SCOS**, the image is bright again (back on the recording). The status bar reads **"Session finished → <your session folder>"** and **stays** while the frame counter on the right keeps running; the **whole** path is readable, not cut off by that counter (a skipped laser-off check would add "\| laser-off …" at the end — that must be readable too). | Image stays dark → playback was not restored to the recording. Message gone or cut off → note what replaced it, or where it was cut |
 
 ## C · What landed on disk
 
-Open your folder in Explorer. Do not rely on the status bar for the path (K1). `app.log` in
-the repo folder also has it: search "Session folder created".
+Open your folder in Explorer — the path is the one on the status bar after B11. `app.log`
+in the repo folder also has it: search "Session folder created".
 
 | | Check | Expect |
 |---|---|---|
@@ -151,8 +155,9 @@ the repo folder also has it: search "Session folder created".
 |---|---|---|
 | ☐ F1 | *(Needs a fresh window — the folder dialog only appears once per window: close and relaunch.)* Start SCOS → **Cancel** the folder dialog | Nothing created; button back to Start SCOS; parameters unlocked |
 | ☐ F2 | Start SCOS → **Cancel** at "Please turn off the laser" | The session folder that was just created is **removed again**; parameters unlocked |
-| ☐ F3 | Start SCOS → OK → click **Stop SCOS while "Dark cal: n / …" is counting** | **Today: see K3** — image stays dark |
-| ☐ F4 | Start SCOS → OK → **Cancel** at "Please turn on the laser" | **Today: see K2** — parameters stay locked. To unlock: run F5 to the end, or relaunch |
+| ☐ F3 | Start SCOS → OK → click **Stop SCOS while "Dark cal: n / …" is counting** | Label **"Dark cal cancelled"**; the image is **bright again** (back on the recording — K3); parameters unlocked; button reads Start SCOS; the session folder, still empty, is **removed** |
+| ☐ F4 | Start SCOS → OK → let dark cal finish → **Cancel** at "Please turn on the laser" | Label **"Bright cal cancelled"**; parameters **unlocked** (K2); button reads Start SCOS. The session folder now holds a dark-only `Calibration.h5`, so it is **kept but renamed `<name>_cancelled`** (your choice, 2026-10-07); the status bar says **"Run cancelled — partial calibration kept in …_cancelled"** |
+| ☐ F4b | Start SCOS → OK → OK → click **Stop SCOS while "Bright cal: n / …" is counting** | Same as F4: parameters unlocked, folder renamed `…_cancelled` |
 | ☐ F5 | Stop SCOS during **normalization** (before "Normalized ✓"), e.g. at 3 s of a 5 s window | Run ends; the status-bar label reads **"Normalized on 3.0 s (stopped early)"** (your number); the plot shows the curve; all three files written. In `rBfi_results.h5`, `rBFi` **is present** and `Params` → `normalizationWindowSec` is the time you stopped at (≈ 3), **not** the spinbox's 5; `normalizationMethod` = `percentile5` (always, since the window spinbox stops at 60 s — far under the 2-min rule). Vika's answer to open question 11 (2026-10-07): normalize on whatever data exists |
 
 ## G · Close and relaunch
@@ -168,25 +173,25 @@ the repo folder also has it: search "Session folder created".
 Found by reading the code on 2026-10-04, not yet seen on screen. The steps above are written
 so you will meet each of them; confirm or refute.
 
-- **K1 · Status-bar messages vanish.** Outside a measurement, every displayed frame writes
+- ✅ *Fixed 2026-10-07 (rig prep 4a, todo Done item 39): the frame readout has its own field at the right of the status bar; messages stay until the next one.* ~~**K1 · Status-bar messages vanish.**~~ Outside a measurement, every displayed frame writes
   "Frame #…" to the status bar (`gui/main_window.py:1595`, up to 30 times a second). So
   "Session folder: …" (1249), "Recording → …" and the closing **"Session finished → <folder>
   | <laser-off note>"** (965) are overwritten almost at once. The laser-off note is the only
   on-screen trace of a *skipped* laser-off check — Done item 28 says that message is the last
   one written; in practice the frame counter writes after it.
-- **K2 · Cancel at the bright prompt leaves the parameters locked.** That branch
+- ✅ *Fixed 2026-10-07 (rig prep 4a, todo Done item 39): every early exit from calibration goes through `_abandon_calibration()`, which unlocks everything; a folder holding a partial calibration is renamed `…_cancelled`, an empty one removed.* ~~**K2 · Cancel at the bright prompt leaves the parameters locked.**~~ That branch
   (`gui/main_window.py:1386-1394`) and both calibration-error branches (1308-1316, 1415-1423)
   reset the button but never call `_set_params_enabled(True)`, as `_reset_start_button()`
   does. They also leave the session folder on disk with a `Calibration.h5` holding only the
   dark group.
-- **K3 · Stopping during dark calibration leaves playback on the dark folder** (playback
+- ✅ *Fixed 2026-10-07 (rig prep 4a, todo Done item 39): the same `_abandon_calibration()` switches playback back to the recording (and restores the trigger after a dark-calibration error).* ~~**K3 · Stopping during dark calibration leaves playback on the dark folder**~~ (playback
   only). Neither Stop SCOS (920-925) nor Stop Video (757-759) during `DARK_CAL` switches
   playback back to `"main"`, so the preview stays dark until the next Start SCOS. Same class
   of bug that Done item 28 fixed for the laser-off check.
 
 Found by the slowdown rehearsal (rig prep 3b, 2026-10-06), seen in a headless run:
 
-- **K4 · The overload warning vanishes too** — same cause as K1. During a measurement
+- ✅ *Fixed 2026-10-07 (rig prep 4a, todo Done item 39): same fix as K1; the warning now also carries the time it fired.* ~~**K4 · The overload warning vanishes too**~~ — same cause as K1. During a measurement
   `_on_display_frame` rewrites the status bar every 2.5 s, so "SCOS overload — input queue…"
   is gone within 2.5 s; 3 s after it fired the bar shows "Frame #…". "Dropped: N" (red, always
   visible) and `app.log` keep the record. Fix together with K1.

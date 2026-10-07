@@ -215,6 +215,15 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self.status.showMessage("Ready — camera not started")
+        # The live frame readout has a label of its own (todo K1/K4). Written
+        # up to 30 times a second, it used to go through showMessage() and so
+        # replaced every message within moments — the session folder, the
+        # closing "Session finished … | laser-off note", the overload warning.
+        # A permanent widget sits at the right and showMessage() never hides
+        # it, so messages now stay until the next event replaces them. Kept
+        # short: it takes its width from the message area.
+        self._frame_info_label = QLabel("")
+        self.status.addPermanentWidget(self._frame_info_label)
 
         self._last_fps_time = time.time()
         self._fps_count = 0
@@ -870,6 +879,71 @@ class MainWindow(QMainWindow):
         self.btn_save.setEnabled(True)
         self._set_params_enabled(True)
 
+    def _abandon_calibration(self, label: str) -> None:
+        """Undo a run that ends before its measurement began (todo K2, K3).
+
+        Every early way out of the calibration sequence comes through here:
+        Cancel at the bright prompt, an error from either collector, and Stop
+        SCOS during DARK_CAL or BRIGHT_CAL — Stop Video presses Stop SCOS, so
+        it arrives here too. (Closing the window mid-calibration does not;
+        closeEvent needs only the folder step.) Before this, each path undid its own subset: the
+        parameters stayed locked after a Cancel or an error, playback stayed on
+        the dark folder after a stop during dark calibration, and an error
+        during dark calibration also left the external trigger off.
+
+        The state goes to PREVIEW and the collectors are dropped first. The
+        error paths show a modal dialog after this, and a real dialog runs a
+        nested event loop that keeps delivering frames: with the state still
+        DARK_CAL and a finished collector, each one would call _finish_*_cal
+        again and open another dialog.
+        """
+        dark_pending = self._state == State.DARK_CAL
+        self._set_state(State.PREVIEW)
+        self._dark_cal_collector   = None
+        self._bright_cal_collector = None
+        self._calib_label.setText(label)
+        # K3 — a no-op unless --mock-folder playback is on its dark folder.
+        self._set_playback_source("main")
+        # Only while dark calibration still had the trigger switched off:
+        # _finish_dark_cal has restored it for every later exit, and setting
+        # it again would make a real camera restart grabbing for nothing.
+        if dark_pending and self._dark_cal_trigger_was_on:
+            self.camera.set_trigger(True, self.spn_trigger_delay.value())
+        self._reset_start_button()
+        self._discard_session_folder()
+
+    def _discard_session_folder(self) -> None:
+        """Deal with the folder of a run that never reached its measurement.
+
+        Empty — the run was abandoned before anything was written — it is
+        removed, so cancelled runs do not litter the output root. Not empty —
+        after dark calibration it holds a Calibration.h5 with only the dark
+        group — it is renamed to `<name>_cancelled` instead (the user's choice,
+        2026-10-07): nothing measured is deleted, and it cannot be mistaken for
+        a finished session missing its results.
+        """
+        folder, self._session_folder = self._session_folder, None
+        if folder is None or not folder.is_dir():
+            return
+        try:
+            folder.rmdir()          # only ever removes an empty directory
+            logger.info("Run cancelled — removed empty %s", folder)
+            return
+        except OSError:
+            pass
+        target = folder.with_name(f"{folder.name}_cancelled")
+        try:
+            folder.rename(target)
+        except OSError:
+            logger.exception("Run cancelled — could not rename %s; left in place",
+                             folder)
+            self.status.showMessage(f"Run cancelled — {folder} left in place")
+            return
+        logger.warning("Run cancelled before the measurement — %s renamed to %s "
+                       "(partial calibration, no results)", folder, target.name)
+        self.status.showMessage(
+            f"Run cancelled — partial calibration kept in {target}")
+
     def _toggle_scos(self, checked: bool):
         if checked:
             logger.info(
@@ -928,14 +1002,9 @@ class MainWindow(QMainWindow):
             self._time_left_label.hide()
             # Cancel any in-progress calibration
             if self._state == State.DARK_CAL:
-                self._dark_cal_collector = None
-                self._calib_label.setText("Dark cal cancelled")
-                # Restore trigger if it was disabled for dark cal
-                if self._dark_cal_trigger_was_on:
-                    self.camera.set_trigger(True, self.spn_trigger_delay.value())
+                self._abandon_calibration("Dark cal cancelled")
             elif self._state == State.BRIGHT_CAL:
-                self._bright_cal_collector = None
-                self._calib_label.setText("Bright cal cancelled")
+                self._abandon_calibration("Bright cal cancelled")
             self.btn_start_scos.setText("Start SCOS")
             self.btn_save.setEnabled(True)
             self._set_params_enabled(True)    # restore all parameter inputs
@@ -1356,16 +1425,11 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Ok:
-            # The folder exists by now and nothing was ever written to it.
-            # rmdir only removes an empty directory, so a folder that somehow
-            # already has something in it is left alone rather than deleted.
-            try:
-                session_folder.rmdir()
-                logger.info("Run cancelled — removed empty %s", session_folder)
-            except OSError:
-                logger.warning("Run cancelled — left %s in place", session_folder)
-            self._session_folder = None
+            # The folder exists by now and nothing was ever written to it, so
+            # it is removed; one that somehow has something in it is renamed,
+            # never deleted.
             self._reset_start_button()
+            self._discard_session_folder()
             return
 
         # Step 3: disable external trigger without triggering Arduino upload
@@ -1404,14 +1468,9 @@ class MainWindow(QMainWindow):
         try:
             dark_mean, dark_var = self._dark_cal_collector.result()
         except RuntimeError as exc:
+            # Undo first, dialog second — see _abandon_calibration.
+            self._abandon_calibration("Dark cal failed")
             QMessageBox.critical(self, "Dark Calibration Error", str(exc))
-            self._dark_cal_collector = None
-            self.btn_start_scos.blockSignals(True)
-            self.btn_start_scos.setChecked(False)
-            self.btn_start_scos.setText("Start SCOS")
-            self.btn_start_scos.blockSignals(False)
-            self.btn_save.setEnabled(True)
-            self._set_state(State.PREVIEW)
             return
 
         n_collected = self._dark_cal_collector.n_collected
@@ -1483,13 +1542,7 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Ok:
-            # User cancelled — revert Start SCOS button
-            self.btn_start_scos.blockSignals(True)
-            self.btn_start_scos.setChecked(False)
-            self.btn_start_scos.setText("Start SCOS")
-            self.btn_start_scos.blockSignals(False)
-            self.btn_save.setEnabled(True)
-            self._set_state(State.PREVIEW)
+            self._abandon_calibration("Bright cal cancelled")
             return
 
         self._flush_stale_frames("the laser was switched back on")
@@ -1511,14 +1564,9 @@ class MainWindow(QMainWindow):
                 dark_mean=self.processor.dark_mean
             )
         except RuntimeError as exc:
+            # Undo first, dialog second — see _abandon_calibration.
+            self._abandon_calibration("Bright cal failed")
             QMessageBox.critical(self, "Bright Calibration Error", str(exc))
-            self._bright_cal_collector = None
-            self.btn_start_scos.blockSignals(True)
-            self.btn_start_scos.setChecked(False)
-            self.btn_start_scos.setText("Start SCOS")
-            self.btn_start_scos.blockSignals(False)
-            self.btn_save.setEnabled(True)
-            self._set_state(State.PREVIEW)
             return
 
         logger.info("Bright calibration complete — %d frames collected", n_collected)
@@ -1693,9 +1741,10 @@ class MainWindow(QMainWindow):
                 return
             self._last_display_time = now
         self._frame_count += 1
-        self.status.showMessage(
-            f"Frame #{self._frame_count}  |  shape={frame.shape}  "
-            f"min={frame.min()}  max={frame.max()}  dtype={frame.dtype}"
+        # Not showMessage(): that would wipe whatever the operator is meant
+        # to read on the status bar (K1/K4). Shape is on the Size label.
+        self._frame_info_label.setText(
+            f"Frame #{self._frame_count}  min={frame.min()}  max={frame.max()}"
         )
         self.image_widget.update_frame(frame)
 
@@ -1994,8 +2043,8 @@ class MainWindow(QMainWindow):
 
         # Calibration intercepts — after FPS/stats (so labels stay live) and
         # before the rate-limiter (every frame must be counted).
-        # Progress is shown in the button text, not the status bar, because
-        # _on_display_frame overwrites the status bar at 30 FPS.
+        # Progress is shown on the calibration label rather than the status
+        # bar, where any other message would replace it.
         if self._state == State.DARK_CAL:
             if self._dark_cal_collector is None:
                 return   # guard: frame arrived during state transition
@@ -2214,7 +2263,10 @@ class MainWindow(QMainWindow):
             f"full; camera capture is being throttled to keep up"
         )
         logger.warning(msg)
-        self.status.showMessage(msg)
+        # Stamped with the time: the message now stays up until something
+        # replaces it (K4), so after a recovery it must read as a past event,
+        # not as the current state.
+        self.status.showMessage(f"{msg} (at {time.strftime('%H:%M:%S')})")
 
     # ------------------------------------------------------------------
     # G[DU/e] resolution — supervisor's rule, 2026-09-22
@@ -2525,6 +2577,10 @@ class MainWindow(QMainWindow):
         if self._recorder is not None:
             self._recorder.close()
             self._recorder = None
+        # Closed mid-calibration: the run never reached its measurement, so its
+        # folder is handled like any other abandoned run's (todo K2).
+        if self._state in (State.DARK_CAL, State.BRIGHT_CAL):
+            self._discard_session_folder()
         # After the recorder: a settings write must never cost a session its data.
         try:
             self._save_config()
