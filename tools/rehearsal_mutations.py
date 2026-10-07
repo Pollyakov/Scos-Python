@@ -2,8 +2,9 @@
 Prove the rehearsal's checks can fail: run tools/rehearsal.py with one deliberate defect.
 
 A check that has never failed may be checking nothing. Each mutation below
-breaks one thing the `slowdown` scenario (rig prep 3b, todo Done item 33)
-or the `recovery` scenario (3c, Done item 36) claims to verify. Patches are applied in memory, in this process only;
+breaks one thing the `slowdown` scenario (rig prep 3b, todo Done item 33),
+the `recovery` scenario (3c, Done item 36) or the file checks every scenario
+runs (3e) claims to verify. Patches are applied in memory, in this process only;
 no file is changed. A mutation run must exit 1 and name the check it was meant
 to trip. If it exits 0, that check is not doing its job.
 
@@ -30,6 +31,15 @@ Mutations and the check each one must trip (measured 2026-10-06):
            once the queue drained" and "episode 2: the re-armed warning fired
            again" (fired 0×)
 
+Rig prep 3e — the numbers in the results file, not just their presence:
+  divisor  rBFi written as bfi / (1.001 × the constant stored in Params)
+           → "rBFi = bfi / Params.normalizationConstant"
+  baseline the normalization constant computed without the window's last
+           sample (an off-by-one in which rows form the baseline)
+           → "constant recomputed from the file's first N rows"
+  meta-drops  (slowdown) frames_dropped_queue written as 0 although frames
+           were dropped → "metadata.frames_dropped_queue = 0 (GUI counter N)"
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -45,7 +55,8 @@ sys.path.insert(0, str(_REPO / "tools"))
 
 # mutation → the scenario it runs against unless --scenario is given
 MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
-             "leak": "slowdown", "never-rearm": "recovery"}
+             "leak": "slowdown", "never-rearm": "recovery",
+             "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown"}
 
 
 def apply(mutation: str) -> None:
@@ -90,6 +101,36 @@ def apply(mutation: str) -> None:
                 self._overloaded = True
                 self.overload_detected.emit(depth)
         P.RealtimePipeline._check_overload = _check_overload
+
+    elif mutation == "divisor":
+        from core.recorder import HDF5Recorder
+        original = HDF5Recorder.write_rbfi
+
+        def write_rbfi(self, norm_constant, method, window_seconds):
+            original(self, norm_constant, method, window_seconds)
+            del self._f["rBFi"]
+            self._f.create_dataset("rBFi",
+                                   data=self._f["bfi"][:] / (norm_constant * 1.001))
+        HDF5Recorder.write_rbfi = write_rbfi
+
+    elif mutation == "baseline":
+        import gui.main_window as MW
+        original = MW.normalization_constant
+
+        def normalization_constant(values, method):
+            values = list(values)
+            return original(values[:-1] if len(values) > 1 else values, method)
+        MW.normalization_constant = normalization_constant
+
+    elif mutation == "meta-drops":
+        from core.recorder import HDF5Recorder
+        original = HDF5Recorder.set_metadata
+
+        def set_metadata(self, **attrs):
+            if "frames_dropped_queue" in attrs:
+                attrs["frames_dropped_queue"] = 0
+            original(self, **attrs)
+        HDF5Recorder.set_metadata = set_metadata
 
 
 def main() -> int:

@@ -30,10 +30,12 @@ unstubbed "Measurement Ended" prompt:
 
 Scenarios (--scenario) are sets of hooks around the same session; see
 SCENARIOS at the bottom: `normal` (3a), `slowdown` (3b, see Slowdown) and
-`recovery` (3c, see Recovery); rig prep step 3d adds its own there.
+`recovery` (3c, see Recovery). Every scenario ends with the same file checks,
+verify_outputs (3e). (3d, the compressed long run, is postponed.)
 """
 
 import argparse
+import datetime
 import faulthandler
 import logging
 import os
@@ -64,6 +66,10 @@ PARAMS_FIELDS = {
 RESULTS_DATASETS = {"startTime", "timeVec", "rBFi", "Intensity",
                     "k2_raw", "k2_corr", "bfi"}
 RESULTS_GROUPS   = {"Params", "metadata"}
+# Engineering provenance: four written when the recorder opens
+# (MainWindow._start_recorder), three at close (_write_frame_accounting).
+METADATA_FIELDS  = {"camera_sn", "camera_model", "gain_du_per_e", "gain_source",
+                    "time_source", "frames_lost_camera", "frames_dropped_queue"}
 SESSION_FILES    = {"Calibration.h5", "rBfi_results.h5", "rBfi_fig.png"}
 
 # Dialog titles, as MainWindow spells them.
@@ -840,6 +846,9 @@ def rehearse(args, run: Run) -> Path | None:
 
         scenario.before_start(w, cam, args)
 
+        # startTime is written when the recorder opens, a few seconds after
+        # this; it must fall between here and the checks.
+        wall_start = datetime.datetime.now().replace(microsecond=0)
         print("Start SCOS")
         w.btn_start_scos.setChecked(True)
         pump(lambda: w._state is not State.DARK_CAL and w._state is not State.PREVIEW,
@@ -892,7 +901,7 @@ def rehearse(args, run: Run) -> Path | None:
                       f"({bright_du:.1f} DU is nearer {main_ref:.1f} than {dark_ref:.1f})")
         run.check(run.laser_off_result is None,
                   f"laser-off check passed (returned {run.laser_off_result!r})")
-        verify_outputs(run, folder, cam, args)
+        verify_outputs(run, folder, w, cam, args, wall_start)
         scenario.extra_checks(w, run, folder, args)
     finally:
         w.close()
@@ -913,11 +922,15 @@ def rehearse(args, run: Run) -> Path | None:
     return folder
 
 
-def verify_outputs(run: Run, folder: Path | None, cam, args) -> None:
-    """What the session must have left on disk (rig prep 3e extends this)."""
+def verify_outputs(run: Run, folder: Path | None, w, cam, args,
+                   wall_start: datetime.datetime) -> None:
+    """What the session must have left on disk — that it is there, and (rig
+    prep 3e) that the numbers in it are right: rBFi is bfi divided by the
+    constant in Params, that constant is recomputed from the file's own
+    baseline rows, and the provenance matches what the GUI showed."""
     import h5py
     import numpy as np
-    from core.session import choose_norm_method
+    from core.session import choose_norm_method, normalization_constant
 
     print("\nChecks — session folder")
     if not run.check(folder is not None and folder.is_dir(),
@@ -951,6 +964,23 @@ def verify_outputs(run: Run, folder: Path | None, cam, args) -> None:
                       f"Calibration.h5 has groups dark + bright (has {sorted(f.keys())})")
             hits = sat_names(f)
             run.check(not hits, f"no satCapacity in Calibration.h5 {hits or ''}")
+            frame_shape = tuple(w.processor.dark_mean.shape)
+            for group, names, spin in (("dark", ("mean_dark", "var_dark", "mask"), w.spn_n1),
+                                       ("bright", ("spIm", "spVar"), w.spn_n2)):
+                if group not in f:
+                    continue
+                g = f[group]
+                for name in names:
+                    if not run.check(name in g, f"Calibration.h5 has {group}/{name}"):
+                        continue
+                    a = g[name][:]
+                    run.check(a.shape == frame_shape and bool(np.isfinite(a).all()),
+                              f"{group}/{name} is a finite {frame_shape} image "
+                              f"(shape {a.shape}, "
+                              f"{int((~np.isfinite(a)).sum())} non-finite)")
+                n_frames = g.attrs.get("n_frames")
+                run.check(n_frames == spin.value(),
+                          f"{group} n_frames = {n_frames} (spinbox {spin.value()})")
 
     res = folder / "rBfi_results.h5"
     if not res.exists():
@@ -1011,6 +1041,68 @@ def verify_outputs(run: Run, folder: Path | None, cam, args) -> None:
         if "normalizationConstant" in p:
             c = float(p["normalizationConstant"])
             run.check(np.isfinite(c) and c > 0, f"Params.normalizationConstant = {c:.4f}")
+
+        # ---- 3e: the numbers, not just their presence ----
+        bfi = f["bfi"][:]
+        valid = k2 > 0
+        run.check(bool(np.allclose(bfi[valid], 1.0 / k2[valid], rtol=1e-12))
+                  and bool(np.isnan(bfi[~valid]).all()),
+                  "bfi = 1/k2_corr where κ² > 0, NaN elsewhere")
+        if "normalizationConstant" in p and n:
+            c = float(p["normalizationConstant"])
+            ok = bool(np.allclose(rb, bfi / c, rtol=1e-12, equal_nan=True))
+            run.check(ok, "rBFi = bfi / Params.normalizationConstant "
+                          f"(worst ratio {np.nanmax(np.abs(rb * c / bfi - 1)):.2e} off)")
+            # The baseline is every valid row up to and including the first
+            # valid one at or past norm_seconds: _on_scos_result appends the
+            # point to the buffer *before* testing whether the window closed.
+            norm_s = float(w._norm_seconds)
+            closing = np.flatnonzero(valid & (t >= norm_s))
+            if run.check(closing.size > 0,
+                         f"a valid row at or past the {norm_s:g} s window"):
+                base = bfi[:closing[0] + 1][valid[:closing[0] + 1]]
+                method = choose_norm_method(float(t[-1]))
+                again = normalization_constant(base, method)
+                run.check(np.isclose(again, c, rtol=1e-12),
+                          f"constant recomputed from the file's first {base.size} "
+                          f"rows by {method} = {again:.6g} (Params: {c:.6g})")
+
+        roi = [float(w._roi_circ.get(k, -1)) for k in ("cx", "cy", "r")]
+        run.check("ROI" in p and np.allclose(np.asarray(p["ROI"], float), roi),
+                  f"Params.ROI = {[round(float(x), 2) for x in p.get('ROI', [])]} "
+                  f"(GUI: {[round(x, 2) for x in roi]})")
+        commit = str(p.get("gitCommit", ""))
+        run.check(bool(commit) and commit != "unknown",
+                  f"Params.gitCommit = {commit!r}")
+
+        raw = f["startTime"][()]
+        raw = raw.decode("ascii") if isinstance(raw, bytes) else str(raw)
+        try:
+            started = datetime.datetime.strptime(raw, "%d-%b-%Y %H:%M:%S")
+        except ValueError:
+            started = None
+        run.check(started is not None
+                  and wall_start <= started <= datetime.datetime.now(),
+                  f"startTime {raw!r} is MATLAB's datetime format and falls "
+                  f"within this run (started {wall_start:%H:%M:%S})")
+
+        meta = dict(f["metadata"].attrs) if "metadata" in f else {}
+        missing = sorted(METADATA_FIELDS - set(meta))
+        run.check(not missing, f"metadata has all {len(METADATA_FIELDS)} fields "
+                               f"(missing {missing})")
+        if "frames_dropped_queue" in meta:
+            run.check(int(meta["frames_dropped_queue"]) == w._scos_worker.dropped_count,
+                      f"metadata.frames_dropped_queue = {meta['frames_dropped_queue']} "
+                      f"(GUI counter {w._scos_worker.dropped_count})")
+        if "gain_du_per_e" in meta:
+            g_file, g_gui = float(meta["gain_du_per_e"]), float(w.processor.gain_du_per_e)
+            run.check(g_file > 0 and np.isclose(g_file, g_gui, rtol=1e-12),
+                      f"metadata.gain_du_per_e = {g_file:.6g} (processor {g_gui:.6g})")
+        if "time_source" in meta:
+            expected_src = str(getattr(cam, "time_source", "pc"))
+            run.check(str(meta["time_source"]) == expected_src,
+                      f"metadata.time_source = {meta['time_source']!r} "
+                      f"(camera says {expected_src!r})")
 
 
 def check_dialogs(run: Run) -> None:
