@@ -104,6 +104,73 @@ class TestLostFrames:
         assert c.frames_lost == 2
 
 
+class TestUsbNumbersFromZero:
+    """USB cameras number their first frame 0, GigE ones 1 (pylon C API
+    reference, PylonGrabResult_t::BlockID). On 2026-10-08 the rig's a2A1920
+    USB camera triggered "no frame numbers" on its first frame for exactly
+    that reason. Only a second 0 in a row means the camera has none."""
+
+    def test_first_frame_0_is_a_frame_number_not_a_warning(self, caplog):
+        c = FrameClock()
+        with caplog.at_level(logging.WARNING, logger="core.frame_clock"):
+            lost = [s.lost_before for s in feed(c, frames(10, first_block=0))]
+        assert lost == [0] * 10
+        assert "no frame numbers" not in caplog.text
+
+    def test_gap_right_after_frame_0_is_counted(self):
+        c = FrameClock()
+        c.stamp(PC_T0, 1, 0)
+        assert c.stamp(PC_T0, 2, 3).lost_before == 2       # 1 and 2 missing
+        assert c.frames_lost == 2
+
+    def test_failed_second_frame_is_counted_by_the_gap(self):
+        c = FrameClock()
+        c.stamp(PC_T0, 1, 0)
+        assert c.count_failed_grab() == 0                  # block 1 failed…
+        assert c.stamp(PC_T0, 3, 2).lost_before == 1       # …and the gap counts it
+        assert c.frames_lost == 1
+
+    def test_restart_from_0_after_reset_is_quiet(self, caplog):
+        c = FrameClock()
+        feed(c, frames(5, first_block=0))
+        c.request_reset()
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="core.frame_clock"):
+            feed(c, frames(5, first_block=0))
+        assert c.frames_lost == 0
+        assert caplog.text == ""
+
+    def test_counter_restart_to_0_without_reset_is_not_a_loss(self, caplog):
+        c = FrameClock()
+        with caplog.at_level(logging.INFO, logger="core.frame_clock"):
+            for b in (498, 499, 500, 0, 1, 2):
+                c.stamp(PC_T0, 1, b)
+        assert c.frames_lost == 0
+        assert "no frame numbers" not in caplog.text
+        assert "restarted" in caplog.text
+
+    def test_zero_twice_in_a_row_means_no_frame_numbers(self, caplog):
+        c = FrameClock()
+        with caplog.at_level(logging.WARNING, logger="core.frame_clock"):
+            for _ in range(5):
+                assert c.stamp(PC_T0, 1, 0).lost_before == 0
+        assert caplog.text.count("no frame numbers") == 1
+        # Without frame numbers a failed grab can only be counted directly.
+        assert c.count_failed_grab() == 1
+        assert c.frames_lost == 1
+
+    def test_no_frame_numbers_survives_a_restart(self, caplog):
+        c = FrameClock()
+        for _ in range(3):
+            c.stamp(PC_T0, 1, 0)
+        c.request_reset()
+        caplog.clear()                                     # drop the first warning
+        with caplog.at_level(logging.WARNING, logger="core.frame_clock"):
+            c.stamp(PC_T0, 1, 0)                           # not taken for frame 0
+        assert c.count_failed_grab() == 1
+        assert caplog.text == ""                           # warned once, earlier
+
+
 # ---------------------------------------------------------------------------
 # Capture time from the camera clock
 # ---------------------------------------------------------------------------

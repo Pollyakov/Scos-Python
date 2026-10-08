@@ -41,8 +41,10 @@ logger = logging.getLogger(__name__)
 
 # GigE block IDs (extended ID mode off, the default) run 1 … 65535, then 1 again.
 _GIGE_BLOCK_ID_MAX = 65535
-# A block ID equal to UINT64_MAX is invalid; USB cameras report 0 when the
-# feature is unsupported (pylon API reference, CGrabResultData::GetBlockID).
+# A block ID equal to UINT64_MAX is invalid, and 0 can mean the camera does not
+# support block IDs — but USB cameras also number their FIRST frame 0 (GigE
+# ones start at 1), pylon C API reference, PylonGrabResult_t::BlockID. So a 0
+# alone proves nothing; only a second 0 in a row means "no frame numbers".
 _BLOCK_ID_INVALID = 2**64 - 1
 # Below this distance from the top a drop back to a small ID is a wrap; anywhere
 # else it means the counter restarted (grabbing restarted) — not a loss.
@@ -75,6 +77,9 @@ class FrameClock:
         self.time_source = "pc"          # "pc" until validated, then "camera"
         self._unusable_reason: str | None = None
         self._warned_no_block_ids = False
+        # Set once two block IDs in a row were 0: this camera has no frame
+        # numbers. Kept across reset() — a camera does not gain them on restart.
+        self._no_block_ids = False
         self._reset_requested = False
         self.reset()
 
@@ -120,12 +125,27 @@ class FrameClock:
 
     # ------------------------------------------------------------------
     def _count_lost(self, block_id: int) -> int:
+        if block_id == 0 and self._last_block is None and not self._no_block_ids:
+            # First frame since (re)start: a USB camera's frame number 0. Until
+            # 2026-10-08 this was taken for "no frame numbers" and warned about
+            # on the rig's a2A1920 USB camera, which numbers its frames fine.
+            self._last_block = 0
+            return 0
+        if block_id == 0 and self._last_block == 0:
+            # A second 0 in a row: the first one was not a frame number either.
+            # Forget it, so count_failed_grab() counts failed grabs directly.
+            self._no_block_ids = True
+            self._last_block = None
         if not block_id or block_id == _BLOCK_ID_INVALID:
-            if not self._warned_no_block_ids:
+            if (block_id == _BLOCK_ID_INVALID or self._no_block_ids) \
+                    and not self._warned_no_block_ids:
                 self._warned_no_block_ids = True
                 logger.warning("Camera reports no frame numbers (BlockID %d) — "
                                "frames lost before reaching the app cannot be "
                                "counted", block_id)
+            # A lone 0 between real numbers (a USB counter restarting) is
+            # skipped silently; the next number is checked against the last
+            # real one, and a restart there is recognised below.
             return 0
         last, self._last_block = self._last_block, block_id
         if last is None:
