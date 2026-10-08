@@ -123,6 +123,18 @@ fits *real ≈ 0.44 + 47 / N* DU², where 47 matches the variance of a single fr
 and MATLAB agree. Is this intended, or should the leftover — about the single-frame variance
 divided by N — be subtracted from `spVar`?
 
+**18. Two lines of the protocol document to update** *(raised 2026-10-08 when
+`docs/SCOS_protocol.md` was synced with her text; a confirmation, not a decision)*. Message,
+ready to send:
+
+> In the SCOS protocol document, two lines differ from what we agreed and what the app does:
+> 1. Calibration 2 (bright frames): the pop-up text says "Please turn off the Laser". It should
+>    be "turn **on**" — the bright frames need the laser on, and the subject stays in place.
+> 2. Step 6, refresh interval: it still says "X default is 5. Where should we store this
+>    setting?". We settled on X = 1 s, stored in the settings file, with an override in an
+>    "Advanced settings" panel.
+> Could you update the document, or tell me if either should be different?
+
 ---
 
 ## Notes on where these came from
