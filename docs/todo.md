@@ -1,14 +1,42 @@
 # SCOS — Implementation Backlog
 
-Last updated: 2026-10-07 — **this is now the only working task list.** It absorbed the open
+Last updated: 2026-10-08 — **this is now the only working task list.** It absorbed the open
 items of `docs/reviews/merged_worklist.md`, which is frozen as an archive of the review
 evidence and the reasoning behind each task (map at the bottom of this file).
 
-Order: what to do next (rig-session prep) → open backlog by priority → done.
+Order: what to do next (fixes from the first rig session, then what is left of rig-session
+prep) → open backlog by priority → done.
 
 ---
 
-## ▶ Next: rig-session prep
+## ▶ Next: fixes from the first rig session (2026-10-08)
+
+The user's list after the first session on the real rig (camera SN 40075248, USB, Vika as the
+subject; folder `TestVika10082026_20261008_145048`). Order: the subject's safety first, then
+anything that can hide a warning, then usability, then the results files (figure, Save Data
+button, file name — U8 and U9 added the same day, from syncing `SCOS_protocol.md` with Vika's
+text), and last the changes that touch the measurement path: the camera-side crop (U6) and
+its record in the results file (U10), then a faster dark calibration (U11), which needs the
+faster collector D8 first — U6, U10 and U11 come from a conversation with Vika the same
+evening.
+
+| # | Task | What it is | Status |
+|---|---|---|---|
+| U1 | Laser-safety warning at startup | When the app starts, show a safety warning that the operator must confirm before continuing: **the subject must wear laser-safety goggles for the whole measurement; the probe may be removed only after checking that the laser is off — the red indicator light on the laser is not lit; remove the probe only by pulling the rubber strap backwards.** | |
+| U2 | Unmissable "laser still on" warning | At the end of a measurement the app asks the operator to switch the laser off, then checks the camera image (`MainWindow._laser_off_check()`, E3). If the operator clicks OK but the laser is still on, the existing "Laser may still be on…" dialog appears — but it looks like any other dialog box. Make it impossible to overlook: red, large bold text, a warning icon. Tested on the rig 2026-10-08 by leaving the laser on on purpose: the check fired correctly (114.5 DU, expected < 11.4 DU). | |
+| U3 | App window larger than the screen | The window does not fit on the computer screen, so part of it is cut off — e.g. the status bar in the bottom-right corner, where status messages and warnings appear. Resizing fixes it only briefly: after a few seconds the window grows past the screen edge again. The window must always fit the screen with everything visible. A window that grows back by itself is usually pushed by its contents (e.g. a label whose text gets longer) — finding what pushes it is part of the fix. Ranked high because a hidden status bar hides warnings. | |
+| U4 | Crowded parameter fields | The parameter input fields are packed too tightly and some overlap. Rearrange them so every field and its label are fully visible and easy to read. | |
+| U5 | Intensity plot + parameters box in the results figure | **Required by the SCOS protocol, step 6g** (Vika's request): *"Create a figure with two axes: rBfi vs time and \<I\> vs time. Add text box with all parameters used. Save into figure file (in python format). (TBD)"*. "Two axes" = two separate plots side by side in one figure: rBFi vs time and mean intensity ⟨I⟩ vs time. Today `rBfi_fig.png` shows rBFi only. Add the ⟨I⟩ plot (the data is already saved as `Intensity`) and a text box with every parameter used (exposure, gain, frame rate, pixel format, dark/bright frame counts, normalization method and window, camera SN, …). The "python format" part is **F5** (reopenable figure). **Note:** step 6g is not in this repo's copy of `docs/SCOS_protocol.md` (its nearest line, :52, only says to save rBFi and ⟨I⟩ data and the graph) — the repo copy is behind Vika's protocol here. | |
+| U8 | Remove the "Save Data..." button | Protocol Notes (synced 2026-10-08): *"Remove the 'Save Data' button (data is always saved). Done"* — but the button is still in the app (`gui/main_window.py:371`, `_save_data()` exports κ² to `.mat`/`.npz` with keys `scosTime`, `scosData`, …). Session data is saved automatically, so nothing is lost by removing it. Remove the button, `_save_data()` and its wiring (`:681`, `:879`, `:966`, `:1009`); update `tests/test_calibration_exits.py:115,128` (asserts the button is re-enabled) and the two `_save_data()` tests in `tests/test_normalization.py:456,475` (they check the exported time unit — make sure what they protect is still covered by the results-file tests); fix the comment in `gui/plot_widget.py:149`; remove the "Save SCOS Data" line from CLAUDE.md. | |
+| U9 | Results file name per protocol | Protocol step 6: save into .h5 file **"rBFi_resultsAndParameters"**. The app writes **`rBfi_results.h5`**. Rename to `rBFi_resultsAndParameters.h5`. The name is set in one place (`gui/main_window.py:1092`; also the comment at `:1800`); `--mock-h5` takes a path, so it is unaffected. Update `tools/rehearsal.py`, the tests that open the file (`test_figure_export.py`, `test_invalid_k2_guard.py`, `test_normalization.py`, `test_results_schema.py`), and the docs that name it (CLAUDE.md, `expectations.md`, `rig_checklist.md`, `simulation_checklist.md`, `open_questions.md`; leave the frozen `reviews/merged_worklist.md` as it is). Sessions recorded before the change keep the old name — anything that reads results files later must accept both. | |
+| U6 | Crop on the camera when "Cut Image" is clicked | **Decided with Vika 2026-10-08:** when the operator clicks **"Cut Image"**, the camera itself starts sending only the cropped region, for the live display and the SCOS processing alike. The dark and bright calibrations are recorded **after** that (the operator picks the ROI before Start SCOS), so they have the same size and position as the measurement frames by construction. *(Vika's MATLAB did it the other way round, for the operator's convenience — fewer laser off/on switches: dark frames at full size, then the two dark matrices cut to the ROI's size and position. Both match; the GUI's order is simpler.)* **Today "Cut Image" only zooms the display** (`gui/image_widget.py:207`, `_apply_cut()`: a square around the ROI circle + 20 px margin); the camera always sends the full sensor (1216 × 1936 on 2026-10-08) and processing uses the full frame — Vika assumed otherwise. **To do:** send the crop to the camera with the existing `camera.set_roi()` (sets `OffsetX/Y`, `Width/Height`, restarts grabbing — nothing calls it today); round to the camera's allowed increments; rebuild the ROI mask in the cropped coordinates; "Full Image" goes back to the full sensor. **Accuracy rule:** the crop must not change between calibration and the end of the measurement — disable "Cut Image"/"Full Image" from Start SCOS on (as the ROI is already locked). Gain: far less data per frame → faster processing, lower risk of lost frames. Check the offline MATLAB tests still pass. | |
+| U10 | Save the crop in the results file | **Vika, 2026-10-08:** record the crop that was used — **width, height, OffsetX, OffsetY** (plus the full sensor size) — as a group of values in the results file's `metadata` (her suggestion: "a struct with metadata"). The values are fixed when "Cut Image" is clicked; no crop → record the full frame. Suggested: the same values in `Calibration.h5`, so a calibration file always shows which crop it belongs to. Needs U6. Update `tests/test_results_schema.py`. | |
+| U11 | Dark calibration at the camera's maximum frame rate | **Vika, 2026-10-08:** the frame rate does not matter for dark frames, so during `DARK_CAL` let the camera run as fast as it can. The camera switch she mentions is **`AcquisitionFrameRateEnable`** (already used at `camera.py:129`, `:270`): `False` = the camera runs at its maximum rate for the current exposure (dark cal already runs with the trigger Off); set it back to `True` with the chosen rate when the dark calibration ends. **Exposure and gain must stay exactly as in the measurement** — only the rate changes, because the dark noise depends on the exposure. **Limit — the collector:** on the rig PC the dark calibration took 30.2 s for 600 full-size frames (14:50:58.8 → 14:51:29.0, 2026-10-08), i.e. it kept up with 20 Hz, so it needs ≤ 50 ms per frame — how much less is not measured. If the camera outruns it, frames pile up in Qt's queue (unbounded during `DARK_CAL`, see CLAUDE.md) and the calibration does not finish sooner. So **D8 first** (or together), and measure the collector's per-frame time on the rig PC. U6's smaller frames help too. | |
+| U7 | CLAUDE.md: frame size not fixed at 700 × 700 | Removed the "700 × 700" frame size; camera is "Basler (USB or GigE)", the rig camera is USB; the placeholder "Lab demo camera" row replaced by the rig camera (SN 40075248). | ✅ 2026-10-08 |
+
+---
+
+## ▶ Rig-session prep (before the first session — mostly done)
 
 The first full session on the real rig is a couple of days away and the lab is not
 reachable before then. Everything here either prevents a failure on the day or tests, in
@@ -503,8 +531,12 @@ arithmetic, so results must not change. **Done when:** per-frame time is measure
 and after on 1216 × 1936 frames, `tests/test_dark_cal_offline.py` still passes, and the
 dark arrays match the old collector's on the same frames.
 
-**Probably unnecessary on the rig:** 700 × 700 at 20 Hz scales to ≈ 24 ms of work per frame
-against a 50 ms budget. Decide after the rig check in step 5a. Moving the collectors off the
+~~**Probably unnecessary on the rig:** 700 × 700 at 20 Hz scales to ≈ 24 ms of work per frame
+against a 50 ms budget. Decide after the rig check in step 5a.~~ **Rig, 2026-10-08:** the camera
+sends 1216 × 1936 (not 700 × 700), and 600 dark frames took 30.2 s at 20 Hz — the collector
+kept up, so at 20 Hz D8 is not needed. **It is needed for U11** (dark calibration at the
+camera's maximum frame rate, Vika's request): there the collector, not the camera, sets the
+speed. Moving the collectors off the
 GUI thread altogether is the bigger alternative and a threading change — not before v0. When this lands, also update the `MainWindow._flush_stale_frames()` docstring, which still quotes only the 60–130-frame backlog measured with 60-frame calibrations.
 
 ---
@@ -585,9 +617,55 @@ live plot. It does not open a finished session in one step, so this is new work.
 
 ---
 
+#### F6 · Lost frames from `timeVec` gaps, for a camera without frame numbers *(2026-10-08)*
+
+**Do only when needed:** when a camera's session logs "Camera reports no frame numbers" in
+`app.log`. Until then this is not worth the code. The lab may use other cameras later, and
+which ones is not known (user, 2026-10-08).
+
+**The gap it fills.** Frames lost *before* reaching the app (all of Pylon's buffers full)
+are counted only from `BlockID` gaps (`core/frame_clock.py`; D5, Done item 34). Pylon's
+own `GetNumberOfSkippedImages()` does not count them under `OneByOne`. A camera without
+block IDs therefore reports `frames_lost_camera = 0` whatever happened; only grabs that
+arrive *broken* are still counted (`count_failed_grab()`). The queue counter "Dropped: N"
+(`frames_dropped_queue`) does not depend on block IDs and is unaffected.
+
+**Proposed shape: after the session, not live.** In `_finish_session()`, if the camera has
+no block IDs **and** `time_source == "camera"`, count the gaps in `timeVec`. Compare each
+gap with the recording's own **median** frame interval, not the FPS typed in the GUI, and
+count `round(gap / median) − 1` lost frames for any gap above ~1.5 × median. Log the count
+and write it to the results `metadata` as a *separate* field (e.g.
+`frames_lost_from_timevec`). Do not add it to `frames_lost_camera`: the two are measured
+differently.
+
+**Why not live, and why not now** (discussed 2026-10-08):
+- Lost frames do not reduce accuracy: each κ² comes from one frame, and every frame keeps
+  its true capture time in `timeVec`. A loss is a missing point, so this is a setup health
+  indicator, not part of the measurement.
+- `timeVec` is already saved, so the check can always be done afterwards by hand. That is
+  how the first rig session was checked: 1300 frames, all 50 ms apart.
+- It needs the camera clock. A camera without block IDs may well lack timestamps too, and
+  PC time jitters by milliseconds, so the check may not be possible exactly where it is needed.
+- False alarms: in free run the camera may run slower than the FPS requested, and with a
+  hardware trigger the Arduino sets the pace, so a pause in trigger pulses would look
+  like lost frames. Using the median interval, after the run, avoids most of this. A
+  live check would not.
+- The app drives cameras only through pylon. Basler documents block IDs for both its
+  USB (from 0) and GigE (from 1) cameras, so a camera without them is unlikely here.
+- If one does turn up, the operator is already told ("no frame numbers" warning, made
+  reliable by Done item 41), so the zero count is never silently trusted.
+
+**Done when:** a session from a camera without block IDs records `frames_lost_from_timevec`.
+A synthetic `timeVec` with known gaps gives the right count, and so does one with a
+slightly slower than requested frame rate (no false losses). Cameras *with* block IDs are
+unchanged.
+
+---
+
 ## Execution order summary
 
 ```
+▶ fixes from the first rig session (above): U1 → U2 → U3 → U4 → U5 → U8 → U9 → U6 → U10 → D8 → U11   (U7 ✅)
 ▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 ✅ → 3a ✅ → 3b–3e ✅ (3d postponed) → 4a ✅ → 3f → 4b → 5a → 5b
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → A4 (float64 test)
@@ -596,6 +674,7 @@ live plot. It does not open a finished session in one step, so this is new work.
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4/D7/D8 (any order; D8 sooner if step 5a finds a big flush); D5 at the rig; ~~D6~~
   → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread) → F5 (reopenable figure)
+  F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```
 
 ---

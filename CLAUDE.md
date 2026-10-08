@@ -15,8 +15,8 @@ SCOS measures cerebral blood flow velocity by illuminating tissue with a laser a
 
 ## Current status
 
-Work is tracked in [`docs/todo.md`](docs/todo.md) — the only task list (rig-session prep
-at the top, then the backlog, then Done). Run modes: `python main.py` (real camera; run
+Work is tracked in [`docs/todo.md`](docs/todo.md) — the only task list (fixes from
+the first rig session, U1–U11, at the top, then rig-session prep, the backlog, Done). Run modes: `python main.py` (real camera; run
 `python check_camera.py` first), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
 `--mock-h5 <results file>`. Headless whole-session rehearsal with checks:
 `python tools/rehearsal.py [--cal-frames 60] [--scenario normal]` — exit code 0 = all passed.
@@ -27,10 +27,10 @@ at the top, then the backlog, then Done). Run modes: `python main.py` (real came
   dark calibration from 600 dark frames)
 
 **Key parameters for THIS lab:**
-- Frame size: 700 × 700 pixels
+- Frame size: not fixed — whatever the camera sends (the rig camera, SN 40075248, sends its full 1216 × 1936 sensor; cropping on the camera is todo U6)
 - Frame rate: ~20 Hz (target)
 - Recording duration: up to several hours
-- Camera: Basler GigE via pypylon
+- Camera: Basler camera (USB or GigE) via pypylon — the rig camera is USB
 
 ## What NOT to do
 - Don't add features in the old `processor.py` — write new code in `core/`
@@ -117,7 +117,7 @@ Known camera parameters:
 | Camera | bit_depth | Notes |
 |--------|-----------|-------|
 | Basler a2A1920-160umPRO (SN 40513592) | 10 | TIFF ×64 (10-bit left-justified in uint16); 1216×1936; in the gain table at Mono10 (16/18/20 dB) and Mono12 (8 dB) |
-| Lab demo camera (700×700) | 12 | Must be added to `CamerasMeasuredGain.csv` before it can be used |
+| Basler a2A1920-160umBAS (SN 40075248, "DAN01") — **the rig camera**, USB | 12 | 1216×1936; in the gain table at Mono12, 8 dB only (G = 0.9564). USB block IDs start at 0 (Done item 41). First rig session 2026-10-08 |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
 - Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png`
@@ -143,9 +143,10 @@ what this window has received. Any new frame source must keep that counter.
 Scope of those measurements: they were taken in **headless** runs where the laser prompt
 returns instantly. A real modal dialog runs a nested event loop that keeps delivering
 queued frames while nobody is collecting them, so on the rig the backlog at the moment OK
-is clicked is probably much smaller — and the lab camera is 700x700 at 20 Hz, roughly a
-tenth of the per-second GUI work of the 2.4 Mpx 40 Hz playback. The flush is cheap
-insurance, not a measured rig problem. What *is* measured on both is that a backlog builds
+is clicked is much smaller — measured on the rig on 2026-10-08 (full 1216×1936 frames at
+20 Hz, about half the per-second GUI work of the 2.4 Mpx 40 Hz playback): "Flushing 2"
+and "Flushing 3" frames after the laser prompts. The flush is cheap insurance, not a
+measured rig problem. What *is* measured on both is that a backlog builds
 during the collection itself.
 
 IMPORTANT: in `--mock-folder` playback there is no laser to switch off, so
