@@ -1526,7 +1526,10 @@ class MainWindow(QMainWindow):
         """
         Step 2 of the automatic calibration sequence (called automatically by
         _finish_dark_cal):
-          1. Prompt to turn on the laser and remove the subject.
+          1. Prompt to turn on the laser, with the subject left in place.
+             The bright frames are taken with the subject, as the MATLAB
+             reference's were (smoothingCoefficients.mat was made from the
+             recording itself) — user's instruction, 2026-10-08.
           2. Collect N2 frames via frame_ready → _on_scos_frame.
           3. _finish_bright_cal() fires automatically when N2 frames are in,
              then immediately starts SCOS measurement.
@@ -1537,8 +1540,9 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Calibration — Step 2 of 2: Bright Frames",
-            "Please turn on the laser and remove the subject from the measurement area.\n\n"
-            "Click OK when the laser is on and the area is clear.",
+            "Please turn on the laser. Keep the subject in the measurement area.\n\n"
+            "Click OK when the laser is on. The measurement starts "
+            "automatically when this calibration ends.",
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Ok:

@@ -150,11 +150,16 @@ during the collection itself.
 
 IMPORTANT: in `--mock-folder` playback there is no laser to switch off, so
 `FolderMockCamera.set_playback_source("dark")` plays the `_dark` folder for the duration of
-`DARK_CAL` instead. The bright calibration still comes from the main recording, which was
-made with a subject in place, so `spVar` is about 2.3× too large and κ²_corr lands well
-below MATLAB. That is the dataset, not the code — `--mock-folder` is for rehearsing the
-sequence, and `tests/test_dark_cal_offline.py` / `test_bright_cal_offline.py` remain the
-accuracy check. Also note `MainWindow._to_du()`: the Pylon-Viewer TIFFs store 10-bit data
+`DARK_CAL` instead. The bright calibration comes from the main recording, subject in
+place — which is correct: **the bright calibration is taken with the subject in the
+measurement area** (user's instruction, 2026-10-08), and MATLAB's `smoothingCoefficients.mat`
+was made from the same frames. With 600 bright frames a playback session matches MATLAB
+(κ²_corr 0.0083 vs `LocalStd7x7_corr.mat`'s mean 0.00838; `spVar` 0.513 vs 0.528 in
+`totMask`; measured 2026-10-08). The older claim that playback lands well below MATLAB
+because "`spVar` is 2.3× too large from the subject" was wrong: its reference figure, 0.0105,
+is not the recording's mean — its origin is not traced: no variable in `LocalStd7x7_corr.mat` or `smoothingCoefficients.mat` averages 0.0105, though single frames reach it (MATLAB's κ²_corr pulses between 0.004 and 0.013). With 60 bright frames κ²_corr *is* lower (≈ 0.0070–0.0076): the leftover noise in
+an average of N frames is counted as `spVar` (open question 17). `tests/test_dark_cal_offline.py`
+/ `test_bright_cal_offline.py` remain the accuracy check. Also note `MainWindow._to_du()`: the Pylon-Viewer TIFFs store 10-bit data
 left-justified in uint16, so a frame must be divided by `processor.scale` before any
 calibration array is built from it.
 

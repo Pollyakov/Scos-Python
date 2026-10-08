@@ -108,7 +108,7 @@ IDLE → PREVIEW → DARK_CAL → BRIGHT_CAL → MEASURING_INIT → MEASURING �
 | `IDLE` | App started, camera not connected |
 | `PREVIEW` | Camera streaming at 30 FPS for ROI/focus/exposure tuning. **No κ², no calibration consumed.** |
 | `DARK_CAL` | Pop-up: "Turn off laser, click OK". External trigger OFF. Capture N1 (default 600) frames into a subfolder. Compute `mean_dark` per pixel and `var_dark` per pixel; spatial-filter `var_dark` with the SCOS window. |
-| `BRIGHT_CAL` | Pop-up: "Turn on laser, remove subject, click OK". Capture N2 (default 600) frames. Compute `var_bright` per pixel = temporal variance, then spatial-filter with the same window. |
+| `BRIGHT_CAL` | Pop-up: "Turn on laser, remove subject, click OK" *(corrected 2026-10-08: the subject stays in place)*. Capture N2 (default 600) frames. Compute `var_bright` per pixel = temporal variance, then spatial-filter with the same window. |
 | `MEASURING_INIT` | Shrink ROI by `⌈window/2⌉ + 1` (so the filter window stays inside the ROI). Run the κ² loop for `norm_seconds` (default 5 s) but don't plot yet — accumulate to compute `mean_BFI_firstSeconds`. |
 | `MEASURING` | Keep running κ², now plotting `rBFi = BFi / mean_BFI_firstSeconds`. Update plot every 1 s, image every 2.5 s. End on Stop button or recording-length cap. |
 | `FINISHED` | Flush recorder, save final `.mat` (rBFi + ⟨I⟩ + metadata) and the matplotlib figure. |
@@ -295,7 +295,7 @@ Each layer must have its tests passing before the next one starts.
 - `status_bar.py` shows: state, queue-fill bar (0–100 %), dropped-frame count,
   elapsed/remaining time, free disk space.
 - Pop-ups: "Turn off laser" before `DARK_CAL`, "Turn on laser, remove subject"
-  before `BRIGHT_CAL`, overload dialog (4 options).
+  (corrected 2026-10-08: keep the subject in place) before `BRIGHT_CAL`, overload dialog (4 options).
 - Stop during calibration → confirmation dialog → `FINISHED`, save partial data.
 
 ---

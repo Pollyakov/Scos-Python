@@ -217,7 +217,7 @@ no κ² / no calibration is being consumed.
 | `IDLE`           | nothing, waiting for "Connect"                                        |
 | `PREVIEW`        | camera streaming at 30 FPS to image widget; ROI/focus/exposure tuning |
 | `DARK_CAL`       | capture N1 frames without laser → `mean_dark`, `var_dark_filtered`    |
-| `BRIGHT_CAL`     | capture N2 frames with laser, no subject → `var_bright_filtered`      |
+| `BRIGHT_CAL`     | capture N2 frames with laser, no subject → `var_bright_filtered` (corrected 2026-10-08: subject in place) |
 | `MEASURING_INIT` | first `norm_seconds` — collect BFI for normalization                  |
 | `MEASURING`      | main loop, plot rBFI                                                  |
 | `FINISHED`       | flush remaining HDF5, show summary                                    |

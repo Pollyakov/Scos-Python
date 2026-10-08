@@ -32,7 +32,7 @@ class State(Enum):
 class SessionConfig:
     window_size:        int   = 7
     n_dark_frames:      int   = 600    # N1 — frames captured with laser off
-    n_bright_frames:    int   = 600    # N2 — frames captured with laser on, no subject
+    n_bright_frames:    int   = 600    # N2 — frames captured with laser on, subject in place
     recording_minutes:  float = 5.0   # max 4 h per protocol; stored here as default
     norm_seconds:       float = 5.0   # length of normalization window for rBFi
     save_frames:        bool  = False  # write individual TIFFs during calibration

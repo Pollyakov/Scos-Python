@@ -26,6 +26,7 @@ Set external trigger to ON
 Pop-up window that waits until the user clicks OK
 “Please turn on the Laser”
 *[Corrected 2026-10-04: this line originally read “turn off”. A bright calibration needs the laser on — with it off, N2 would be a second set of dark frames and var_bright would be wrong. Flagged by both code reviews (merged_worklist task 23); the app already shows “Please turn on the laser and remove the subject from the measurement area”.]*
+*[Updated 2026-10-08: the bright frames are taken **with the subject in place** (user's instruction; it is also how the MATLAB reference's smoothingCoefficients.mat was made — from the recording itself). The app now shows “Please turn on the laser. Keep the subject in the measurement area.” and says that the measurement starts automatically when this calibration ends. “Remove the subject” was never in this protocol; it had been added in the app.]*
 Note: in the future I hope we could do that automatically
 Acquire N2 number of frames into a subfolder (look for the name format in matlab code). The number N2 should appear in SCOS parameters in the GUI. Default is 600. As you acquire the frames - calc mean for each pixel and save the result into a .mat file. Save the result into .mat file . Run mean spatial filter with appropriate window size. Save in a variable (var_bright) for later use.
 

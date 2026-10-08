@@ -17,13 +17,13 @@ Both halves are fixed here:
     before the collectors see it.
 
 Measured on the lab recording, 2026-09-28: the fixed path gives κ²_corr ≈
-+0.0090 against MATLAB's 0.0105. Positive, so a rehearsal completes — but 14 %
-low, because the bright calibration still has to come from the main recording,
-which was made with a subject in place. `spVar` is then speckle rather than the
-illumination profile, 2.3× the value in `smoothingCoefficients.mat`. That gap
-is a property of the dataset, not of the code: on the rig the operator removes
-the subject. The offline tests remain the accuracy check; this mode is for
-rehearsing the sequence.
++0.0090, positive, so a rehearsal completes. (That note compared it with a
+"MATLAB 0.0105" and blamed the subject being in place for a 2.3× `spVar`.
+Corrected 2026-10-08: the bright calibration is taken with the subject in place,
+as MATLAB's `smoothingCoefficients.mat` was; with 600 bright frames a playback
+session gives 0.0083 against `LocalStd7x7_corr.mat`'s mean of 0.00838, and
+`spVar` within 3 % of MATLAB's.) The offline tests remain the per-frame accuracy
+check; this mode is for rehearsing the sequence.
 """
 
 import sys

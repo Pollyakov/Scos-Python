@@ -62,25 +62,27 @@ Anything that does not match — even if it looks harmless — goes into step 4.
    note it.
 2. **During the measurement the live image updates only every 2.5 s.** On purpose, to save
    GUI time. The FPS, κ² and ⟨I⟩ labels keep moving.
-3. **Corrected κ² is lower than MATLAB's** (**0.0105** for this recording), and **how much
-   lower depends on the frame count**:
+3. **With 60 Bright Frames, corrected κ² is lower than MATLAB's.** With 600 it matches.
+   MATLAB's corrected κ² for this recording (`LocalStd7x7_corr.mat`) averages **0.0084**:
 
-   | Bright Frames | corrected κ² | 1/κ² | `spVar` (mean in ROI) |
-   |---|---|---|---|
-   | 60  | ≈ 0.0070–0.0076 (three runs) | ≈ 130–145 | ≈ 1.2 |
-   | 600 | ≈ 0.0085 (one run)           | ≈ 115–120 | ≈ 0.5 |
+   | Bright Frames | corrected κ² | `spVar` (mean in ROI) |
+   |---|---|---|
+   | 60  | ≈ 0.0070–0.0076 (three runs) | ≈ 1.2 |
+   | 600 | ≈ 0.0083–0.0085 (two runs, one by hand on 2026-10-07) | ≈ 0.51 (MATLAB: 0.53) |
 
-   Two causes, neither a bug. **The dataset:** the recording was made with a subject in
-   place, so the bright calibration taken from it contains the subject's speckle and its
-   `spVar` comes out too large (about 2.3×); a larger `spVar` subtracted from the numerator
-   gives a smaller κ². **The frame count:** `spVar` is measured on the *average* of the
-   bright frames, and the random noise left in an average of N frames shrinks only as 1/N —
-   with 60 frames enough is left to be counted as part of `spVar`, so κ² comes out lower than
-   with 600. That is why the protocol asks for 600, and why raw κ² (≈ 0.093) is the same
-   either way.
-   On the rig the bright calibration is taken with the subject removed. The accuracy check
-   against MATLAB lives in the offline tests (`tests/test_dark_cal_offline.py`,
-   `tests/test_bright_cal_offline.py`), not here.
+   **The frame count**, not a bug: `spVar` is measured on the *average* of the bright
+   frames, and the random noise left in an average of N frames shrinks only as 1/N — with 60
+   frames enough is left to be counted as part of `spVar`, so κ² comes out lower than with
+   600. That is why the protocol asks for 600, and why raw κ² (≈ 0.093) is the same either
+   way. The bright calibration here comes from the recording, **subject in place — the
+   same as on the rig** (the bright calibration is taken with the subject; user's
+   instruction, 2026-10-08), and from the same frames MATLAB's `smoothingCoefficients.mat`
+   was made from.
+   *Corrected 2026-10-08:* this item used to say κ² is low because the subject made `spVar`
+   2.3× too large, against a MATLAB figure of 0.0105. Neither holds: 0.0105 is not the mean of
+   `LocalStd7x7_corr.mat` (0.0084; single frames range 0.004–0.013), and `spVar` from these frames is within 3 % of MATLAB's.
+   The per-frame accuracy check against MATLAB lives in the offline tests
+   (`tests/test_dark_cal_offline.py`, `tests/test_bright_cal_offline.py`).
 
 ---
 
@@ -108,7 +110,7 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B2 | — | **Second: the folder dialog** "Choose folder to save this session's results". Pick your empty folder. | |
 | ☐ B3 | — | **Third: "Calibration — Step 1 of 2: Dark Frames"** — "Please turn off the laser." Click **OK**. This order (G → folder → laser) is the protocol's, `SCOS_protocol.md:11-17`. | Any other order → step 4 (it is asserted by `tests/test_recording_name.py`) |
 | ☐ B4 | Watch | The parameter boxes turn dark grey (locked). The live image goes **darker** — playback switches to the dark folder — and **⟨I⟩ drops to ≈ 99 DU**. The label counts **"Dark cal: n / 600"** — slowly on this PC (see "Before you start"). You may briefly see **"Discarding N buffered frames…"** — normal, those were captured before you clicked OK. | ⟨I⟩ stays ≈ 121 during dark cal → playback did not switch; the run will then abort at B8 |
-| ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser and remove the subject…". Click **OK**. | |
+| ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser. Keep the subject in the measurement area. … The measurement starts automatically when this calibration ends." Click **OK**. | |
 | ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **hundreds or thousands** (1555 with 600 frames on the dev PC) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |
 | ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig's 700 × 700 is ≈ 5× lighter), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled… (at HH:MM:SS)"**. It stays until another message replaces it — it is the record of an event at that time, not the current state (K4, fixed 2026-10-07). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
@@ -208,4 +210,4 @@ Found by the slowdown rehearsal (rig prep 3b, 2026-10-06), seen in a headless ru
 
 The real Basler camera — its lost-frame warnings and the camera-clock timestamps (todo D5) — external trigger and the
 Arduino, a real laser and room light, the 700 × 700 / 20 Hz load, and an exact gain-table
-match. Those belong to the real-rig checklist (step 5a).
+match. Those belong to the real-rig checklist (step 5a, [`rig_checklist.md`](rig_checklist.md)).
