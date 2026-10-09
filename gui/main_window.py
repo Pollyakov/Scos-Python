@@ -33,6 +33,9 @@ from core.recorder  import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
 from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
+# Imported as a module, not by name, so tests and tools/rehearsal.py can
+# replace its windows (they would otherwise wait for a click forever).
+from gui import safety_dialog
 
 
 class _CalibrationLoaderThread(QThread):
@@ -150,6 +153,10 @@ class MainWindow(QMainWindow):
         # look at. See _await_fresh_frame().
         self._awaiting_laser_off_frame: bool = False
         self._laser_off_frame: np.ndarray | None = None
+        # How the last laser-off check ended — safety_dialog.PROBE_PASSED /
+        # _SKIPPED / _FAILED. Chooses the probe-removal window shown once the
+        # session is saved (U2).
+        self._laser_off_outcome: str = safety_dialog.PROBE_SKIPPED
         self._norm_seconds:           float       = 5.0          # baseline window length (seconds)
         self._norm_type:              str         = "seconds"    # "seconds" | "pulsation"
         self._measurement_duration_s: float       = float('inf') # ∞ = run until Stop SCOS
@@ -991,6 +998,9 @@ class MainWindow(QMainWindow):
             # measurement gets finalized — cancelling during DARK_CAL/BRIGHT_CAL
             # has no results to write, so it must not pass through FINISHED.
             was_measuring = self._state in (State.MEASURING_INIT, State.MEASURING)
+            # The laser is on during the bright calibration (and the subject is
+            # in place): stopping there needs the probe warning too.
+            bright_stopped = self._state == State.BRIGHT_CAL
             self._scos_worker.disable_intake()   # camera stops feeding immediately
             # Kept before _scos_mask is cleared below: the laser-off check must
             # measure over the same ROI the processor used, so that its reading
@@ -1013,6 +1023,10 @@ class MainWindow(QMainWindow):
             # makes an unbound-local NameError one edit away.
             session_folder = None
             laser_note     = None
+            # Reset on every stop, so the previous run's result can never
+            # choose this run's probe-removal window; anything that keeps the
+            # check from finishing leaves it at "skipped".
+            self._laser_off_outcome = safety_dialog.PROBE_SKIPPED
             if was_measuring:
                 # Laser off first, while the state is still MEASURING: results
                 # from frames already in flight are captured from before the
@@ -1043,6 +1057,35 @@ class MainWindow(QMainWindow):
                     closing = f"{closing}  |  {laser_note}"
                 self.status.showMessage(closing)
             self._set_state(State.PREVIEW)
+            if was_measuring:
+                self._show_probe_removal()
+            elif bright_stopped:
+                self._show_probe_removal(safety_dialog.PROBE_CANCELLED)
+
+    def _show_probe_removal(self, outcome: str | None = None) -> None:
+        """Tell the operator when the probe may come off, and how (U2).
+
+        `outcome` defaults to how the last laser-off check ended. The one other
+        caller passes safety_dialog.PROBE_CANCELLED: a run stopped during the
+        bright calibration, laser on, nothing measured and nothing to check
+        against (user's request, 2026-10-09).
+
+        Shown only now, after _finish_session() and _stop_recorder() have put
+        everything on disk: the window waits for a click, and a recording must
+        never wait for one. Which window depends on the laser-off check — passed
+        (green), could not run (amber: check the red light yourself), or failed
+        and continued anyway (red: do not remove the probe yet). Even after a
+        passed check it asks for a look at the laser's red indicator light: the
+        camera going dark is not the safety rule, the light is (U1).
+
+        Contained like the check itself: the data is already saved, and an
+        exception escaping a Qt slot aborts the whole app.
+        """
+        try:
+            safety_dialog.show_probe_removal(
+                self, outcome if outcome is not None else self._laser_off_outcome)
+        except Exception:
+            logger.exception("Probe-removal window could not be shown")
 
     def _finish_session(self) -> None:
         """Single finalization point for a completed measurement.
@@ -1547,6 +1590,8 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Ok:
             self._abandon_calibration("Bright cal cancelled")
+            # The operator may have switched the laser on before cancelling.
+            self._show_probe_removal(safety_dialog.PROBE_CANCELLED)
             return
 
         self._flush_stale_frames("the laser was switched back on")
@@ -1571,6 +1616,7 @@ class MainWindow(QMainWindow):
             # Undo first, dialog second — see _abandon_calibration.
             self._abandon_calibration("Bright cal failed")
             QMessageBox.critical(self, "Bright Calibration Error", str(exc))
+            self._show_probe_removal(safety_dialog.PROBE_CANCELLED)
             return
 
         logger.info("Bright calibration complete — %d frames collected", n_collected)
@@ -1939,12 +1985,14 @@ class MainWindow(QMainWindow):
                 # laser off either way — but there is nothing to compare to.
                 logger.info("Laser-off check skipped — no measurement intensity "
                             "to compare against")
+                self._laser_off_outcome = safety_dialog.PROBE_SKIPPED
                 return "laser-off check skipped, no reference intensity"
 
             measured = self._measure_laser_off_intensity(mask)
             if measured is None:
                 logger.warning("Laser-off check skipped — no frame arrived within %d ms",
                                self._LASER_OFF_TIMEOUT_MS)
+                self._laser_off_outcome = safety_dialog.PROBE_SKIPPED
                 return "laser-off check skipped, no frame from the camera"
 
             expected = (1.0 - self._LASER_OFF_DROP_FRACTION) * ref
@@ -1952,27 +2000,22 @@ class MainWindow(QMainWindow):
                 logger.info("Laser-off check passed — %.1f DU < %.1f DU "
                             "(reference %.1f DU over the last %.0f s)",
                             measured, expected, ref, self._LASER_OFF_REF_SECONDS)
+                self._laser_off_outcome = safety_dialog.PROBE_PASSED
                 return None
 
             logger.warning("Laser-off check FAILED — %.1f DU, expected < %.1f DU "
                            "(reference %.1f DU)", measured, expected, ref)
-            # "Continue anyway?" — No means check again, never "discard the
-            # session". The frames are already recorded; refusing to save them
-            # would punish the operator for a laser switch. Escape also returns
-            # No, so only an explicit No re-runs the check, and the operator
-            # always has Yes as the way out.
-            reply = QMessageBox.question(
-                self,
-                "Laser May Still Be On",
-                f"Laser may still be on — mean intensity did not drop by 90 % "
-                f"(measured: {measured:.1f} DU, expected: < {expected:.1f} DU). "
-                f"Continue anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
+            # The red window (U2). "Check again" means measure again, never
+            # "discard the session": the frames are already recorded, and
+            # refusing to save them would punish the operator for a laser
+            # switch. "Check again" is also what Enter, Escape and the X mean;
+            # "Continue anyway" takes a deliberate click, and is always there
+            # as the way out.
+            if safety_dialog.ask_continue_with_laser_on(self, measured, expected):
+                self._laser_off_outcome = safety_dialog.PROBE_FAILED
                 return (f"LASER-OFF CHECK FAILED — ⟨I⟩ {measured:.1f} DU, "
                         f"expected < {expected:.1f} DU")
-            # No → give them another go at the laser and measure again.
+            # Check again → give them another go at the laser and measure again.
 
     def _to_du(self, frame: np.ndarray) -> np.ndarray:
         """Convert a raw frame to the digital units `process()` computes in.
@@ -2563,6 +2606,20 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
+        # Closed mid-measurement: end it exactly as Stop SCOS does, while the
+        # camera still runs — "turn off the laser", the laser-off check, rBFi
+        # and the figure written, then the probe-removal window (user's
+        # request, 2026-10-09; before this the window just closed, with the
+        # laser on and no rBFi in the file). Contained: closing must finish.
+        if self._state in (State.MEASURING_INIT, State.MEASURING):
+            try:
+                self.btn_start_scos.blockSignals(True)
+                self.btn_start_scos.setChecked(False)
+                self.btn_start_scos.blockSignals(False)
+                self._toggle_scos(False)
+            except Exception:
+                logger.exception("Stopping the measurement on close failed")
+        bright_pending = self._state == State.BRIGHT_CAL
         # Stop calibration thread first so it isn't writing to the processor
         # while the camera thread is also stopped.
         if self._calib_thread and self._calib_thread.isRunning():
@@ -2585,6 +2642,11 @@ class MainWindow(QMainWindow):
         # folder is handled like any other abandoned run's (todo K2).
         if self._state in (State.DARK_CAL, State.BRIGHT_CAL):
             self._discard_session_folder()
+        # Laser on, subject in place. Shown only now that the camera is
+        # stopped — earlier, frames arriving during the open window could
+        # finish the calibration and start a measurement.
+        if bright_pending:
+            self._show_probe_removal(safety_dialog.PROBE_CANCELLED)
         # After the recorder: a settings write must never cost a session its data.
         try:
             self._save_config()

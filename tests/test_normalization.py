@@ -202,6 +202,12 @@ def dialogs(monkeypatch, tmp_path):
     monkeypatch.setattr(QMessageBox, "warning",  _grab("warning"))
     monkeypatch.setattr(QMessageBox, "question",
                         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+    # Stop from a measurement ends with the probe-removal window (U2), shown
+    # after the session is saved; recorded here instead of opened.
+    seen["probe"] = []
+    from gui import safety_dialog
+    monkeypatch.setattr(safety_dialog, "show_probe_removal",
+                        lambda parent, outcome: seen["probe"].append(outcome))
     return seen
 
 
@@ -221,6 +227,9 @@ def window(tmp_path):
     w.btn_start_scos.blockSignals(False)
     w._set_state(State.MEASURING_INIT)
     yield w
+    # Closing mid-measurement runs the whole Stop path (files, figure, the
+    # probe window — tests/test_laser_off_check.py); not wanted on teardown.
+    w._set_state(State.PREVIEW)
     w.close()
 
 
@@ -411,6 +420,7 @@ class TestEarlyStop:
             assert "rBFi" in f
             assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(3.0)
         assert len(window.plot_widget.get_data()[1]) > 0
+        assert len(dialogs["probe"]) == 1, "the probe-removal window followed the save"
 
     def test_no_valid_bfi_still_writes_no_rbfi(self, window, dialogs, tmp_path):
         import h5py

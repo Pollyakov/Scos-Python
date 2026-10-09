@@ -111,13 +111,24 @@ collected so far is kept. Darken the area and press Start SCOS again.
 - The app then takes **one** new frame and checks that the mean ROI intensity
   (dark-subtracted) fell by at least **90 %** compared with the mean of the **last 5 s** of
   the measurement — the three points you confirmed on 2026-10-07.
-  - Passed → nothing more is shown.
-  - Failed → **"Laser May Still Be On … (measured: … DU, expected: < … DU). Continue
-    anyway?"** **Yes** finishes and saves as normal; the closing message then carries
-    "LASER-OFF CHECK FAILED" with both numbers. **No** throws nothing away — it lets you
-    switch the laser off and checks again.
+  - Passed → no warning.
+  - Failed → a large **red** window, **"LASER MAY STILL BE ON"**, with the measured and
+    expected numbers (since 2026-10-09). **Check again** (the default — also what Enter and
+    Escape do) throws nothing away: switch the laser off and it measures again. **Continue
+    anyway** finishes and saves as normal; the closing message then carries "LASER-OFF
+    CHECK FAILED" with both numbers.
   - Skipped (says so in the closing message) when no frame arrived within 2 s, or the run
     stopped before any result.
+- **Once the data is saved**, a window says when the probe may come off (since 2026-10-09):
+  - check passed → **green**, "Laser is off — you may remove the probe";
+  - check could not run → **amber**, "The laser-off check could not run" — check the red
+    light yourself;
+  - failed, then Continue anyway → **red**, "The laser may still be on — do NOT remove the
+    probe yet".
+
+  Each one repeats the two rules: first check that the **red indicator light** on the laser
+  is not lit, then remove the probe **only by pulling the rubber strap backwards**. It comes
+  after the save, so the recording is safe on disk even if nobody clicks OK for a while.
   - *This is what is built now. Your open question 9 — what the check should protect, and
     whether its result should also go into the results file — is still waiting for your
     answer.*
@@ -131,7 +142,15 @@ collected so far is kept. Darken the area and press Start SCOS again.
   set. Because the run is under 120 s, the method is the 5th percentile, as in your script.
 - **During a calibration** (Stop, or Cancel at a laser prompt): everything unlocks and you
   can start again. The run's folder is deleted if it is still empty; if it already holds a
-  dark-only calibration it is kept and renamed **`<name>_cancelled`**.
+  dark-only calibration it is kept and renamed **`<name>_cancelled`**. If it was the
+  **bright** calibration — or Cancel at its prompt — a red window follows (since
+  2026-10-09): **"Calibration stopped — the laser is probably still on"**, with the same two
+  probe rules. Not after the dark calibration: the laser is off then.
+- **Closing the app window during a measurement** now ends it exactly like **Stop SCOS**
+  (since 2026-10-09): "Please turn off the laser", the laser-off check, the results file
+  completed with `rBFi` and the figure, then the probe window. Before, the window simply
+  closed — the laser still on and no `rBFi` in the file. Closing during the bright
+  calibration shows the red "Calibration stopped" window.
 
 ## 6. Normalization rule
 

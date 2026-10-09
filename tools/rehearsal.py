@@ -15,7 +15,8 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario recovery --cal-frames 60
 
 What it can NOT test: the real modal dialogs. Every QMessageBox / QFileDialog
-call is replaced by a stub that records it and answers the way an operator
+call, and every hand-built QDialog's exec() (the laser-safety windows,
+gui/safety_dialog.py), is replaced by a stub that records it and answers the way an operator
 following the protocol would, because a real dialog would block this script
 forever. A real dialog runs a nested event loop that keeps delivering frames;
 the stubs return at once. That path is covered only by the hands-on pass
@@ -81,12 +82,16 @@ T_FOLDER       = "Choose folder to save this session's results"
 T_DARK_PROMPT  = "Calibration — Step 1 of 2: Dark Frames"
 T_BRIGHT_PROMPT = "Calibration — Step 2 of 2: Bright Frames"
 T_MEAS_ENDED   = "Measurement Ended"
-T_LASER_ON     = "Laser May Still Be On"
+T_LASER_ON     = "Laser May Still Be On"            # red window, U2
+T_PROBE_OK     = "Laser Is Off — Remove the Probe"  # after the save, U2
+T_PROBE_SKIP   = "Laser-Off Check Could Not Run"
+T_PROBE_FAILED = "Do Not Remove the Probe Yet"
 
 # The protocol's order (docs/SCOS_protocol.md:11-17; CLAUDE.md "opening
 # dialogs"). The G warning is optional — it appears only when the session's
 # gain is not itself a row of the table, as 24 dB is not for this recording.
-EXPECTED_DIALOGS = [T_FOLDER, T_DARK_PROMPT, T_BRIGHT_PROMPT, T_MEAS_ENDED]
+EXPECTED_DIALOGS = [T_FOLDER, T_DARK_PROMPT, T_BRIGHT_PROMPT, T_MEAS_ENDED,
+                    T_PROBE_OK]
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +137,17 @@ def install_dialog_stubs(run: Run, output_root: Path) -> None:
     answers = {
         ("question",    T_DARK_PROMPT):   B.Ok,
         ("question",    T_BRIGHT_PROMPT): B.Ok,
-        # Yes = "continue anyway": the session is saved, and the failed check
-        # is still reported below through laser_off_result.
-        ("question",    T_LASER_ON):      B.Yes,
         ("information", T_MEAS_ENDED):    B.Ok,
         ("warning",     T_GAIN_WARNING):  B.Ok,
+        # Hand-built windows (QDialog.exec): True = accept. On the red window
+        # accept is "Continue anyway": the session is saved, and the failed
+        # check is still reported below through laser_off_result. Reject there
+        # would mean "Check again" — the loop an earlier version of this
+        # script could have got stuck in.
+        ("dialog",      T_LASER_ON):      True,
+        ("dialog",      T_PROBE_OK):      True,
+        ("dialog",      T_PROBE_SKIP):    True,
+        ("dialog",      T_PROBE_FAILED):  True,
     }
     refuse = {"question": B.Cancel}   # unknown question → back out, never proceed
 
@@ -154,6 +165,21 @@ def install_dialog_stubs(run: Run, output_root: Path) -> None:
 
     for kind in ("information", "warning", "critical", "question", "about"):
         setattr(QMessageBox, kind, _stub(kind))
+
+    from PyQt6.QtWidgets import QDialog
+
+    def _exec(dialog):
+        title = dialog.windowTitle()
+        run.dialogs.append(("dialog", title))
+        if answers.get(("dialog", title)) is True:
+            dialog.accept()
+        else:
+            if ("dialog", title) not in answers:
+                run.unknown.append(("dialog", title))
+            dialog.reject()             # unknown window → back out
+        return dialog.result()
+
+    QDialog.exec = _exec
 
     def _dir(parent=None, caption="", *a, **k):
         run.dialogs.append(("getExistingDirectory", caption))
