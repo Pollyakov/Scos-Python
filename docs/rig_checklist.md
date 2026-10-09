@@ -102,7 +102,7 @@ frame numbers (`BlockID`) count 0, 1, 2, … without the false warning.
 
 | | Do | Expect | If not |
 |---|---|---|---|
-| ☐ R2a | `venv\Scripts\python.exe main.py` | Window opens; status bar "Ready — camera not started"; state box **IDLE** (grey) | Traceback in the terminal → copy it |
+| ☐ R2a | `venv\Scripts\python.exe main.py` | First the **"Laser safety"** warning (goggles; probe off only after the red laser light is out, by pulling the rubber strap backwards) — read it to the subject, click **I confirm**; `app.log`: "Laser-safety warning confirmed by the operator" (since 2026-10-09; **Exit** closes the app). Then the window opens; status bar "Ready — camera not started"; state box **IDLE** (grey) | Traceback in the terminal → copy it |
 | ☐ R2b | Click **Start Video** | Image appears; state box **PREVIEW** (light blue); status bar "Video running"; **FPS ≈ 20** | FPS well below 20 → see R2e |
 | ☐ R2c | Look at the parameter boxes | Mono12, 8 ms, 8 dB, 20 Hz, Window Size 7, **Dark Frames 600, Bright Frames 600** | Different values → a `scos_config.local.json` is in play (R1e). Set them by hand |
 | ☐ R2d | **About 5 s after** Start Video (the check needs 5 s of frames), open `app.log` and search "Camera clock" | **`Camera clock accepted — … MHz ticks agree with the PC clock`** (todo D5: the app then stamps each frame with the camera's own exposure time instead of the PC's arrival time) | **`Camera clock not used — <reason>`** → the session is still valid (PC timestamps, as before 2026-10-07), but copy the reason |

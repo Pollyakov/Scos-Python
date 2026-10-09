@@ -17,7 +17,8 @@ SCOS measures cerebral blood flow velocity by illuminating tissue with a laser a
 
 Work is tracked in [`docs/todo.md`](docs/todo.md) — the only task list (fixes from
 the first rig session, U1–U11, at the top, then rig-session prep, the backlog, Done). Run modes: `python main.py` (real camera; run
-`python check_camera.py` first), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
+`python check_camera.py` first; it opens with a laser-safety warning that must be confirmed —
+`gui/safety_dialog.py`, todo U1), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
 `--mock-h5 <results file>`. Headless whole-session rehearsal with checks:
 `python tools/rehearsal.py [--cal-frames 60] [--scenario normal]` — exit code 0 = all passed.
 

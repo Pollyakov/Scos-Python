@@ -82,6 +82,11 @@ def main():
         window = MainWindow(camera=camera)
     else:
         logger.info("Mode: real Basler camera")
+        # Laser safety first (todo U1): nothing opens until the operator
+        # confirms. Real camera only — the playback modes have no laser.
+        from gui.safety_dialog import confirm_laser_safety
+        if not confirm_laser_safety():
+            sys.exit(0)
         from camera import CameraThread
         camera = CameraThread()
         window = MainWindow(camera=camera)

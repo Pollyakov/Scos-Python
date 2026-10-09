@@ -16,7 +16,13 @@ camera's default settings — **Mono12, 8 ms, 8 dB, 20 Hz, 700 × 700, window 7,
 
 ## 1. Before the laser goes off
 
-Press **Start SCOS**. Three things follow, always in this order, because your protocol puts
+**When the app starts** (real camera only, since 2026-10-09) a **"Laser safety"** warning comes
+first, before the main window: the subject wears laser-safety goggles for the whole
+measurement; the probe comes off only after checking that the laser is off — its red
+indicator light not lit — and only by pulling the rubber strap backwards. **I confirm**
+opens the app; **Exit** closes it. The confirmation is written to `app.log`.
+
+Then press **Start SCOS**. Three things follow, always in this order, because your protocol puts
 them in this order (`SCOS_protocol.md`, section 0 onwards) and everything that needs the
 keyboard should be done before the room is dark:
 

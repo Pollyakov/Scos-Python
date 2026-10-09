@@ -8,7 +8,9 @@ where nobody expects the app to talk to them. That happened while writing
 tests/test_gain_table.py: the calibration prompt "Please turn on the laser"
 popped up over and over, once per test that pressed Start SCOS.
 
-So every modal entry point raises instead of opening. A test that legitimately
+So every modal entry point raises instead of opening — the static helpers
+(`QMessageBox.question` …) and `exec()` on any QDialog, which is how a window
+built by hand (the laser-safety warning, `gui/safety_dialog.py`) opens. A test that legitimately
 drives one of these paths must monkeypatch the specific call it expects, which
 also documents what the operator would have seen.
 """
@@ -18,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -34,7 +36,9 @@ _BLOCKED = (
 @pytest.fixture(autouse=True)
 def no_modal_dialogs(monkeypatch):
     for cls, names in (
-        (QMessageBox,  ("information", "warning", "critical", "question", "about")),
+        (QMessageBox,  ("information", "warning", "critical", "question", "about",
+                        "exec")),
+        (QDialog,      ("exec",)),
         (QFileDialog,  ("getExistingDirectory", "getOpenFileName", "getSaveFileName")),
     ):
         for name in names:
