@@ -1,6 +1,7 @@
 # Rig checklist — the first session on the real camera
 
-Rig-session prep step **5a** (`docs/todo.md`). Written 2026-10-07 against commit `e8dcdc2`.
+Rig-session prep step **5a** (`docs/todo.md`). Written 2026-10-07 against commit `e8dcdc2`; used at
+the first rig session on 2026-10-08 — what passed is in "Result of the first session" below.
 
 This is the companion to [`simulation_checklist.md`](simulation_checklist.md). That one
 rehearses the whole session on a recording. This one covers what a recording **cannot**
@@ -12,12 +13,67 @@ Everything here was written from reading the code, not from a run on the rig —
 doesn't match, the checklist may be wrong rather than the app. Note it either way.
 
 Expected values are for the lab camera's default settings — **Mono12, 8 ms exposure, 8 dB,
-20 Hz, 700 × 700, Window Size 7, Dark/Bright Frames 600** — unless a step says otherwise.
+20 Hz, Window Size 7, Dark/Bright Frames 600**, and the rig camera's full frame, **1216 × 1936**
+(rows × columns; 700 × 700 until 2026-10-08, when the rig camera turned out to send its full
+sensor — the camera-side crop is todo U6) — unless a step says otherwise.
 
 > **`app.log` is overwritten every time the app starts** (`main.py:28`, `mode="w"`). It is
 > written to the folder you launched from — the repo folder if you follow the commands
 > below. **Copy it somewhere safe before every relaunch**, e.g. into that run's session
 > folder; most of the checks below are read from it.
+
+---
+
+## Result of the first session — 2026-10-08
+
+Session `TestVika10082026_20261008_145048` (Vika as the subject, 1 min, External Trigger on,
+20 Hz, rig camera a2A1920-160umBAS SN 40075248, USB). Checked on 2026-10-09 against that
+session's `app.log`, `rBfi_results.h5` and `Calibration.h5`. **Code that ran: `0822db1`**
+(`Params/gitCommit`) — before the BlockID fix `dffa06d`, so the current code has not run on
+the camera yet. The ☐ boxes in the tables below are left empty so the list can be used
+again at the next visit.
+
+✅ checked in the files and OK · 👁 seen at the rig, not in any file · ⚠️ done, but not
+the way the checklist says · ➖ not done
+
+| Step | | What the files show |
+|---|---|---|
+| P1 | ✅ | SN 40075248 is in `CamerasMeasuredGain.csv` at Mono12, 8 dB ("DAN01", G = 0.9564) |
+| R1a | ✅ | Ran `0822db1`, the latest commit that day |
+| R1b | ➖ | Fast tests on the rig PC — not recorded |
+| R1c | 👁 | `check_camera.py` before launch: one camera, a2A1920-160umBAS, SN 40075248, USB (output was in the chat, not saved) |
+| R1d | ✅ | `app.log`: "Camera opened — model=a2A1920-160umBAS SN=40075248" |
+| R1e | ➖ | Not checked that day. **For the next visit:** the app saved `scos_config.local.json` on close (15:05) with **External Trigger on, Measuring duration 1 min, Norm. type pulsation** — the next launch on this PC starts with those. Dark/Bright Frames are 600 in it |
+| R1f | ➖ | Benchmark not run |
+| R2a | ✅ | "Mode: real Basler camera", no errors (state-box colour not recorded) |
+| R2b | ✅ | Start Video 14:45:33, IDLE → PREVIEW. The FPS label was not recorded; frame timing in the file is 50 ms (R6d) |
+| R2c | ✅ | Start Video: Mono12, 8.0 ms, 8.0 dB, 20 Hz; Start SCOS: window 7; both calibrations collected 600 frames |
+| R2d | ✅ | 14:45:39, 5 s after capture start: "Camera clock accepted — 1000 MHz ticks agree with the PC clock over 5.0 s". Also on the first frame: "Camera reports no frame numbers (BlockID 0)" — a false alarm (USB cameras number frames from 0), fixed in `dffa06d` (todo Done item 41) |
+| R2e | ✅ | No "frame(s) lost" anywhere in `app.log` (the app logs every such warning) |
+| R2f | ✅ | ROI saved in `Params`: cx 1220.9, cy 864.8, r 278.5 (Auto or Draw — not recorded) |
+| R3a | ✅ | Arduino found on COM10, compiled and uploaded in 10 s: "Arduino ready — T=50 ms, exposure=8 ms on COM10"; "Trigger mode → On" |
+| R3b | ⚠️ | Partly: the measurement ran on the trigger at 50 ms per frame (R6d), so the pulses reach the camera. Whether the FPS spinbox jumped — not recorded |
+| R3c | ✅ | A second "Camera clock accepted" at 14:46:18, 5 s after Trigger On — and again after each grab restart in the calibrations (4 times in all) |
+| R3d | ➖ | Not done (only one upload in the log) |
+| R4 | ⚠️ | Different from the checklist, on purpose: Recording name "TestVika10082026"; Measuring duration 1 min; **Norm. type pulsation** (method percentile5 over the first 5 s) instead of "Number of seconds, 5 s". Both are valid settings |
+| R5a | ✅ | "G = 0.956400 DU/e (source: table, SN 40075248, Mono12, 8.0 dB)" — exact row, no pop-up |
+| R5b | ✅ | "Session folder created: …\TestVika10082026_20261008_145048" |
+| R5c | ✅ | Dark prompt answered 14:50:58; trigger switched off for the dark calibration |
+| R5d | ✅ | Really dark: `mean_dark` 0.46 DU (0.52 in the ROI) against ⟨I⟩ 113.9 DU with the laser on; 600 frames |
+| R5e | ✅ | Bright prompt answered 14:51:59; trigger back on |
+| R5f | ✅ | 600 bright frames |
+| R5g | ✅ | Dark **30.2 s** (14:50:58.8 → 14:51:29.0), bright **30.1 s** (14:51:59.9 → 14:52:30.0) — the 30 s minimum, so the rig PC keeps up with full 1216 × 1936 frames at 20 Hz. "Flushing 2" / "Flushing 3" |
+| R5h | ✅ | "Normalization window closed at 5.0 s … over 101 points"; κ²_corr > 0 in all 1300 frames (mean 0.0081); dropped 0 |
+| R6a | ⚠️ | Ran 65 s, not "a few minutes". Within that: no overload, no lost frames, dropped 0. A longer run is still to do |
+| R6b | ⚠️ | Only the failure path tested — the laser was left on on purpose: "Laser-off check FAILED — 114.5 DU, expected < 11.4 DU", the warning appeared, Continue kept the data. The normal path (laser really off → passes silently) has not been seen on the rig yet |
+| R6c | ✅ | `app.log` is in the session folder |
+| R6d | ✅ | `time_source = camera`, `frames_lost_camera = 0`, `frames_dropped_queue = 0`, `camera_sn = 40075248`. 1300 frames; time step median 50.015 ms, min 50.009, max 50.019 — no gaps |
+| R6e | ✅ | All three files. `Calibration.h5` is **24.4 MB** — the "≤ 10 MB" in R6e was for 700 × 700 frames; `rBfi_results.h5` 116 KB for 65 s; `rBfi_fig.png` |
+| R7 | ➖ | Deliberate overload not run (todo D5 step 3) |
+
+**Still to do on the rig:** R1b, R1f, R3d, a run of several minutes (R6a), the laser-off
+check with the laser really off (R6b), R7, and — with the current code — confirm the camera's
+frame numbers (`BlockID`) count 0, 1, 2, … without the false warning.
 
 ---
 
@@ -40,7 +96,7 @@ Expected values are for the lab camera's default settings — **Mono12, 8 ms exp
 | ☐ R1c | `venv\Scripts\python.exe check_camera.py` | `Found 1 camera(s): [0] <model>  SN:<number> …` and `Frame grabbed OK: shape=(…), …` | "No Basler cameras found" → cable, Pylon SDK, or Pylon Viewer still holding the camera (close it) |
 | ☐ R1d | Compare that SN with P1 | Same SN, and its Mono12 row is in the table | Different camera than expected → redo P1 for this SN now |
 | ☐ R1e | Look for **`scos_config.local.json`** in the repo folder | Either absent, or you know what's in it. This file holds the operator's last settings and **overrides the committed defaults** — e.g. Dark/Bright Frames 60 from an old test | Rename it to `scos_config.local.old.json` to start from the defaults; R2c checks the result |
-| ☐ R1f | Benchmark, with the app **closed**: `venv\Scripts\python.exe bench_processor.py --width 700 --height 700 --window 7 --bits 12 --fps 20` (takes 30 s) | Last lines: `Budget at 20.0 Hz : 50.0 ms/frame`, **`Headroom … (OK)`**, and a `Max sustainable` figure. **Write down `mean` and `Max sustainable`** — R6 uses them. This is one worker; the app runs several in parallel, so its real capacity is higher. | `Overrun … (GUI will lag!)` → the lab PC is slower than expected. A session can still run (the app slows the camera rather than skipping frames), but tell me the numbers |
+| ☐ R1f | Benchmark, with the app **closed**: `venv\Scripts\python.exe bench_processor.py --width 1936 --height 1216 --window 7 --bits 12 --fps 20` (takes 30 s; width = columns, height = rows) | Last lines: `Budget at 20.0 Hz : 50.0 ms/frame`, **`Headroom … (OK)`**, and a `Max sustainable` figure. **Write down `mean` and `Max sustainable`** — R6 uses them. This is one worker; the app runs several in parallel, so its real capacity is higher. | `Overrun … (GUI will lag!)` → the lab PC is slower than expected. A session can still run (the app slows the camera rather than skipping frames), but tell me the numbers |
 
 ### R2 · Launch and preview
 
@@ -93,7 +149,7 @@ The order is the protocol's (`SCOS_protocol.md:11-17`) and is asserted by a test
 | ☐ R6b | **Stop SCOS** → "Measurement Ended — Please turn off the laser." Turn it off, OK | Passes silently. Status bar **"Session finished → <folder>"** | **"Laser May Still Be On"** → is it? Yes (continue) keeps the data; No checks again |
 | ☐ R6c | **Copy `app.log`** into the session folder | — | |
 | ☐ R6d | Check the results file (or ask Claude to): `venv\Scripts\python.exe -c "import h5py,numpy as np,sys; f=h5py.File(sys.argv[1]); print(dict(f['metadata'].attrs)); t=f['timeVec'][()].ravel(); d=np.diff(t)*1000; print(t.size,'frames; dt ms median %.2f min %.2f max %.2f' % (np.median(d), d.min(), d.max()))" "<session folder>\rBfi_results.h5"` | In `metadata`: **`time_source = camera`**, **`frames_lost_camera = 0`**, **`frames_dropped_queue = 0`** (both counted from Start SCOS), and `camera_sn` = your camera. Time steps: **median ≈ 50 ms**, min and max close to 50 ms | `time_source = pc` → R2d said why. Any lost/dropped > 0, or a max step of 100, 150 ms… → frames went missing; note the numbers |
-| ☐ R6e | Folder contents | `Calibration.h5` (≤ 10 MB at 700 × 700), `rBfi_results.h5` (≈ 3.5 MB per hour), `rBfi_fig.png` | |
+| ☐ R6e | Folder contents | `Calibration.h5` (≈ 25 MB at 1216 × 1936 — 24.4 MB on 2026-10-08), `rBfi_results.h5` (≈ 3.5 MB per hour, an estimate not yet checked on a long run; 116 KB for 65 s on 2026-10-08), `rBfi_fig.png` | |
 
 ### R7 · Deliberate overload — **last, on a throwaway session**
 
@@ -102,7 +158,7 @@ settings that the app **saves on close** — see R7f before closing the window.
 
 | | Do | Expect | If not |
 |---|---|---|---|
-| ☐ R7a | External Trigger **off**. Set **Processing workers = 1**, **Exposure 2 ms**, and FPS to about **twice R1f's "Max sustainable"** (or the highest the camera accepts) | FPS label rises above "Max sustainable". The camera itself caps the rate (≈ 1 ÷ exposure, and the GigE link), so if FPS won't go higher, use what you get | FPS stays at or below "Max sustainable" → this PC can't be overloaded this way; skip R7 and note it |
+| ☐ R7a | External Trigger **off**. Set **Processing workers = 1**, **Exposure 2 ms**, and FPS to about **twice R1f's "Max sustainable"** (or the highest the camera accepts) | FPS label rises above "Max sustainable". The camera itself caps the rate (≈ 1 ÷ exposure, and the USB link), so if FPS won't go higher, use what you get | FPS stays at or below "Max sustainable" → this PC can't be overloaded this way; skip R7 and note it |
 | ☐ R7b | Start SCOS, go through the prompts. **Keep Dark/Bright Frames at 600** — at an overload rate 60 frames would finish in about a second, before the camera-clock check (5 s) is done, and the run would mix PC and camera timestamps | During the run: status bar **"SCOS overload — input queue N/20 full; camera capture is being throttled to keep up (at HH:MM:SS)"** | |
 | ☐ R7c | Keep it going ~30 s | **"Camera: N frame(s) lost — Pylon buffers full or transfer failed (M since Start Video)"**, at most once a second; the label reads **"Dropped: N + M lost at camera"**; the **GUI stays responsive** (the grab loop waits, the window doesn't freeze) | GUI freezes → note how long. No lost-frame warning although FPS shown < FPS set → copy both numbers |
 | ☐ R7d | Stop SCOS, copy `app.log` | — | |
