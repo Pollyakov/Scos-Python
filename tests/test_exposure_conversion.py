@@ -58,7 +58,7 @@ class TestExposureConversion:
 
     def test_conversion_never_negative(self):
         """Even the smallest GUI value produces positive µs."""
-        gui_min_ms = 0.021  # from _labeled_spin min_
+        gui_min_ms = 0.021  # from _grid_spin min_
         assert gui_min_ms * 1000 > 0
 
 

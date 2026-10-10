@@ -18,10 +18,10 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QGroupBox, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox,
-    QPushButton, QCheckBox, QComboBox, QSplitter,
+    QPushButton, QCheckBox, QComboBox, QSplitter, QGridLayout, QScrollArea,
     QStatusBar, QFileDialog, QMessageBox
 )
-from PyQt6.QtCore import Qt, QEventLoop, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QEventLoop, QSize, QTimer, QThread, pyqtSignal
 import scipy.io
 
 from camera    import CameraThread
@@ -36,6 +36,49 @@ from gui.plot_widget  import PlotWidget
 # Imported as a module, not by name, so tests and tools/rehearsal.py can
 # replace its windows (they would otherwise wait for a click forever).
 from gui import safety_dialog
+
+
+class _ControlsScrollArea(QScrollArea):
+    """The right-hand control panel, scrolling vertically if it ever must.
+
+    A safety net for U3. A window may never be smaller than its contents'
+    minimum, so a panel taller than the screen pushes the window — status
+    bar, warnings and all — past the bottom edge. Inside a scroll area the
+    panel asks for almost no height, so the window always fits; on the rig
+    screen the panel fits as it is and no scrollbar appears.
+
+    It does ask for its full *width*: there is no horizontal scrollbar, so a
+    narrower area would clip the fields. Qt's own hint does not follow the
+    panel, hence the overrides. When the panel's layout changes (a longer
+    label, a shown widget) Qt passes that on to the window only after a delay
+    — once, in a test, not within a second — so the event filter passes it on
+    at once.
+    """
+
+    def __init__(self, panel: QWidget):
+        super().__init__()
+        self.setWidget(panel)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setFrameShape(QScrollArea.Shape.NoFrame)
+        panel.installEventFilter(self)
+
+    def _width_for(self, panel_width: int) -> int:
+        return (panel_width + self.verticalScrollBar().sizeHint().width()
+                + 2 * self.frameWidth())
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self._width_for(self.widget().minimumSizeHint().width()),
+                     super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:
+        hint = self.widget().sizeHint()
+        return QSize(self._width_for(hint.width()), hint.height())
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(obj, event)
 
 
 class _CalibrationLoaderThread(QThread):
@@ -191,6 +234,7 @@ class MainWindow(QMainWindow):
         self._scos_worker.start()
 
         self._build_ui()
+        self._fit_to_screen()
         self._load_config()
         self._connect_signals()
 
@@ -236,6 +280,30 @@ class MainWindow(QMainWindow):
         self._fps_count = 0
 
 
+    # Room left for the title bar and borders Windows draws around the window
+    # (≈ 30 logical px at 150 % on the rig PC); resize() sets the inside only.
+    _WINDOW_FRAME_ALLOWANCE = QSize(16, 48)
+
+    def _fit_to_screen(self) -> None:
+        """Make the un-maximized size fit the screen (todo U3).
+
+        main.py opens the window maximized, but "Restore Down" returns it to
+        its normal size. Left to Qt, that is two thirds of the screen — on
+        the rig PC 853 × 533, too short for the control panel, which then
+        needs its scrollbar. Use the contents' preferred size instead, capped
+        to the screen's free area, centred.
+        """
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        room = avail.size() - self._WINDOW_FRAME_ALLOWANCE
+        size = self.sizeHint().boundedTo(room).expandedTo(self.minimumSizeHint())
+        self.resize(size)
+        # move() places the outer frame, so centre the inside plus its frame.
+        self.move(avail.left() + max(0, (room.width()  - size.width())  // 2),
+                  avail.top()  + max(0, (room.height() - size.height()) // 2))
+
     def _build_controls(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -243,60 +311,50 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
         layout.setContentsMargins(4, 4, 4, 4)
 
+        # The fields sit two to a row (todo U3/U4). One per row made the panel
+        # 861 px tall, and the rig screen (1280 × 800 at 150 % scaling, less
+        # the taskbar) leaves about 690: the maximized window squeezed every
+        # field below its minimum height so they overlapped, and a normal
+        # window was pushed past the bottom edge, status bar and all.
+        # tests/test_window_fits_screen.py holds the panel to that budget.
+
         # --- Camera Controls ---
         self.cam_group = QGroupBox("Camera")
-        cam_layout = QVBoxLayout(self.cam_group)
-        cam_layout.setSpacing(2)
-        cam_layout.setContentsMargins(4, 8, 4, 4)
+        cam_grid = self._field_grid(self.cam_group)
 
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel("Format:"))
         self.cmb_format = QComboBox()
         self.cmb_format.addItems(["Mono8", "Mono10", "Mono12"])
         self.cmb_format.setCurrentText("Mono12")
-        row.addWidget(self.cmb_format)
-        cam_layout.addLayout(row)
+        self._grid_field(cam_grid, 0, 0, "Format:", self.cmb_format)
 
-        self.spn_exposure = self._labeled_spin(
-            cam_layout, "Exposure (ms):", 0.021, 10000.0, 8.0, 3, step=0.1
+        self.spn_exposure = self._grid_spin(
+            cam_grid, 0, 1, "Exposure (ms):", 0.021, 10000.0, 8.0, 3, step=0.1
         )
-        self.spn_gain = self._labeled_spin(
-            cam_layout, "Gain (dB):", 0.0, 24.0, 8.0, 1, step=0.5
+        self.spn_gain = self._grid_spin(
+            cam_grid, 1, 0, "Gain (dB):", 0.0, 24.0, 8.0, 1, step=0.5
         )
-        self.spn_fps = self._labeled_spin(
-            cam_layout, "Frame Rate (Hz):", 1.0, 220.0, 20.0, 1, step=1.0
+        self.spn_fps = self._grid_spin(
+            cam_grid, 1, 1, "Frame Rate (Hz):", 1.0, 220.0, 20.0, 1, step=1.0
         )
-        self.spn_trigger_delay = self._labeled_spin(
-            cam_layout, "Trigger Delay (µs):", 0.0, 1e6, 0.0, 0, step=100.0
+        self.spn_trigger_delay = self._grid_spin(
+            cam_grid, 2, 0, "Trigger Delay (µs):", 0.0, 1e6, 0.0, 0, step=100.0
         )
         self.chk_trigger = QCheckBox("External Trigger")
-        cam_layout.addWidget(self.chk_trigger)
+        cam_grid.addWidget(self.chk_trigger, 2, 2, 1, 2)
         layout.addWidget(self.cam_group)
 
         # --- Video Controls ---
-        vid_group = QGroupBox("Acquisition")
-        vid_layout = QVBoxLayout(vid_group)
-        vid_layout.setSpacing(2)
-        vid_layout.setContentsMargins(4, 8, 4, 4)
-
         self.btn_start_video = QPushButton("Start Video")
         self.btn_start_video.setCheckable(True)
-        vid_layout.addWidget(self.btn_start_video)
-        layout.addWidget(vid_group)
+        layout.addWidget(self.btn_start_video)
 
         # --- SCOS Controls ---
         self.scos_group = QGroupBox("SCOS")
-        scos_layout = QVBoxLayout(self.scos_group)
-        scos_layout.setSpacing(2)
-        scos_layout.setContentsMargins(4, 8, 4, 4)
+        scos_grid = self._field_grid(self.scos_group)
 
         # First in the box because it is the first thing the protocol asks
         # for (SCOS_protocol.md:13) and the first thing an operator setting up
         # a subject wants to fill in.
-        name_row = QHBoxLayout()
-        name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.addWidget(QLabel("Recording name:"))
         self.txt_recording_name = QLineEdit()
         self.txt_recording_name.setPlaceholderText("optional — e.g. subject03_rest")
         self.txt_recording_name.setToolTip(
@@ -304,43 +362,40 @@ class MainWindow(QMainWindow):
             "so two runs with the same name never collide.\n"
             "Left empty, the folder is named scos_<date>_<time>."
         )
-        name_row.addWidget(self.txt_recording_name)
-        scos_layout.addLayout(name_row)
+        scos_grid.addWidget(QLabel("Recording name:"), 0, 0)
+        scos_grid.addWidget(self.txt_recording_name, 0, 1, 1, 3)
 
-        self.spn_window = self._labeled_int_spin(
-            scos_layout, "Window Size:", 3, 51, 7, step=2
+        self.spn_n1 = self._grid_int_spin(
+            scos_grid, 1, 0, "Dark Frames:", 10, 3000, 600, step=50
         )
-        self.spn_n1 = self._labeled_int_spin(
-            scos_layout, "Dark Frames:", 10, 3000, 600, step=50
+        self.spn_n2 = self._grid_int_spin(
+            scos_grid, 1, 1, "Bright Frames:", 10, 3000, 600, step=50
         )
-        self.spn_n2 = self._labeled_int_spin(
-            scos_layout, "Bright Frames:", 10, 3000, 600, step=50
+        self.spn_window = self._grid_int_spin(
+            scos_grid, 2, 0, "Window Size:", 3, 51, 7, step=2
         )
-        self.spn_duration = self._labeled_spin(
-            scos_layout, "Measuring duration (in minutes):", 0.0, 240.0, 0.0, 1, step=1.0
+        self.spn_workers = self._grid_int_spin(
+            scos_grid, 2, 1, "Processing workers:", 1, 8, 3, step=1
+        )
+        self.spn_duration = self._grid_spin(
+            scos_grid, 3, 0, "Measuring duration (min):", 0.0, 240.0, 0.0, 1, step=1.0
         )
         self.spn_duration.setSpecialValueText("∞")
         self.spn_duration.setToolTip(
+            "Measuring duration in minutes.\n"
             "0 = run until Stop SCOS is clicked  |  max 240 min (4 h)"
         )
 
         # Normalization type row
-        norm_row = QHBoxLayout()
-        norm_row.setContentsMargins(0, 0, 0, 0)
-        norm_row.addWidget(QLabel("Norm. type:"))
         self.cmb_norm_type = QComboBox()
         self.cmb_norm_type.addItems(["Number of seconds", "Pulsation lower level"])
-        norm_row.addWidget(self.cmb_norm_type)
         self.spn_norm_seconds = QSpinBox()
         self.spn_norm_seconds.setRange(1, 60)
         self.spn_norm_seconds.setValue(5)
         self.spn_norm_seconds.setSuffix(" s")
-        norm_row.addWidget(self.spn_norm_seconds)
-        scos_layout.addLayout(norm_row)
-
-        self.spn_workers = self._labeled_int_spin(
-            scos_layout, "Processing workers:", 1, 8, 3, step=1
-        )
+        scos_grid.addWidget(QLabel("Norm. type:"), 4, 0)
+        scos_grid.addWidget(self.cmb_norm_type, 4, 1, 1, 2)
+        scos_grid.addWidget(self.spn_norm_seconds, 4, 3)
         _cores = os.cpu_count() or 4
         self.spn_workers.setToolTip(
             f"Parallel threads for κ² computation.\n"
@@ -373,11 +428,13 @@ class MainWindow(QMainWindow):
             "Not available yet: saving raw frames needs a disk-space check\n"
             "and a background writer first (todo.md F1)."
         )
-        layout.addWidget(self.chk_save_frames)
-
         self.btn_save = QPushButton("Save Data...")
         self.btn_save.setEnabled(False)
-        layout.addWidget(self.btn_save)
+        save_row = QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.addWidget(self.chk_save_frames)
+        save_row.addWidget(self.btn_save, stretch=1)
+        layout.addLayout(save_row)
 
         # --- Status indicator ---
         status_group = QGroupBox("Status")
@@ -413,8 +470,9 @@ class MainWindow(QMainWindow):
 
         # --- Info labels ---
         info_group = QGroupBox("Info")
-        info_layout = QVBoxLayout(info_group)
-        info_layout.setSpacing(1)
+        info_layout = QGridLayout(info_group)
+        info_layout.setVerticalSpacing(1)
+        info_layout.setHorizontalSpacing(12)
         info_layout.setContentsMargins(4, 8, 4, 4)
 
         self._fps_label  = QLabel("FPS  : --")
@@ -433,40 +491,55 @@ class MainWindow(QMainWindow):
         self.lbl_kappa  = QLabel("κ²   : --")
         self.lbl_bfi    = QLabel("1/κ² : --")
         self.lbl_roi    = QLabel("ROI  : full frame")
-        for lbl in (self._fps_label, self._proc_label, self.lbl_dropped,
-                    self.lbl_size, self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
-                    self.lbl_kappa, self.lbl_bfi, self.lbl_roi):
-            info_layout.addWidget(lbl)
+        # Two columns: rate and dropped frames on the left, image values on
+        # the right.
+        left  = (self._fps_label, self._proc_label, self.lbl_dropped,
+                 self.lbl_size, self.lbl_roi)
+        right = (self.lbl_mean_i, self.lbl_p5, self.lbl_p95,
+                 self.lbl_kappa, self.lbl_bfi)
+        for row, (lbl_l, lbl_r) in enumerate(zip(left, right)):
+            info_layout.addWidget(lbl_l, row, 0)
+            info_layout.addWidget(lbl_r, row, 1)
         layout.addWidget(info_group)
 
         layout.addStretch()
-        return panel
+        return _ControlsScrollArea(panel)
 
     @staticmethod
-    def _labeled_spin(parent_layout, label, min_, max_, default, decimals, step=1.0):
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel(label))
+    def _field_grid(group: QGroupBox) -> QGridLayout:
+        """Grid for a box of fields, two to a row: label, field, label, field."""
+        grid = QGridLayout(group)
+        grid.setVerticalSpacing(2)
+        grid.setHorizontalSpacing(6)
+        grid.setContentsMargins(4, 8, 4, 4)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        return grid
+
+    @staticmethod
+    def _grid_field(grid: QGridLayout, row: int, col: int, label: str,
+                    widget: QWidget) -> None:
+        """Put `label` and `widget` in field column `col` (0 or 1) of `row`."""
+        grid.addWidget(QLabel(label), row, 2 * col)
+        grid.addWidget(widget, row, 2 * col + 1)
+
+    @classmethod
+    def _grid_spin(cls, grid, row, col, label, min_, max_, default, decimals, step=1.0):
         spn = QDoubleSpinBox()
         spn.setRange(min_, max_)
         spn.setValue(default)
         spn.setDecimals(decimals)
         spn.setSingleStep(step)
-        row.addWidget(spn)
-        parent_layout.addLayout(row)
+        cls._grid_field(grid, row, col, label, spn)
         return spn
 
-    @staticmethod
-    def _labeled_int_spin(parent_layout, label, min_, max_, default, step=1):
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel(label))
+    @classmethod
+    def _grid_int_spin(cls, grid, row, col, label, min_, max_, default, step=1):
         spn = QSpinBox()
         spn.setRange(min_, max_)
         spn.setValue(default)
         spn.setSingleStep(step)
-        row.addWidget(spn)
-        parent_layout.addLayout(row)
+        cls._grid_field(grid, row, col, label, spn)
         return spn
 
     # ------------------------------------------------------------------
@@ -825,12 +898,21 @@ class MainWindow(QMainWindow):
     # Stylesheet applied to the Camera / SCOS group boxes while SCOS is running.
     # Qt's built-in disabled appearance is too subtle in dark themes, so we set
     # explicit colors that are unmistakably different from the active state.
+    # A styled QGroupBox loses the room Qt keeps for its title, which then sat
+    # on the first row of fields (todo U4) — margin-top and the title's
+    # position give it back, about as high as the unlocked box.
     _LOCKED_GROUP_STYLE = """
         QGroupBox {
             color: #555555;
             border: 1px solid #333333;
+            margin-top: 1.1em;
         }
-        QGroupBox::title { color: #555555; }
+        QGroupBox::title {
+            color: #555555;
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            left: 0px;
+        }
         QDoubleSpinBox, QDoubleSpinBox:disabled,
         QSpinBox,       QSpinBox:disabled {
             color: #484848;
