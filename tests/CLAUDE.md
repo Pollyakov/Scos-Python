@@ -28,3 +28,10 @@ Settings persistence (todo.md B3): `MainWindow` saves settings on close, so the 
 the defaults via `SCOS_CONFIG_DIR`, in its own temp directory — never inside `tmp_path`,
 which tests use as a results folder and assert on. A test that exercises saving must use
 a camera stub with `persists_settings = True` (see `tests/test_settings_persistence.py`).
+
+Widget sizes (todo U3/U4, `tests/test_window_fits_screen.py`): Qt does not recompute the sizes
+of a window that has never been shown, so after a `setText()` every `sizeHint()` /
+`minimumSizeHint()` keeps its old value and a size test passes for the wrong reason. Show the
+window with `WA_DontShowOnScreen` set first (laid out, never drawn — the suite runs in the
+pre-commit hook), and let a change climb the layouts with several `processEvents()` passes,
+one per level.
