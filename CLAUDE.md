@@ -123,7 +123,7 @@ Known camera parameters:
 | Basler a2A1920-160umBAS (SN 40075248, "DAN01") — **the rig camera**, USB | 12 | 1216×1936; in the gain table at Mono12, 8 dB only (G = 0.9564). USB block IDs start at 0 (Done item 41). First rig session 2026-10-08 |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
-- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png`
+- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBfi_results.h5` (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts, `normalization_type`), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png` (rBFi above ⟨I⟩ plus a parameters box, drawn from the results file by `core/results_figure.py`)
 - The manual "Save SCOS Data" button is a separate, older export: .mat with keys `scosTime`, `scosData` (κ²), `frameRate`, `exposureTime`, `Gain` (or the same as .npz)
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing

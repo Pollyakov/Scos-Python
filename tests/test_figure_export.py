@@ -1,19 +1,18 @@
 """
-Tests for saving the session figure — todo E4 / worklist task 12.
+Tests for the session figure — protocol step 6g, todo U5 (was E4 / task 12).
 
 `docs/session_tab` asks for `rBfi_fig.fig`. That is MATLAB's own figure format
-and Python cannot write it, so this writes `rBfi_fig.png` instead. Nothing is
-lost by the substitution: `timeVec` and `rBFi` sit in `rBfi_results.h5` in the
-same folder, so a real `.fig` can still be rebuilt in MATLAB from the same
-session. Confirmation is still pending — question 7 in
-docs/open_questions.md — and the extension is one constant.
+and Python cannot write it, so this writes `rBfi_fig.png` instead — accepted by
+the supervisor as a first version (open question 7, 2026-10-07); a reopenable
+figure is todo F5.
 
-Two properties matter beyond "a file appears":
+Since U5 the figure is drawn from the results file (core/results_figure.py):
+rBFi on top, <I> below, each with its own axes (the user's choice,
+2026-10-10), and a box with the parameters the files record. What matters:
 
-  * The figure must show the **final** curve. The normalization constant is
-    provisional while a session runs and is re-picked at FINISHED (task 10),
-    so a figure saved before that would disagree with the `rBFi` in the file
-    next to it.
+  * The figure shows exactly the data saved beside it — the final rBFi, NaN
+    rows included, and the Intensity — not the live plot, which has neither
+    the NaNs nor <I>.
   * A figure is a convenience and the data is not. Nothing that goes wrong
     while writing a PNG may interfere with closing a session whose HDF5 is
     already on disk.
@@ -22,6 +21,7 @@ Two properties matter beyond "a file appears":
 import sys
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -31,9 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _app = QApplication.instance() or QApplication([])
 
+import core.results_figure as results_figure
+from core.recorder import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
+from core.results_figure import (MISSING, build_results_figure,
+                                 parameter_lines, read_calibration_info,
+                                 save_results_figure)
 from core.session import State
 from gui.main_window import MainWindow
-from gui.plot_widget import PlotWidget
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -47,54 +51,159 @@ def png_size(path: Path) -> tuple[int, int]:
             int.from_bytes(data[20:24], "big"))
 
 
-class TestSavePng:
+PARAMS = {
+    "frameRate": 20.0, "exposureTime": 8.0, "gain": 8.0, "windowSize": 7,
+    "ROI": [1221.0, 865.0, 278.0], "bitDepth": 12,
+}
+META = {
+    "camera_sn": "40075248", "camera_model": "a2A1920-160umBAS",
+    "gain_du_per_e": 0.9564, "gain_source": "table",
+}
 
-    @pytest.fixture
-    def plot(self):
-        w = PlotWidget()
-        yield w
-        w.close()
 
-    def test_an_empty_plot_writes_nothing(self, plot, tmp_path):
+def _results_file(tmp_path, seconds=10.0, fps=20.0, bad=(), rbfi=True,
+                  calibration=True):
+    """A finished results file (and Calibration.h5) like a session leaves."""
+    rec = HDF5Recorder(tmp_path / "rBfi_results.h5", dict(META), dict(PARAMS))
+    n = int(seconds * fps)
+    for i in range(n):
+        k2 = -0.01 if i in bad else 0.01 * (1.0 + 0.2 * np.sin(i / 3.0))
+        rec.append(i / fps, 0.02, k2, 114.0 + np.cos(i / 5.0))
+    rec.set_metadata(time_source="camera", frames_lost_camera=0,
+                     frames_dropped_queue=3,
+                     normalization_type="Pulsation lower level")
+    if rbfi:
+        rec.write_rbfi(80.0, "percentile5", 5.0)
+    rec.close()
+    if calibration:
+        cal = tmp_path / CALIBRATION_FILENAME
+        write_calibration(cal, "dark", {"mean_dark": np.zeros((4, 4))},
+                          {"n_frames": 600, "window_size": 7})
+        write_calibration(cal, "bright", {"spIm": np.ones((4, 4))},
+                          {"n_frames": 60, "window_size": 7})
+    return tmp_path / "rBfi_results.h5"
+
+
+class TestResultsFigure:
+
+    def test_the_top_plot_is_the_files_rbfi_nan_gaps_included(self, tmp_path):
+        path = _results_file(tmp_path, bad={5, 6})
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+            t, rbfi = f["timeVec"][:], f["rBFi"][:]
+        line = fig.axes[0].lines[0]
+        np.testing.assert_array_equal(line.get_xdata(), t)
+        # NaN where κ² ≤ 0, kept as a gap — not dropped, not joined across.
+        np.testing.assert_array_equal(line.get_ydata(), rbfi)
+        assert np.isnan(line.get_ydata()[5])
+
+    def test_the_bottom_plot_is_the_files_intensity(self, tmp_path):
+        path = _results_file(tmp_path)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+            inten = f["Intensity"][:]
+        assert fig.axes[1].get_ylabel() == "<I> [DU]"
+        np.testing.assert_array_equal(fig.axes[1].lines[0].get_ydata(), inten)
+
+    def test_the_two_plots_are_stacked_with_their_own_axes(self, tmp_path):
+        # The user's choice, 2026-10-10: one above the other, nothing shared.
+        path = _results_file(tmp_path)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+        top, bottom = fig.axes[0], fig.axes[1]
+        assert top.get_position().y0 > bottom.get_position().y1
+        assert not top.get_shared_x_axes().joined(top, bottom)
+        assert not top.get_shared_y_axes().joined(top, bottom)
+
+    def test_long_recordings_are_plotted_in_minutes(self, tmp_path):
+        # Same switch as the reference script (Ver2.m:498): > 120 s → minutes.
+        path = _results_file(tmp_path, seconds=150.0, fps=2.0)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+            t = f["timeVec"][:]
+        assert fig.axes[0].get_xlabel() == "time [min]"
+        np.testing.assert_allclose(fig.axes[0].lines[0].get_xdata(), t / 60.0)
+
+    def test_short_recordings_are_plotted_in_seconds(self, tmp_path):
+        path = _results_file(tmp_path, seconds=10.0)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+        assert fig.axes[0].get_xlabel() == "time [sec]"
+        assert fig.axes[1].get_xlabel() == "time [sec]"
+
+    def test_rbfi_axis_follows_the_reference_script(self, tmp_path):
+        # ylim([0 min(10,max(rBFi))]) — Ver2.m:527.
+        path = _results_file(tmp_path)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+            top = float(np.nanmax(f["rBFi"][:]))
+        assert fig.axes[0].get_ylim() == pytest.approx((0.0, min(10.0, top)))
+
+    def test_the_parameters_box_shows_what_the_files_record(self, tmp_path):
+        path = _results_file(tmp_path, bad={1})
+        with h5py.File(path, "r") as f:
+            rows = dict(parameter_lines(f, read_calibration_info(
+                tmp_path / CALIBRATION_FILENAME)))
+        assert rows["Camera SN"]       == "40075248"
+        assert rows["Pixel format"]    == "Mono12"
+        assert rows["Exposure"]        == "8 ms"
+        assert rows["Gain"]            == "8 dB"
+        assert rows["G"]               == "0.9564 DU/e (table)"
+        assert rows["Frame rate"]      == "20 Hz"
+        assert rows["ROI"]             == "x 1221, y 865, r 278 px"
+        assert rows["Dark cal."]       == "600 frames"
+        assert rows["Bright cal."]     == "60 frames"
+        assert rows["Norm. type"]      == "Pulsation lower level"
+        assert rows["Normalization"]   == "percentile5"
+        assert rows["Norm. window"]    == "5.0 s"
+        assert rows["Norm. constant"]  == "80"
+        assert rows["Dropped (queue)"] == "3 frames"
+        assert rows["Frames"]          == "200 (1 with κ² ≤ 0)"
+
+    def test_the_box_text_is_drawn_into_the_figure(self, tmp_path):
+        path = _results_file(tmp_path)
+        with h5py.File(path, "r") as f:
+            fig = build_results_figure(f)
+        drawn = "\n".join(t.get_text() for t in fig.axes[2].texts)
+        assert "40075248" in drawn and "0.9564 DU/e" in drawn
+
+    def test_what_is_not_recorded_is_shown_as_missing(self, tmp_path):
+        # No Calibration.h5: the box must not invent frame counts.
+        path = _results_file(tmp_path, calibration=False)
+        with h5py.File(path, "r") as f:
+            rows = dict(parameter_lines(
+                f, read_calibration_info(tmp_path / CALIBRATION_FILENAME)))
+        assert rows["Dark cal."] == MISSING
+        assert rows["Bright cal."] == MISSING
+
+    def test_a_png_of_fixed_size_is_written(self, tmp_path):
+        path = _results_file(tmp_path)
         out = tmp_path / "fig.png"
-        assert plot.save_png(out) == 0
+        with h5py.File(path, "r") as f:
+            assert save_results_figure(f, out, tmp_path / CALIBRATION_FILENAME,
+                                       "title") == 200
+        assert png_size(out) == (1600, 900)
+
+    def test_no_rbfi_writes_nothing(self, tmp_path):
+        path = _results_file(tmp_path, rbfi=False)
+        out = tmp_path / "fig.png"
+        with h5py.File(path, "r") as f:
+            assert save_results_figure(f, out) == 0
         assert not out.exists(), (
-            "a blank figure is worse than none — it looks like a failed measurement"
+            "a figure without its main curve looks like a failed measurement"
         )
 
-    def test_a_curve_is_written_as_a_real_png(self, plot, tmp_path):
-        for i in range(50):
-            plot.append(i * 0.1, 1.0 + 0.01 * i)
-        out = tmp_path / "fig.png"
-
-        assert plot.save_png(out) == 50
-        assert out.exists() and out.stat().st_size > 0
-        assert png_size(out)[0] == 1600
-
-    def test_the_width_is_fixed_not_taken_from_the_window(self, plot, tmp_path):
-        # The file should look the same whether the operator had the window
-        # maximised or tucked into a corner.
-        for i in range(20):
-            plot.append(float(i), 1.0)
-        plot.resize(200, 150)
-        a = tmp_path / "small.png"
-        plot.save_png(a)
-        plot.resize(1200, 800)
-        b = tmp_path / "large.png"
-        plot.save_png(b)
-
-        assert png_size(a) == png_size(b)
-
-    def test_buffered_points_are_drawn_before_export(self, plot, tmp_path):
-        # Points arrive continuously but the curve redraws on a 1 s timer, so
-        # up to a second of data can be pending when the session ends.
-        for i in range(30):
-            plot.append(float(i), 1.0)
-        assert plot._dirty, "precondition: the timer has not fired yet"
-
-        plot.save_png(tmp_path / "fig.png")
-
-        assert not plot._dirty, "the exported figure must include every point"
+    def test_hours_of_data_can_be_drawn(self, tmp_path):
+        # 3 h at 20 Hz is one line of 216 000 points — the figure is drawn
+        # from the whole file, not a downsampled copy.
+        n = 216_000
+        with h5py.File(tmp_path / "big.h5", "w") as f:
+            f["timeVec"]   = np.arange(n) / 20.0
+            f["rBFi"]      = 1.0 + 0.3 * np.random.default_rng(0).standard_normal(n)
+            f["Intensity"] = np.full(n, 114.0)
+            out = tmp_path / "big.png"
+            assert save_results_figure(f, out) == n
+        assert out.exists()
 
 
 class _StubCamera(QObject):
@@ -162,37 +271,38 @@ class TestSessionWritesTheFigure:
 
         fig = tmp_path / "rBfi_fig.png"
         assert fig.exists(), "session_tab asks for a figure in the session folder"
-        assert png_size(fig)[0] == 1600
+        assert png_size(fig) == (1600, 900)
 
-    def test_the_figure_shows_the_final_normalization(self, window, tmp_path):
-        # _finalize_normalization rescales the curve at FINISHED; a figure
-        # saved before that would not match the rBFi in the file next to it.
+    def test_the_figure_shows_the_saved_rbfi_and_intensity(
+            self, window, tmp_path, monkeypatch):
+        # Drawn through the recorder's still-open handle at FINISHED: what it
+        # shows must be the final rBFi written to the file, not the curve the
+        # live plot drew against a provisional constant.
         _measure(window)
-        before = window.plot_widget.get_data()[1].copy()
+        built = {}
+        real_build = results_figure.build_results_figure
 
-        saved = {}
-        real_save = window.plot_widget.save_png
+        def _spy(*a, **k):
+            built["fig"] = real_build(*a, **k)
+            return built["fig"]
 
-        def _spy(path, *a, **k):
-            saved["data"] = window.plot_widget.get_data()[1].copy()
-            return real_save(path, *a, **k)
-
-        window.plot_widget.save_png = _spy
+        monkeypatch.setattr(results_figure, "build_results_figure", _spy)
         window._finish_session()
+        window._stop_recorder()
 
-        assert "data" in saved, "the figure must actually be written"
-        assert not np.allclose(saved["data"], before), (
-            "this session was short, so the constant changed to the percentile "
-            "and the curve must have been rescaled before it was saved"
-        )
-        np.testing.assert_allclose(saved["data"],
-                                   window.plot_widget.get_data()[1])
+        assert "fig" in built and built["fig"] is not None
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            rbfi, inten = f["rBFi"][:], f["Intensity"][:]
+        np.testing.assert_array_equal(built["fig"].axes[0].lines[0].get_ydata(), rbfi)
+        np.testing.assert_array_equal(built["fig"].axes[1].lines[0].get_ydata(), inten)
+        assert built["fig"].get_suptitle() == tmp_path.name
 
     def test_a_failing_export_does_not_disturb_the_session(
-            self, window, tmp_path, caplog):
+            self, window, tmp_path, caplog, monkeypatch):
         _measure(window)
-        window.plot_widget.save_png = lambda *a, **k: (_ for _ in ()).throw(
-            OSError("disk full"))
+        monkeypatch.setattr(
+            "gui.main_window.save_results_figure",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
 
         window._finish_session()      # must not raise
 
@@ -200,7 +310,6 @@ class TestSessionWritesTheFigure:
         assert "Could not save the plot figure" in caplog.text
         # And the thing that actually matters is still on disk.
         window._stop_recorder()
-        import h5py
         with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
             assert "rBFi" in f
 

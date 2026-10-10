@@ -30,12 +30,20 @@ from core.session   import (BrightCalCollector, DarkCalCollector, State,
                             NORM_METHOD_MEAN, NORM_METHOD_PERCENTILE,
                             choose_norm_method, normalization_constant)
 from core.recorder  import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
+from core.results_figure import save_results_figure
 from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 # Imported as a module, not by name, so tests and tools/rehearsal.py can
 # replace its windows (they would otherwise wait for a click forever).
 from gui import safety_dialog
+
+# "Norm. type" choices: internal name → the wording shown in the GUI, which is
+# also what the results file's metadata.normalization_type records.
+NORM_TYPE_LABELS = {
+    "seconds":   "Number of seconds",
+    "pulsation": "Pulsation lower level",
+}
 
 
 class _ControlsScrollArea(QScrollArea):
@@ -388,7 +396,8 @@ class MainWindow(QMainWindow):
 
         # Normalization type row
         self.cmb_norm_type = QComboBox()
-        self.cmb_norm_type.addItems(["Number of seconds", "Pulsation lower level"])
+        self.cmb_norm_type.addItems([NORM_TYPE_LABELS["seconds"],
+                                     NORM_TYPE_LABELS["pulsation"]])
         self.spn_norm_seconds = QSpinBox()
         self.spn_norm_seconds.setRange(1, 60)
         self.spn_norm_seconds.setValue(5)
@@ -1265,7 +1274,7 @@ class MainWindow(QMainWindow):
 
         # Whatever else happens below, the session ends with the curve fully
         # drawn: up to a second of points can still be sitting in the plot's
-        # buffer, and task 12 saves this figure to a file.
+        # buffer, and the operator looks at this curve once the run ends.
         self.plot_widget.render_now()
 
         if not self._bfi_norm or not self._bfi_norm_buffer:
@@ -1357,34 +1366,40 @@ class MainWindow(QMainWindow):
         )
 
     # `session_tab` names this file `rBfi_fig.fig` — MATLAB's own figure format,
-    # which Python cannot write. PNG is the equivalent now that the tool is
-    # Python, and nothing is lost by it: `timeVec` and `rBFi` are in the
-    # results file beside it, so a real .fig can still be rebuilt in MATLAB
-    # from the same session. Pending confirmation (question 7 for the
-    # supervisor); changing the extension later is a one-line change.
+    # which Python cannot write. The supervisor accepted PNG as a first version
+    # (open question 7, answered 2026-10-07); a figure that can be reopened and
+    # zoomed in Python is todo F5. `timeVec`, `rBFi` and `Intensity` are in the
+    # results file beside it, so the figure can always be redrawn from them.
     FIGURE_FILENAME = "rBfi_fig.png"
 
     def _save_plot_figure(self) -> None:
-        """Write the finished curve to a PNG beside the results file.
+        """Write the session figure beside the results file (protocol 6g, U5).
 
-        Runs at FINISHED, after `_finalize_normalization()` — so the figure
-        shows the curve against the constant that was actually saved, not the
-        provisional one it was drawn with while the session ran.
+        rBFi and <I> against time, stacked, plus a box with the parameters
+        used — all read back from the results file (core/results_figure.py),
+        so the figure shows exactly what was saved. Runs at FINISHED, after
+        `_write_rbfi()` has written the final rBFi and while the recorder still
+        holds the file open: it reads through that same handle.
 
         A figure is a convenience; the data is not. Every failure here is
         logged and swallowed, because nothing about a missing PNG justifies
         interrupting the close of a session whose HDF5 is already on disk.
         """
-        if self._session_folder is None:
+        if self._session_folder is None or self._recorder is None:
             return
         path = self._session_folder / self.FIGURE_FILENAME
         try:
-            n = self.plot_widget.save_png(path)
+            self._recorder.flush()
+            n = save_results_figure(
+                self._recorder.file, path,
+                calibration_path = self._session_folder / CALIBRATION_FILENAME,
+                title            = self._session_folder.name,
+            )
         except Exception:
             logger.exception("Could not save the plot figure to %s", path)
             return
         if n == 0:
-            logger.info("No curve to save — figure not written")
+            logger.info("No rBFi to draw — figure not written")
             return
         logger.info("Plot figure saved — %d points → %s", n, path)
 
@@ -1449,6 +1464,18 @@ class MainWindow(QMainWindow):
         except Exception:
             # Never let the finalization step lose the data already on disk.
             logger.exception("Could not write rBFi; raw BFi is still in the file")
+            return
+        # The GUI's "Norm. type" that produced the method above (user's
+        # decision, 2026-10-10): `normalizationMethod` alone does not say
+        # whether percentile5 was forced by "Pulsation lower level" or picked
+        # for a short recording under "Number of seconds". The box is locked
+        # during a measurement, so this is the type the whole run used.
+        # metadata, not Params: Params is exactly the supervisor's ten fields.
+        try:
+            self._recorder.set_metadata(
+                normalization_type=NORM_TYPE_LABELS[self._norm_type])
+        except Exception:
+            logger.exception("Could not write the normalization type")
 
     def _stop_recorder(self) -> None:
         if self._recorder is None:

@@ -260,6 +260,17 @@ class HDF5Recorder:
         return self._path
 
     @property
+    def file(self) -> h5py.File:
+        """The open results file, for reading back what was written.
+
+        The session figure is drawn from it before close (core/results_figure.py):
+        opening the same path a second time while this handle is open in "w"
+        mode can fail on HDF5's file lock. Read only — writes go through the
+        methods above. Call flush() first if buffered rows matter.
+        """
+        return self._f
+
+    @property
     def n_points(self) -> int:
         return self._n_flushed + len(self._buf_t)
 

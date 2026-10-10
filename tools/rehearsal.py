@@ -70,7 +70,8 @@ RESULTS_GROUPS   = {"Params", "metadata"}
 # Engineering provenance: four written when the recorder opens
 # (MainWindow._start_recorder), three at close (_write_frame_accounting).
 METADATA_FIELDS  = {"camera_sn", "camera_model", "gain_du_per_e", "gain_source",
-                    "time_source", "frames_lost_camera", "frames_dropped_queue"}
+                    "time_source", "frames_lost_camera", "frames_dropped_queue",
+                    "normalization_type"}
 SESSION_FILES    = {"Calibration.h5", "rBfi_results.h5", "rBfi_fig.png"}
 # How long preview keeps playing after Stop SCOS before Stop Video, so the K1
 # check sees displayed frames arrive after the closing message.
@@ -1146,6 +1147,12 @@ def verify_outputs(run: Run, folder: Path | None, w, cam, args,
             g_file, g_gui = float(meta["gain_du_per_e"]), float(w.processor.gain_du_per_e)
             run.check(g_file > 0 and np.isclose(g_file, g_gui, rtol=1e-12),
                       f"metadata.gain_du_per_e = {g_file:.6g} (processor {g_gui:.6g})")
+        if "normalization_type" in meta:
+            from gui.main_window import NORM_TYPE_LABELS
+            expected_type = NORM_TYPE_LABELS[w._norm_type]
+            run.check(str(meta["normalization_type"]) == expected_type,
+                      f"metadata.normalization_type = {meta['normalization_type']!r} "
+                      f"(GUI {expected_type!r})")
         if "time_source" in meta:
             expected_src = str(getattr(cam, "time_source", "pc"))
             run.check(str(meta["time_source"]) == expected_src,

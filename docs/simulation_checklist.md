@@ -127,7 +127,7 @@ in the repo folder also has it: search "Session folder created".
 |---|---|---|
 | ☐ C1 | Folder name | `test_run__1_<YYYYMMDD>_<HHMMSS>` — the colon and each space became an underscore (hence the double one), timestamp always added |
 | ☐ C2 | Files | exactly **`Calibration.h5`** (≈ 23 MB here — 1216 × 1936 arrays; much smaller on the 700 × 700 rig camera), **`rBfi_results.h5`** (tens of kB), **`rBfi_fig.png`** |
-| ☐ C3 | `rBfi_fig.png` | Opens; shows the same curve as the plot, x-axis in minutes for a run over 2 min |
+| ☐ C3 | `rBfi_fig.png` | Opens; rBFi on top (the same curve as the plot) and ⟨I⟩ below, each with its own axes; a Parameters box on the right with the session's settings (no "—" when both calibrations ran); x-axis in minutes for a run over 2 min |
 | ☐ C4 | `rBfi_results.h5` (open with HDFView, or ask Claude to print it) | datasets `startTime`, `timeVec`, `rBFi`, `Intensity`, `k2_raw`, `k2_corr`, `bfi`, groups `Params` and `metadata`. `Params` has ten fields: frameRate 40, exposureTime 5, gain 24, windowSize 7, ROI, bitDepth 10, normalizationConstant, normalizationMethod, normalizationWindowSec, gitCommit. **No `satCapacity` anywhere.** |
 | ☐ C5 | Normalization | Run **over 2 min** → `normalizationMethod` = `mean` and rBFi hovers around **1**. (A run **under** 2 min uses `percentile5` instead, so rBFi sits mostly **above 1** — 1.64 on average in the 10-s headless run. Both are MATLAB's rule, `SCOSvsTime_WithNoiseSubtraction_Ver2.m:505`.) |
 | ☐ C6 | `Calibration.h5` | groups **`dark`** (`mean_dark` ≈ 99.3 DU, `var_dark`, `mask`) and **`bright`** (`spIm` ≈ 22 DU inside the ROI, `spVar` ≈ 0.5 with 600 frames / ≈ 1.2 with 60), each with `n_frames` = your frame count |

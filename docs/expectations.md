@@ -165,7 +165,7 @@ from the start of the run for the whole recording (your answer to question 15).
 |---|---|
 | `rBfi_results.h5` | `startTime`, `timeVec`, `rBFi`, `Intensity` (mean over the ROI, DU), `Params`, and also `k2_raw`, `k2_corr`, `bfi`. About 3.5 MB per hour. |
 | `Calibration.h5` | one file, two groups: `dark` (`mean_dark`, `var_dark`, `mask`) and `bright` (`spIm`, `spVar`), each with `n_frames`. ≤ 10 MB at 700 × 700. |
-| `rBfi_fig.png` | the plot as it was at the end (PNG for now — an interactive version is on the list, your answer to question 7). |
+| `rBfi_fig.png` | rBFi vs time on top and <I> vs time below (two separate plots), with a box of the parameters used — drawn from the results file, so it shows exactly what was saved. PNG for now; an interactive version is on the list (your answer to question 7). |
 
 `Params` has ten fields: `frameRate`, `exposureTime`, `gain`, `windowSize`, `ROI`,
 `bitDepth`, `normalizationConstant`, `normalizationMethod`, `normalizationWindowSec`,
@@ -180,6 +180,7 @@ anywhere.**
 | **`time_source`** | **`camera`** — each `timeVec` value is the camera's own hardware timestamp at the start of exposure. **`pc`** — the PC clock when the frame was retrieved. The camera clock is used only after it has agreed with the PC clock within 1 % over the first 5 s; otherwise the app stays on the PC clock and logs why. Both are valid; `camera` is more exact under load. |
 | **`frames_lost_camera`** | frames the camera took that never reached the PC (the "lost at camera" count) |
 | **`frames_dropped_queue`** | frames that reached the PC but were not processed (the "Dropped" count) |
+| **`normalization_type`** | the "Norm. type" chosen in the app for this run: `Number of seconds` or `Pulsation lower level`. `Params.normalizationMethod` says which statistic divided the data (`mean` or `percentile5`); this says why — a short recording gets `percentile5` under either type. Absent when no rBFi was written. |
 
 Both counts are from Start SCOS and should be **0**. If not, `timeVec` still has the true
 time of every frame that *was* processed, so the gaps are visible in the data rather than

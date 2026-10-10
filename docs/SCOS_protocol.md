@@ -68,7 +68,7 @@ End when “Stop SCOS” is pressed or when time’s up. I suppose that some lim
 Save  into .h5  file “rBFi_resultsAndParameters” : rBFi , <I> ,time vectors and all the parameters used. (TBD)
 *[As implemented: the app writes `rBfi_results.h5` (not “rBFi_resultsAndParameters”) with `rBFi`, `Intensity` (<I>), `timeVec`, `startTime`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group; the calibration goes to `Calibration.h5`.]*
 Create a figure with two axes:  rBfi vs time  and <I> vs time. Add text box with all parameters used.  save into figure file (in python format). (TBD)
-*[As implemented: `rBfi_fig.png` shows rBFi only. The <I> plot and the parameters box are todo U5; the reopenable “python format” figure is todo F5.]*
+*[As implemented (todo U5, 2026-10-10): `rBfi_fig.png` — rBFi on top and <I> below, two separate plots, each with its own axes, and a box with the parameters the results files record. Drawn from the results file. The reopenable “python format” figure is todo F5.]*
 
 
 Link to Recording:    T2_short_40Hz

@@ -334,6 +334,51 @@ class TestResultsFileGetsTheFinalValues:
                                        rtol=1e-9)
 
 
+class TestResultsFileRecordsTheNormType:
+    """metadata.normalization_type — the GUI's "Norm. type" the run used
+    (user's decision, 2026-10-10). Both types end on percentile5 for a short
+    recording, so `normalizationMethod` alone cannot tell them apart."""
+
+    @pytest.mark.parametrize("norm_type, label", [
+        ("seconds",   "Number of seconds"),
+        ("pulsation", "Pulsation lower level"),
+    ])
+    def test_the_type_used_is_saved_in_metadata(self, window, dialogs, tmp_path,
+                                                norm_type, label):
+        import h5py
+
+        window._norm_type = norm_type
+        _run(window, 20.0)
+        window._finish_session()
+        window._stop_recorder()
+
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert f["metadata"].attrs["normalization_type"] == label
+            assert f["Params"].attrs["normalizationMethod"] == NORM_METHOD_PERCENTILE
+            assert "normalization_type" not in f["Params"].attrs, (
+                "Params holds exactly the supervisor's ten fields")
+
+    def test_it_matches_the_wording_in_the_gui(self, window):
+        # What the operator saw is what the file says.
+        from gui.main_window import NORM_TYPE_LABELS
+        for index in range(window.cmb_norm_type.count()):
+            window.cmb_norm_type.setCurrentIndex(index)
+            assert (NORM_TYPE_LABELS[window._norm_type]
+                    == window.cmb_norm_type.currentText())
+
+    def test_no_rbfi_means_no_type_recorded(self, window, dialogs, tmp_path):
+        import h5py
+
+        # Nothing was normalized, so no type was used.
+        for i in range(20):
+            window._on_scos_result(i / 40.0, 0.09, -0.003, 500.0, 1.0)
+        window._finish_session()
+        window._stop_recorder()
+
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            assert "normalization_type" not in f["metadata"].attrs
+
+
 class TestEarlyStop:
     """Stopped before the baseline window closed — open question 11.
 
