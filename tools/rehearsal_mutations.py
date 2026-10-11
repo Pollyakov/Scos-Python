@@ -46,6 +46,24 @@ Rig prep 4a — status-bar messages that must stay on screen:
            status bar 3 s after Stop SCOS" and "overload warning still on the
            status bar 3 s after it fired"
 
+U6 — the camera-side crop (these add --cut; measured 2026-10-11 with
+--cal-frames 60):
+  cut-offset   the ROI mask of a cropped frame built as if the crop started
+           at sensor pixel (0, 0). Run it WITHOUT --cut-radius: the Mask.mat
+           circle's crop starts at x = 284, so the wrong mask is shifted but
+           not empty — the silent case, κ²_corr still positive (0.0071) →
+           "Calibration.h5 mask = the ROI circle in the crop" (1 535 319 px,
+           expected 1 872 352). With --cut-radius 150 the circle falls wholly
+           outside the 354 × 354 crop and every frame raises instead.
+  cut-skip     frames of the old size, still queued after Cut, are not
+           skipped and reset the mask to the whole frame (plan pitfall P1)
+           → "Calibration.h5 mask = the ROI circle in the crop" (125 316 px,
+           expected 70 681; --cut-radius 150)
+  cut-stale-bright  the full-size bright_var auto-loaded before Start SCOS
+           is put back after the bright calibration: right shape after
+           slicing, wrong pixels, no error → "processor.bright_var is
+           (1216, 1936), the frames' size (354, 354)" (--cut-radius 150)
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -63,7 +81,10 @@ sys.path.insert(0, str(_REPO / "tools"))
 MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "leak": "slowdown", "never-rearm": "recovery",
              "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown",
-             "frame-text": "slowdown"}
+             "frame-text": "slowdown",
+             "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal"}
+# These test the crop, so they always run with --cut.
+NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright"}
 
 
 def apply(mutation: str) -> None:
@@ -150,6 +171,40 @@ def apply(mutation: str) -> None:
                 self.status.showMessage(f"Frame #{self._frame_count}")
         MainWindow._on_display_frame = _on_display_frame
 
+    elif mutation == "cut-offset":
+        from core.crop import circle_mask
+        from gui.image_widget import ImageWidget
+        ImageWidget._make_mask = staticmethod(
+            lambda shape, circ, offset=(0, 0): circle_mask(tuple(shape), circ))
+
+    elif mutation == "cut-skip":
+        from gui.main_window import MainWindow
+        original = MainWindow._on_scos_frame
+
+        def _on_scos_frame(self, frame, t_capture):
+            crop, self._camera_crop = self._camera_crop, None   # no size check
+            try:
+                original(self, frame, t_capture)
+            finally:
+                self._camera_crop = crop
+        MainWindow._on_scos_frame = _on_scos_frame
+
+    elif mutation == "cut-stale-bright":
+        from gui.main_window import MainWindow
+        original_start, original_finish = MainWindow._start_dark_cal, MainWindow._finish_bright_cal
+
+        def _start_dark_cal(self):
+            self._stale_bright_var = self.processor.bright_var   # the auto-loaded one
+            return original_start(self)
+
+        def _finish_bright_cal(self):
+            original_finish(self)
+            if getattr(self, "_stale_bright_var", None) is not None:
+                self.processor.bright_var = self._stale_bright_var
+                self.processor.set_roi(self._mask)
+        MainWindow._start_dark_cal = _start_dark_cal
+        MainWindow._finish_bright_cal = _finish_bright_cal
+
 
 def main() -> int:
     # The Windows console (and a pipe) defaults to cp1252, which has no → or —.
@@ -162,6 +217,8 @@ def main() -> int:
     mutation, rest = sys.argv[1], sys.argv[2:]
     if "--scenario" not in rest:
         rest = ["--scenario", MUTATIONS[mutation], *rest]
+    if mutation in NEEDS_CUT and "--cut" not in rest:
+        rest = ["--cut", *rest]
     apply(mutation)
     import rehearsal
     sys.argv = ["rehearsal.py", *rest]

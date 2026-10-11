@@ -13,6 +13,8 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario normal --measure-seconds 30
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario slowdown --cal-frames 60
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario recovery --cal-frames 60
+    venv\\Scripts\\python.exe tools/rehearsal.py --cut                   # camera-side crop
+    venv\\Scripts\\python.exe tools/rehearsal.py --cut --cut-radius 150 --cal-frames 60
 
 What it can NOT test: the real modal dialogs. Every QMessageBox / QFileDialog
 call, and every hand-built QDialog's exec() (the laser-safety windows,
@@ -33,6 +35,12 @@ Scenarios (--scenario) are sets of hooks around the same session; see
 SCENARIOS at the bottom: `normal` (3a), `slowdown` (3b, see Slowdown) and
 `recovery` (3c, see Recovery). Every scenario ends with the same file checks,
 verify_outputs (3e). (3d, the compressed long run, is postponed.)
+
+--cut (todo U6, plan step 6) works with any scenario: before Start SCOS it
+clicks "Cut Image", so the camera — here the playback source — sends only the
+area around the ROI circle, and the whole session runs on cropped frames.
+Without it a session runs on the full frame, as an operator who never clicks
+Cut does. See cut_image() and check_cut().
 """
 
 import argparse
@@ -113,6 +121,12 @@ class Run:
     closing_message:  str              = ""   # status bar right after Stop SCOS
     closing_later:    str              = ""   # ... and CLOSING_HOLD_S later
     display_frames_after_stop: int     = 0
+    # Taken once the measurement has started (state MEASURING): what the
+    # processor and the controls held then — see snapshot_measuring().
+    at_measuring: dict                 = field(default_factory=dict)
+    # --cut: the circle that was cut around, and the crop the camera reported.
+    cut_circle: dict | None            = None
+    cut_crop:   object                 = None
     failures:   list[str]              = field(default_factory=list)
 
     def check(self, ok: bool, what: str) -> bool:
@@ -802,6 +816,123 @@ SCENARIOS: dict[str, Scenario] = {
 
 
 # ---------------------------------------------------------------------------
+# Camera-side crop (--cut, todo U6)
+# ---------------------------------------------------------------------------
+
+def cut_image(w, args, run: Run, pump) -> None:
+    """Click "Cut Image" the way the operator does — after the ROI is set
+    and before Start SCOS — and wait until a cropped frame is on screen.
+
+    The circle is the recording's Mask.mat circle, loaded with the folder
+    calibration. It touches the top and bottom of the sensor, so its crop
+    starts at row 0; --cut-radius shrinks it around the same centre to give a
+    crop with both offsets non-zero.
+    """
+    iw = w.image_widget
+    circ = iw.roi_circle
+    if circ is None:
+        raise RuntimeError("--cut: no ROI circle to cut around (no Mask.mat?)")
+    if args.cut_radius is not None:
+        iw.set_roi_circle(circ["cx"], circ["cy"], args.cut_radius)
+    run.cut_circle = dict(iw.roi_circle)
+    if not iw.btn_cut_image.isEnabled():
+        raise RuntimeError("--cut: the Cut Image button is disabled")
+    print("Cut Image")
+    iw.btn_cut_image.click()
+    crop = w._camera_crop
+    run.cut_crop = crop
+    print(f"  camera image area {crop.width} × {crop.height} at "
+          f"({crop.offset_x}, {crop.offset_y}) of {crop.sensor_width} × {crop.sensor_height}")
+    pump(lambda: getattr(iw, "_frame", None) is not None and iw._frame.shape == crop.shape,
+         60, "first cropped frame on screen")
+
+
+def snapshot_measuring(w, run: Run) -> None:
+    """What the run is measuring with, taken just after MEASURING began.
+
+    processor.set_roi() slices dark_mean, dark_var and bright_var with the
+    crop's coordinates, so a full-size array left over from before the cut
+    (the folder auto-load, or on the rig an earlier uncut run) would be read
+    in the wrong place without any error. All three must have the size of the
+    frames the camera sends now (plan 6, noted at step 5).
+    """
+    crop = w._camera_crop
+    p = w.processor
+    run.at_measuring = {
+        "frame_shape": tuple(crop.shape) if crop is not None else None,
+        "arrays": {n: (None if getattr(p, n, None) is None else tuple(getattr(p, n).shape))
+                   for n in ("dark_mean", "dark_var", "bright_var")},
+        "mask": None if w._mask is None else tuple(w._mask.shape),
+        "cut_enabled": w.image_widget.btn_cut_image.isEnabled(),
+        "roi_enabled": w.image_widget.btn_draw_roi.isEnabled(),
+    }
+
+
+def check_measuring(run: Run) -> None:
+    """Every run, cut or not: the calibration in use fits the frames, and
+    nothing that would change the image area is clickable mid-run."""
+    m = run.at_measuring
+    print("\nChecks — while measuring")
+    if not run.check(bool(m) and m["frame_shape"] is not None,
+                     "the camera's image area was known when the measurement began"):
+        return
+    shape = m["frame_shape"]
+    for name, got in m["arrays"].items():
+        run.check(got == shape, f"processor.{name} is {got}, the frames' size {shape}")
+    run.check(m["mask"] == shape, f"ROI mask is {m['mask']}, the frames' size {shape}")
+    run.check(not m["cut_enabled"] and not m["roi_enabled"],
+              "Cut/Full Image and the ROI buttons locked during the measurement "
+              f"(cut {'enabled' if m['cut_enabled'] else 'locked'}, "
+              f"ROI {'enabled' if m['roi_enabled'] else 'locked'})")
+
+
+def check_cut(w, cam, run: Run, folder: Path | None) -> None:
+    """--cut only: the crop is the one asked for, the session used it from
+    the first dark frame to the last measured one, and the mask is the
+    circle in the crop with no pixel of it lost."""
+    import h5py
+    import numpy as np
+    from core.crop import CROP_MARGIN_PX, circle_mask, crop_for_circle
+
+    print("\nChecks — camera-side crop (--cut)")
+    crop, circ = run.cut_crop, run.cut_circle
+    if not run.check(crop is not None and not crop.is_full_sensor,
+                     f"the camera sent a crop, not the full sensor ({crop})"):
+        return
+    want = crop_for_circle(circ["cx"], circ["cy"], circ["r"],
+                           crop.sensor_width, crop.sensor_height, cam.camera_steps())
+    run.check(crop == want, f"crop = circle + {CROP_MARGIN_PX} px, rounded to the "
+                            f"camera's steps ({want})")
+    run.check(w._camera_crop == crop and tuple(cam.applied_crop.shape) == crop.shape,
+              "still cut after the run, with the same crop")
+    run.check(w.image_widget.roi_circle == circ,
+              f"ROI circle unchanged by the cut, in sensor coordinates ({circ})")
+    run.check(run.at_measuring.get("frame_shape") == crop.shape,
+              f"measured on {crop.width} × {crop.height} frames")
+    if folder is None or not (folder / "Calibration.h5").exists():
+        return
+    with h5py.File(folder / "Calibration.h5", "r") as f:
+        if not run.check("dark/mask" in f, "Calibration.h5 has dark/mask"):
+            return
+        mask = f["dark/mask"][:].astype(bool)
+        shapes = {n: f[n].shape for n in ("dark/mean_dark", "dark/var_dark",
+                                          "bright/spIm", "bright/spVar") if n in f}
+    run.check(all(s == crop.shape for s in shapes.values()) and len(shapes) == 4,
+              f"every calibration array is {crop.shape} ({shapes})")
+    expected = circle_mask(crop.shape, circ, (crop.offset_x, crop.offset_y))
+    run.check(mask.shape == expected.shape and bool((mask == expected).all()),
+              f"Calibration.h5 mask = the ROI circle in the crop "
+              f"({int(mask.sum())} px, expected {int(expected.sum())})")
+    full = circle_mask((crop.sensor_height, crop.sensor_width), circ)
+    run.check(int(expected.sum()) == int(full.sum()),
+              f"no pixel of the circle outside the crop ({int(full.sum())} on the sensor)")
+    skipped = [l for l in _log_text().splitlines() if "of the previous image size" in l]
+    print(f"       old-size frames skipped after Cut: "
+          f"{skipped[-1].split('Skipped ')[-1] if skipped else 'none queued'}")
+
+
+
+# ---------------------------------------------------------------------------
 # The rehearsal
 # ---------------------------------------------------------------------------
 
@@ -881,6 +1012,8 @@ def rehearse(args, run: Run) -> Path | None:
         w.btn_start_video.setChecked(True)
         pump(lambda: w.btn_start_scos.isEnabled(), 300, "folder calibration loaded")
 
+        if args.cut:
+            cut_image(w, args, run, pump)
         scenario.before_start(w, cam, args)
 
         # startTime is written when the recorder opens, a few seconds after
@@ -894,6 +1027,7 @@ def rehearse(args, run: Run) -> Path | None:
              cal_timeout, "bright calibration finished")
         pump(lambda: w._state is State.MEASURING,
              args.norm_seconds * 10 + 60, "normalization finished")
+        snapshot_measuring(w, run)
         folder = w._session_folder
 
         dark_du  = float(np.mean(w.processor.dark_mean))
@@ -953,8 +1087,11 @@ def rehearse(args, run: Run) -> Path | None:
                   f"closing message still on the status bar {CLOSING_HOLD_S:.0f} s "
                   f"after Stop SCOS, over {run.display_frames_after_stop} displayed "
                   f"frame(s) (K1; now {run.closing_later!r})")
+        check_measuring(run)
         verify_outputs(run, folder, w, cam, args, wall_start)
         scenario.extra_checks(w, run, folder, args)
+        if args.cut:
+            check_cut(w, cam, run, folder)
     finally:
         w.close()
         app.processEvents()
@@ -1198,6 +1335,12 @@ def main() -> int:
                     help="normalization window, s (default 3)")
     ap.add_argument("--measure-seconds", type=float, default=10.0,
                     help="measurement length after normalization, s of timeVec (default 10)")
+    ap.add_argument("--cut", action="store_true",
+                    help="click Cut Image before Start SCOS: the whole session runs on "
+                         "frames cropped around the ROI circle (todo U6)")
+    ap.add_argument("--cut-radius", type=float, default=None,
+                    help="with --cut: shrink the Mask.mat circle to this radius (px) "
+                         "around the same centre first, e.g. 150")
     ap.add_argument("--timeout", type=float, default=1200.0,
                     help="watchdog: dump all stacks and exit after this many s (default 1200)")
     args = ap.parse_args()
@@ -1206,6 +1349,8 @@ def main() -> int:
         ap.error("--measure-seconds must be longer than --norm-seconds")
     if not args.recording.is_dir():
         ap.error(f"recording folder not found: {args.recording}")
+    if args.cut_radius is not None and not args.cut:
+        ap.error("--cut-radius needs --cut")
 
     out = args.out or Path(tempfile.mkdtemp(prefix="scos_rehearsal_"))
     if out.exists() and any(out.iterdir()):
@@ -1242,6 +1387,10 @@ def main() -> int:
     faulthandler.dump_traceback_later(args.timeout, exit=True)
 
     print(f"scenario  : {args.scenario} — {SCENARIOS[args.scenario].description}")
+    if args.cut:
+        print(f"cut       : Cut Image before Start SCOS"
+              + (f", circle radius {args.cut_radius:g} px" if args.cut_radius else
+                 ", the recording's Mask.mat circle"))
     print(f"recording : {args.recording}")
     print(f"output    : {out}")
     print(f"log       : {log_path}\n")
