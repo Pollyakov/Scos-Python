@@ -384,6 +384,23 @@ class TestCameraCrop:
         applied = cam.set_roi(760, 402, 412, 412)
         assert applied.width == 408
 
+    @pytest.mark.parametrize("restart", [
+        lambda cam: cam.set_trigger(False),        # the dark calibration's switch
+        lambda cam: cam.set_trigger(True),         # and back after it
+        lambda cam: cam.set_pixel_format("Mono12"),
+    ])
+    def test_the_crop_survives_every_other_restart(self, restart):
+        # The dark calibration turns the trigger off and on again, and each
+        # change restarts grabbing. If a restart dropped the crop, the camera
+        # would send full frames that the window skips as the wrong size, and
+        # the calibration would never finish.
+        cam, _ = _crop_thread(grabbing=True)
+        cut = cam.set_roi(760, 402, 412, 412)
+        restart(cam)
+        assert cam.camera.calls == ["stop", "start", "stop", "start"]
+        assert cam.applied_crop == cut
+        assert (cam.camera.Width.Value, cam.camera.Height.Value) == (412, 412)
+
     def test_old_camera_centering_switch_is_turned_off(self):
         cam, _ = _crop_thread(center=True)
         cam.set_roi(760, 402, 412, 412)

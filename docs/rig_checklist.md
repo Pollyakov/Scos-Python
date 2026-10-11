@@ -15,7 +15,9 @@ doesn't match, the checklist may be wrong rather than the app. Note it either wa
 Expected values are for the lab camera's default settings — **Mono12, 8 ms exposure, 8 dB,
 20 Hz, Window Size 7, Dark/Bright Frames 600**, and the rig camera's full frame, **1216 × 1936**
 (rows × columns; 700 × 700 until 2026-10-08, when the rig camera turned out to send its full
-sensor — the camera-side crop is todo U6) — unless a step says otherwise.
+sensor) — unless a step says otherwise. Since 2026-10-11 **Cut Image** makes the camera send
+only a rectangle around the ROI circle (todo U6); R2g checks it, and from then on the frames
+are that size.
 
 > **`app.log` is overwritten every time the app starts** (`main.py:28`, `mode="w"`). It is
 > written to the folder you launched from — the repo folder if you follow the commands
@@ -73,7 +75,9 @@ the way the checklist says · ➖ not done
 
 **Still to do on the rig:** R1b, R1f, R3d, a run of several minutes (R6a), the laser-off
 check with the laser really off (R6b), R7, and — with the current code — confirm the camera's
-frame numbers (`BlockID`) count 0, 1, 2, … without the false warning.
+frame numbers (`BlockID`) count 0, 1, 2, … without the false warning. **New since then:** the
+camera-side crop, R2g–R2h and R6f (todo U6, written 2026-10-11 — never run on the real camera;
+the pylon emulator and the playback rehearsal are all it has seen).
 
 ---
 
@@ -108,6 +112,8 @@ frame numbers (`BlockID`) count 0, 1, 2, … without the false warning.
 | ☐ R2d | **About 5 s after** Start Video (the check needs 5 s of frames), open `app.log` and search "Camera clock" | **`Camera clock accepted — … MHz ticks agree with the PC clock`** (todo D5: the app then stamps each frame with the camera's own exposure time instead of the PC's arrival time) | **`Camera clock not used — <reason>`** → the session is still valid (PC timestamps, as before 2026-10-07), but copy the reason |
 | ☐ R2e | Watch FPS and the status bar for a minute | FPS steady ≈ 20; **no** "Camera: N frame(s) lost" warning | "Camera: N frame(s) lost — Pylon buffers full or transfer failed (M since Start Video)" in preview already → cable / network adapter / PC load; note N and M |
 | ☐ R2f | Set the ROI: **Auto ROI** or **Draw ROI** (drag and resize the circle) | The ROI label shows `cx=… cy=… r=…`; ⟨I⟩ updates | |
+| ☐ R2g | Click **Cut Image** (todo U6: the camera itself now sends only the circle plus 26 px on every side) | The image shows **only the area around the circle**, drawn where it was; the button now reads **Full Image**; the Info label reads **`Size : W×H of 1936×1216`** — for the ROI of 2026-10-08 (r ≈ 280) about **611 × 611** (computed from that ROI; a camera that needs steps of 4 makes it 612 × 612). The ROI circle and the ROI buttons are locked. `app.log`: **"Cut Image — asking the camera for W × H at (x, y)"**, then **"Camera image area: W × H at (x, y) of the 1936 × 1216 sensor"** — the second is what the camera really uses; if its numbers differ from the first, the camera rounded them (fine, the app follows the camera). About 5 s later a new **"Camera clock accepted"** (the crop restarts grabbing). **FPS stays ≈ 20.** | "**Camera refused the image crop** … using the full sensor" in a warning / `app.log` → copy the line; the session can still run uncut. "The camera kept the full image" in the status bar → same. FPS drops after the cut → note it |
+| ☐ R2h | Click **Full Image**, then **Cut Image** again | Full: the whole sensor again, `Size : 1936×1216`, ROI unlocked; Cut: the same crop as in R2g | |
 
 ### R3 · External trigger and the Arduino
 
@@ -149,7 +155,8 @@ The order is the protocol's (`SCOS_protocol.md:11-17`) and is asserted by a test
 | ☐ R6b | **Stop SCOS** → "Measurement Ended — Please turn off the laser." Turn it off, OK | No warning; status bar **"Session finished → <folder>"**; then the **green** window **"Laser is off — you may remove the probe"** (since 2026-10-09): check the laser's red indicator light is not lit, remove the probe by pulling the rubber strap backwards, OK | The **red "LASER MAY STILL BE ON"** window → is it? **Check again** measures again; **Continue anyway** keeps the data and is followed by a red "do NOT remove the probe yet" window. An **amber** "could not run" window → copy the closing status message |
 | ☐ R6c | **Copy `app.log`** into the session folder | — | |
 | ☐ R6d | Check the results file (or ask Claude to): `venv\Scripts\python.exe -c "import h5py,numpy as np,sys; f=h5py.File(sys.argv[1]); print(dict(f['metadata'].attrs)); t=f['timeVec'][()].ravel(); d=np.diff(t)*1000; print(t.size,'frames; dt ms median %.2f min %.2f max %.2f' % (np.median(d), d.min(), d.max()))" "<session folder>\rBFi_resultsAndParameters.h5"` | In `metadata`: **`time_source = camera`**, **`frames_lost_camera = 0`**, **`frames_dropped_queue = 0`** (both counted from Start SCOS), and `camera_sn` = your camera. Time steps: **median ≈ 50 ms**, min and max close to 50 ms | `time_source = pc` → R2d said why. Any lost/dropped > 0, or a max step of 100, 150 ms… → frames went missing; note the numbers |
-| ☐ R6e | Folder contents | `Calibration.h5` (≈ 25 MB at 1216 × 1936 — 24.4 MB on 2026-10-08), `rBFi_resultsAndParameters.h5` (`rBfi_results.h5` before 2026-10-11; ≈ 3.5 MB per hour, an estimate not yet checked on a long run; 116 KB for 65 s on 2026-10-08), `rBfi_fig.png` | |
+| ☐ R6e | Folder contents | `Calibration.h5` (≈ 25 MB at 1216 × 1936 — 24.4 MB on 2026-10-08; **much smaller when cut** — it scales with the crop's area, so ≈ 4 MB for a 611 × 611 crop, estimated from the area), `rBFi_resultsAndParameters.h5` (`rBfi_results.h5` before 2026-10-11; ≈ 3.5 MB per hour, an estimate not yet checked on a long run; 116 KB for 65 s on 2026-10-08), `rBfi_fig.png` | |
+| ☐ R6f | *(Only if R2g was used.)* Compare the session's **κ²_corr** with the uncut session of 2026-10-08 (mean 0.0081, same subject and settings) | Same range. The crop itself does not change κ² (`tests/test_crop_accuracy_offline.py`: identical over the same ROI), but two runs never measure the same frames — two uncut playback runs differed by 3 %. A different subject, probe placement or ROI changes it more | Far outside (e.g. 2× or ½×) → copy both numbers and the ROI of each session |
 
 ### R7 · Deliberate overload — **last, on a throwaway session**
 

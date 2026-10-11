@@ -51,8 +51,8 @@ Anything that does not match — even if it looks harmless — goes into step 4.
   | 600 | ≈ 15–70 s each | dark ≈ 69 s, bright ≈ 41 s |
 
   While it runs, the "Dark cal: n / 600" counter may climb slowly (≈ 9 per second for
-  dark on the dev PC) — that is the PC, not a hang. On the rig (700 × 700 at 20 Hz)
-  600 frames should take about 30 s each.
+  dark on the dev PC) — that is the PC, not a hang. On the rig (full 1216 × 1936 frames at
+  20 Hz) 600 frames took 30 s each on 2026-10-08 — the PC kept up.
 
 ### Three things that look wrong but are normal
 
@@ -113,7 +113,7 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser. Keep the subject in the measurement area. … The measurement starts automatically when this calibration ends." Click **OK**. | |
 | ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **hundreds or thousands** (1555 with 600 frames on the dev PC) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |
-| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig's 700 × 700 is ≈ 5× lighter), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled… (at HH:MM:SS)"**. It stays until another message replaces it — it is the record of an event at that time, not the current state (K4, fixed 2026-10-07). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
+| ☐ B8 | Watch | Label **"Normalized ✓"**. The plot fills in, including the first 5 s. **κ², always positive: ≈ 0.0085 with 600 frames (1/κ² ≈ 115–120), ≈ 0.0070–0.0076 with 60 (1/κ² ≈ 130–145)** — see "normal" item 3. **"Dropped: 0".** This PC cannot process 2.4-Mpx frames at 40 Hz (the rig sends the same size at 20 Hz — half this work per second; after Cut Image, section H, far less), so expect **FPS roughly 15–25 instead of 40**. How far below 40 depends on this PC's load and the Workers setting: ≈ 21 was measured headless with 3 workers, and real windows drawing the image and plot can pull it lower. Also expect, about 1½ s into normalization, a status-bar message **"SCOS overload — input queue 16/20 full; camera capture is being throttled… (at HH:MM:SS)"**. It stays until another message replaces it — it is the record of an event at that time, not the current state (K4, fixed 2026-10-07). That is the design working: the playback is slowed down rather than frames being thrown away (measured in rig prep 3b). | A **"Corrected κ² Is Negative"** error → the dark calibration saw light (B4 failed). **"Dropped" above 0** → something stalled processing for over 1½ s; note the number and the time |
 | ☐ B9 | Let it run **at least 2½ minutes** | When the recording passes **120 s**, the plot's x-axis switches from **seconds to minutes** | |
 | ☐ B10 | Click **Stop SCOS** | Pop-up **"Measurement Ended — Please turn off the laser."** Click **OK**. Playback switches to the dark folder for one frame to check the laser went off; in playback that check **passes** (no red warning). Once the session is saved, the **green** window **"Laser is off — you may remove the probe"** opens (since 2026-10-09) — click **OK**. | A red **"LASER MAY STILL BE ON"** window → step 4, with the numbers it shows. An amber "could not run" window → copy the status-bar message |
 | ☐ B11 | Watch | Parameters unlock, button reads **Start SCOS**, the image is bright again (back on the recording). The status bar reads **"Session finished → <your session folder>"** and **stays** while the frame counter on the right keeps running; the **whole** path is readable, not cut off by that counter (a skipped laser-off check would add "\| laser-off …" at the end — that must be readable too). | Image stays dark → playback was not restored to the recording. Message gone or cut off → note what replaced it, or where it was cut |
@@ -126,7 +126,7 @@ in the repo folder also has it: search "Session folder created".
 | | Check | Expect |
 |---|---|---|
 | ☐ C1 | Folder name | `test_run__1_<YYYYMMDD>_<HHMMSS>` — the colon and each space became an underscore (hence the double one), timestamp always added |
-| ☐ C2 | Files | exactly **`Calibration.h5`** (≈ 23 MB here — 1216 × 1936 arrays; much smaller on the 700 × 700 rig camera), **`rBFi_resultsAndParameters.h5`** (tens of kB), **`rBfi_fig.png`** |
+| ☐ C2 | Files | exactly **`Calibration.h5`** (≈ 23 MB here — 1216 × 1936 arrays; smaller after Cut Image, section H), **`rBFi_resultsAndParameters.h5`** (tens of kB), **`rBfi_fig.png`** |
 | ☐ C3 | `rBfi_fig.png` | Opens; rBFi on top (the same curve as the plot) and ⟨I⟩ below, each with its own axes; a Parameters box on the right with the session's settings (no "—" when both calibrations ran); x-axis in minutes for a run over 2 min |
 | ☐ C4 | `rBFi_resultsAndParameters.h5` (open with HDFView, or ask Claude to print it) | datasets `startTime`, `timeVec`, `rBFi`, `Intensity`, `k2_raw`, `k2_corr`, `bfi`, groups `Params` and `metadata`. `Params` has ten fields: frameRate 40, exposureTime 5, gain 24, windowSize 7, ROI, bitDepth 10, normalizationConstant, normalizationMethod, normalizationWindowSec, gitCommit. **No `satCapacity` anywhere.** |
 | ☐ C5 | Normalization | Run **over 2 min** → `normalizationMethod` = `mean` and rBFi hovers around **1**. (A run **under** 2 min uses `percentile5` instead, so rBFi sits mostly **above 1** — 1.64 on average in the 10-s headless run. Both are MATLAB's rule, `SCOSvsTime_WithNoiseSubtraction_Ver2.m:505`.) |
@@ -167,6 +167,21 @@ in the repo folder also has it: search "Session folder created".
 | | Do | Expect |
 |---|---|---|
 | ☐ G1 | Change Window Size, close, relaunch in `--mock-folder` | Window Size is back to the default — **by design**, settings are only remembered for the real camera (B3), so a recording's 24 dB never leaks into a rig session |
+
+## H · Cut Image — the camera-side crop
+
+Since 2026-10-11 (todo U6) **Cut Image** makes the camera send only a rectangle around the
+ROI circle, and the whole session — both calibrations and the measurement — runs on it. In
+playback the recording's frames are cut the same way. The numbers below are from headless
+`tools/rehearsal.py --cut` runs on 2026-10-11, not from a hand-run session.
+
+| | Do | Expect | If not |
+|---|---|---|---|
+| ☐ H1 | After A3 (the folder calibration has loaded), click **Cut Image** | The image shrinks to the area around the circle and stays where it was; the button reads **Full Image**. Info label **`Size : 1652×1216 of 1936×1216`** — the `Mask.mat` circle is so big that the crop keeps the full height and only loses columns (at x = 284). The ROI circle and the ROI buttons are locked. `app.log`: "Camera image area: 1652 × 1216 at (284, 0) of the 1936 × 1216 sensor" | Image unchanged or a "Could not change the camera's image area" message → copy it from `app.log` |
+| ☐ H2 | Click **Full Image**, then **Clear ROI**, draw a smaller circle (**Draw ROI**) in the middle, **Cut Image** | Crop = the circle + 26 px on each side, so about 2 × (r + 26) square — e.g. **354 × 354** for r = 150. The Size label and `app.log` show it | The circle can be moved while cut → it should be locked |
+| ☐ H3 | Run a short session (B1–B10) | Same dialogs as B. **Cut/Full Image is greyed out from the dark prompt until the session has ended.** κ² positive. With the `Mask.mat` circle and 600 frames, κ²_corr ≈ **0.0083–0.0086** (with 60 frames lower, as in "normal" item 3) (0.00855 measured cut; two uncut runs gave 0.00811 and 0.00837 — the crop does not change κ², which frames get measured does) | Cut/Full clickable during the run → step 4 |
+| ☐ H4 | `Calibration.h5` | Every array (`mean_dark`, `var_dark`, `mask`, `spIm`, `spVar`) is the **crop's** size — e.g. 1216 × 1652, or 354 × 354 — and the file is smaller in proportion | Full-size arrays → step 4 |
+| ☐ H5 | Click **Full Image** after the session | Back to 1936 × 1216; the ROI unlocks | |
 
 ---
 
