@@ -126,7 +126,6 @@ class PlotWidget(QWidget):
         """Plotted data, time in **seconds**.
 
         Before task 10 this returned minutes, because minutes were all the
-        widget stored. `_save_data()` writes it as `scosTime`, so the unit is
-        visible in exported .mat/.npz files.
+        widget stored.
         """
         return np.array(self._time), np.array(self._bfi)

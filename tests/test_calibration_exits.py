@@ -112,7 +112,6 @@ def _mid_run(w, tmp_path, state, *, dark_written, trigger_was_on=False):
     w.btn_start_scos.setChecked(True)
     w.btn_start_scos.setText("Stop SCOS")
     w.btn_start_scos.blockSignals(False)
-    w.btn_save.setEnabled(False)
     if state is State.DARK_CAL:
         w._set_playback_source("dark")
     w._set_state(state)
@@ -125,7 +124,6 @@ def _assert_back_to_preview(w, cam):
         "the parameter boxes are still locked (K2)")
     assert not w.btn_start_scos.isChecked()
     assert w.btn_start_scos.text() == "Start SCOS"
-    assert w.btn_save.isEnabled()
     assert cam.playback_source == "main", "playback left on the dark folder (K3)"
     assert w._dark_cal_collector is None and w._bright_cal_collector is None
     assert w._session_folder is None

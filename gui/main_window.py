@@ -426,10 +426,12 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.btn_start_scos)
 
-        # Disabled until F1 (todo.md): a ticked box writes ~1 MB per frame
-        # (~70 GB/hour at 20 Hz), synchronously on the GUI thread (F4), with no
-        # disk-space check in front of it (B2). Kept visible because the
-        # protocol lists it among the SCOS parameters (SCOS_protocol.md:9).
+        # Disabled until F1 (todo.md): a ticked box writes ~4.7 MB per full
+        # 1216 x 1936 frame (~340 GB/hour at 20 Hz), synchronously on the GUI
+        # thread (F4), with no disk-space check in front of it (B2). Kept
+        # visible because the protocol lists it among the SCOS parameters
+        # (SCOS_protocol.md:21). It is the raw-frame control for F1; the old
+        # "Save Data..." button beside it was removed (todo U8).
         self.chk_save_frames = QCheckBox("Save Frames")
         self.chk_save_frames.setChecked(False)
         self.chk_save_frames.setEnabled(False)
@@ -437,13 +439,7 @@ class MainWindow(QMainWindow):
             "Not available yet: saving raw frames needs a disk-space check\n"
             "and a background writer first (todo.md F1)."
         )
-        self.btn_save = QPushButton("Save Data...")
-        self.btn_save.setEnabled(False)
-        save_row = QHBoxLayout()
-        save_row.setContentsMargins(0, 0, 0, 0)
-        save_row.addWidget(self.chk_save_frames)
-        save_row.addWidget(self.btn_save, stretch=1)
-        layout.addLayout(save_row)
+        layout.addWidget(self.chk_save_frames)
 
         # --- Status indicator ---
         status_group = QGroupBox("Status")
@@ -766,9 +762,6 @@ class MainWindow(QMainWindow):
             lambda v: setattr(self, "_norm_seconds", float(v))
         )
 
-        # Save
-        self.btn_save.clicked.connect(self._save_data)
-
     # ------------------------------------------------------------------
     # Pipeline intake wiring
     # ------------------------------------------------------------------
@@ -974,7 +967,6 @@ class MainWindow(QMainWindow):
         self.btn_start_scos.setChecked(False)
         self.btn_start_scos.setText("Start SCOS")
         self.btn_start_scos.blockSignals(False)
-        self.btn_save.setEnabled(True)
         self._set_params_enabled(True)
 
     def _abandon_calibration(self, label: str) -> None:
@@ -1061,7 +1053,6 @@ class MainWindow(QMainWindow):
                 self._reset_start_button()
                 return
             self.btn_start_scos.setText("Stop SCOS")
-            self.btn_save.setEnabled(False)
             self._set_params_enabled(False)   # lock all parameter inputs
             # Recreate pipeline with the currently selected worker count.
             # Unhook the camera from the outgoing pipeline first — once it is
@@ -1107,7 +1098,6 @@ class MainWindow(QMainWindow):
             elif self._state == State.BRIGHT_CAL:
                 self._abandon_calibration("Bright cal cancelled")
             self.btn_start_scos.setText("Start SCOS")
-            self.btn_save.setEnabled(True)
             self._set_params_enabled(True)    # restore all parameter inputs
             # Bound unconditionally: the closing message below is guarded by the
             # same `was_measuring` flag, but leaving this to the guard alone
@@ -2678,37 +2668,6 @@ class MainWindow(QMainWindow):
                 logger.exception("Could not apply the ROI from %s", mask_mat)
 
         self._calib_label.setText(f"Cal OK — {msg}")
-
-    def _save_data(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save SCOS Data", "", "MAT files (*.mat);;NumPy (*.npz)"
-        )
-        if not path:
-            return
-        # The plot holds rBFi — BFi already divided by the normalization
-        # constant — so 1/plotted is not κ². Undo the division to get the
-        # corrected κ² this key is documented to carry (CLAUDE.md, "Save
-        # format"). Before normalization completes there is no constant and
-        # the plotted values are raw BFi, so 1/plotted is κ² as it stands.
-        t, bfi = self.plot_widget.get_data()
-        k2_corr = 1.0 / (bfi * self._bfi_norm) if self._bfi_norm else 1.0 / bfi
-        if path.endswith(".mat"):
-            scipy.io.savemat(path, {
-                "scosTime": t,           # seconds, matching MATLAB's timeVec
-                "scosData": k2_corr,     # corrected κ², per MATLAB convention
-                "rBFi": bfi,             # what was plotted
-                "normalizationConstant": float(self._bfi_norm or 0.0),
-                "frameRate": self.spn_fps.value(),
-                "exposureTime": self.spn_exposure.value(),
-                "Gain": self.spn_gain.value(),
-            })
-        else:
-            np.savez(path, scosTime=t, BFI=bfi, scosData=k2_corr,
-                     normalizationConstant=float(self._bfi_norm or 0.0),
-                     frameRate=self.spn_fps.value(),
-                     exposureTime=self.spn_exposure.value(),
-                     gain=self.spn_gain.value())
-        self.status.showMessage(f"Saved: {path}")
 
     # ------------------------------------------------------------------
     # Close

@@ -82,7 +82,7 @@ Add status (after info) indication about what is happening .  Done
 Always leave the option to press Stop to abort the process even if it is in the middle of calibration. Done
 
 Remove the “Save Data” button ( data is always saved).  Done
-*[Not done in the app as of 2026-10-08: the “Save Data...” button is still on screen (`gui/main_window.py:371`), exporting κ² to .mat/.npz; the session data is saved automatically either way.]*
+*[Done in the app 2026-10-11 (todo U8): the “Save Data...” button and its .mat/.npz export are removed; the session data is saved automatically. The “Save Frames” check box beside it stays — it is the raw-frame control (todo F1).]*
 
 After “Start Scos” is pressed - > make the parameters input fields gray and change is forbidden.
 When “Stop SCOS” is pressed -> the parameters are back on.  Done

@@ -494,45 +494,44 @@ class TestEarlyStop:
             assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(5.0)
 
 
-class TestManualExport:
-    """The Save button — legacy .mat/.npz next to the real HDF5 results file."""
+class TestResultsFileValues:
+    """The κ² and time values in the results file.
 
-    def test_scos_data_is_kappa_squared_not_one_over_rbfi(
-            self, window, dialogs, monkeypatch, tmp_path):
-        import scipy.io
+    These two checks used to run against the manual "Save Data..." export
+    (.mat with `scosData` / `scosTime`), removed in todo U8 — the protocol
+    says data is always saved. The results file is now the only output, so
+    the same two mistakes are guarded there.
+    """
 
-        _run(window, 20.0)
-        window._finalize_normalization()
-        const = window._bfi_norm
-
-        out = tmp_path / "manual.mat"
-        monkeypatch.setattr(QFileDialog, "getSaveFileName",
-                            staticmethod(lambda *a, **k: (str(out), "")))
-        window._save_data()
-
-        m = scipy.io.loadmat(str(out), squeeze_me=True)
-        # The plot holds rBFi. Exporting 1/rBFi under a key documented as κ²
-        # would be wrong by exactly the normalization constant.
-        np.testing.assert_allclose(m["scosData"], 1.0 / (m["rBFi"] * const),
-                                   rtol=1e-9)
-        assert m["normalizationConstant"] == pytest.approx(const)
-        # And the κ² values must be the ones that were actually measured.
-        assert float(np.min(m["scosData"])) == pytest.approx(min(_K2_CYCLE), rel=1e-9)
-        assert float(np.max(m["scosData"])) == pytest.approx(max(_K2_CYCLE), rel=1e-9)
-
-    def test_scos_time_is_seconds(self, window, dialogs, monkeypatch, tmp_path):
-        import scipy.io
+    def test_k2_corr_is_the_measured_kappa_squared(self, window, dialogs, tmp_path):
+        import h5py
 
         _run(window, 20.0)
-        out = tmp_path / "manual.mat"
-        monkeypatch.setattr(QFileDialog, "getSaveFileName",
-                            staticmethod(lambda *a, **k: (str(out), "")))
-        window._save_data()
+        window._finish_session()
+        window._stop_recorder()
 
-        m = scipy.io.loadmat(str(out), squeeze_me=True)
-        # 20 s at 40 Hz. In the old minutes-based export this would have been
-        # a third of a minute and silently mismatched MATLAB's timeVec.
-        assert float(np.max(m["scosTime"])) == pytest.approx(20.0, abs=0.05)
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            k2 = f["k2_corr"][:]
+            const = f["Params"].attrs["normalizationConstant"]
+            # The κ² values must be the ones that were actually measured...
+            assert float(np.min(k2)) == pytest.approx(min(_K2_CYCLE), rel=1e-9)
+            assert float(np.max(k2)) == pytest.approx(max(_K2_CYCLE), rel=1e-9)
+            # ...and rBFi must be 1/κ² divided by the constant, not 1/κ²
+            # itself — the two differ by exactly the normalization constant.
+            np.testing.assert_allclose(f["rBFi"][:], 1.0 / (k2 * const),
+                                       rtol=1e-9)
+
+    def test_time_vec_is_seconds(self, window, dialogs, tmp_path):
+        import h5py
+
+        _run(window, 20.0)
+        window._finish_session()
+        window._stop_recorder()
+
+        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+            # 20 s at 40 Hz. In minutes this would be a third of a minute and
+            # silently mismatch MATLAB's timeVec.
+            assert float(np.max(f["timeVec"][:])) == pytest.approx(20.0, abs=0.05)
 
 
 class TestPlotIsRenderedAtClose:
