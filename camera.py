@@ -10,6 +10,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 from pypylon import pylon, genicam
 
+from core.crop import CameraSteps, Crop
 from core.frame_clock import FrameClock
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,11 @@ class CameraThread(QThread):
         self.trigger_mode  = "Off"     # "Off" = internal, "On" = hardware
         self.trigger_delay = 0.0       # microseconds
         self.roi_position  = None      # (x, y, w, h) or None for full frame
+        # The image area the camera is actually using, read back from it after
+        # every _apply_params() — the camera may adjust what it was asked for,
+        # so the ROI mask must be built from this, never from roi_position
+        # (todo U6, plan pitfall P4). None until the camera is configured.
+        self.applied_crop: Crop | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,15 +160,51 @@ class CameraThread(QThread):
             self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
             self._restart_clock()
 
-    def set_roi(self, x: int, y: int, w: int, h: int):
+    def set_roi(self, x: int, y: int, w: int, h: int) -> Crop | None:
+        """Make the camera send only this rectangle of the sensor ("Cut
+        Image", todo U6). x, y, w, h must already obey camera_steps() — see
+        core.crop.crop_for_circle(). Returns the crop the camera actually uses
+        (applied_crop), or None if the camera is not open yet (then it is
+        applied at the next Start Video). If the camera rejects it, the full
+        sensor is used instead and `warning` says so."""
         self.roi_position = (x, y, w, h)
-        if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
+        return self._reapply_roi()
+
+    def clear_roi(self) -> Crop | None:
+        """Back to the full sensor ("Full Image"). Returns applied_crop."""
+        self.roi_position = None
+        return self._reapply_roi()
+
+    def camera_steps(self) -> CameraSteps:
+        """The camera's rules for the image area, read from the camera itself
+        — never assumed: the pylon emulator allows steps of 1, a real camera
+        may need e.g. multiples of 4."""
+        cam = self.camera
+        return CameraSteps(
+            offset_x_inc=int(cam.OffsetX.Inc), offset_y_inc=int(cam.OffsetY.Inc),
+            width_inc=int(cam.Width.Inc),      height_inc=int(cam.Height.Inc),
+            width_min=int(cam.Width.Min),      height_min=int(cam.Height.Min),
+        )
+
+    def sensor_size(self) -> tuple[int, int]:
+        """(width, height) of the whole usable sensor, whatever crop is set."""
+        return int(self.camera.WidthMax.Value), int(self.camera.HeightMax.Value)
+
+    def _reapply_roi(self) -> Crop | None:
+        if not (self.camera and self.camera.IsOpen()):
+            return None
+        if self.camera.IsGrabbing():
+            # The image size can only change while the camera is not
+            # grabbing — same restart as set_trigger() / set_pixel_format().
             self._restart_clock()
             self.camera.StopGrabbing()
             self._apply_params()
             self.camera.MaxNumBuffer.Value = 20
             self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
             self._restart_clock()
+        else:
+            self._apply_params()
+        return self.applied_crop
 
     @property
     def frames_lost(self) -> int:
@@ -246,20 +288,7 @@ class CameraThread(QThread):
             )
 
         # ROI  (must be set before exposure / frame-rate)
-        if self.roi_position:
-            x, y, w, h = self.roi_position
-            # align to camera increment requirements
-            cam.OffsetX.Value = 0
-            cam.OffsetY.Value = 0
-            cam.Width.Value   = w
-            cam.Height.Value  = h
-            cam.OffsetX.Value = x
-            cam.OffsetY.Value = y
-        else:
-            cam.OffsetX.Value = 0
-            cam.OffsetY.Value = 0
-            cam.Width.Value   = cam.Width.Max
-            cam.Height.Value  = cam.Height.Max
+        self._apply_roi()
 
         # Trigger
         cam.TriggerMode.Value = self.trigger_mode
@@ -273,6 +302,59 @@ class CameraThread(QThread):
         # Exposure & gain
         cam.ExposureTime.Value = self.exposure_us
         cam.Gain.Value         = self.gain_db
+
+    def _apply_roi(self) -> None:
+        """Write roi_position (None = full sensor) to the camera, then read
+        back what it actually uses into applied_crop. Never raises: a crop the
+        camera refuses falls back to the full sensor with a warning, so a bad
+        value can never leave the camera stopped half-configured."""
+        cam = self.camera
+        self._disable_auto_centering()
+        if self.roi_position:
+            x, y, w, h = self.roi_position
+            try:
+                # Offsets to 0 first: Width + OffsetX may not exceed the
+                # sensor at any moment, whatever the previous crop was.
+                cam.OffsetX.Value = 0
+                cam.OffsetY.Value = 0
+                cam.Width.Value   = w
+                cam.Height.Value  = h
+                cam.OffsetX.Value = x
+                cam.OffsetY.Value = y
+            except Exception as exc:
+                msg = (f"Camera refused the image crop {w} × {h} at ({x}, {y}) — "
+                       f"using the full sensor ({exc})")
+                logger.exception(msg)
+                self.warning.emit(msg)
+                self.roi_position = None
+        if not self.roi_position:
+            cam.OffsetX.Value = 0
+            cam.OffsetY.Value = 0
+            cam.Width.Value   = cam.Width.Max
+            cam.Height.Value  = cam.Height.Max
+        sensor_w, sensor_h = self.sensor_size()
+        self.applied_crop = Crop(
+            int(cam.OffsetX.Value), int(cam.OffsetY.Value),
+            int(cam.Width.Value),   int(cam.Height.Value), sensor_w, sensor_h)
+        c = self.applied_crop
+        logger.info("Camera image area: %d × %d at (%d, %d) of the %d × %d sensor%s",
+                    c.width, c.height, c.offset_x, c.offset_y, sensor_w, sensor_h,
+                    " (full sensor)" if c.is_full_sensor else "")
+
+    def _disable_auto_centering(self) -> None:
+        """Older Basler cameras (ace Classic/U/L) have CenterX/CenterY
+        switches; while on, the offsets cannot be written. Basler: "set the
+        CenterX and CenterY parameters to false". Newer cameras (ace 2, like
+        the rig's a2A1920) have BslCenterX/Y instead — a one-time *command*
+        that centres the area, not a mode — which is left alone."""
+        for name in ("CenterX", "CenterY"):
+            try:
+                node = getattr(self.camera, name)
+                if genicam.IsWritable(node) and node.Value is True:
+                    node.Value = False
+                    logger.info("Camera %s switched off so the crop offsets apply", name)
+            except Exception:
+                pass   # no such switch on this camera (or not a boolean)
 
     # How many consecutive 2-second timeouts before we declare a real error.
     # 5 × 2 s = 10 s grace period — survives a brief Arduino reset/reboot.

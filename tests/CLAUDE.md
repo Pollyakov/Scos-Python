@@ -7,7 +7,7 @@ IMPORTANT: a test module that builds a `MainWindow` must create the `QApplicatio
 _app = QApplication.instance() or QApplication([])
 from gui.main_window import MainWindow
 ```
-Importing that module pulls in pyqtgraph, and constructing the application afterwards kills the interpreter outright — no traceback, no pytest output, exit code 127, which looks like a broken command rather than a crash. See `tests/test_gain_table.py` and `tests/test_invalid_k2_guard.py`.
+Importing that module pulls in pyqtgraph, and constructing the application afterwards kills the interpreter outright — no traceback, no pytest output, exit code 127, which looks like a broken command rather than a crash. See `tests/test_gain_table.py` and `tests/test_invalid_k2_guard.py`. Since 2026-10-11 `tests/conftest.py` also creates the one `QApplication` before any module loads, so a module that creates a bare `QCoreApplication` (the playback-camera tests) can no longer leave a later widget test with the wrong kind — that too was exit 127. Keep the module-level line anyway: it documents the rule and keeps a module runnable on its own.
 
 Modal dialogs are blocked suite-wide by `tests/conftest.py`: any `QMessageBox` or `QFileDialog` a test reaches raises instead of opening. A test that legitimately drives one must monkeypatch that specific call (the `dialogs` fixture is the pattern).
 

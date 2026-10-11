@@ -9,6 +9,8 @@ import numpy as np
 import tifffile
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.crop import CameraSteps, Crop, PlaybackCrop
+
 
 class MockCameraThread(QThread):
     frame_ready   = pyqtSignal(np.ndarray, float)
@@ -51,6 +53,9 @@ class MockCameraThread(QThread):
         self.trigger_mode  = "Off"
         self.trigger_delay = 0.0
         self.roi_position  = None
+        # "Cut Image" crops the frames here, as the camera would (todo U6).
+        self._crop = PlaybackCrop()
+        self.applied_crop: Crop | None = None
 
     # ------------------------------------------------------------------
     # Public API — mirrors CameraThread exactly
@@ -63,6 +68,7 @@ class MockCameraThread(QThread):
             if stack.ndim == 2:              # single-page TIFF → add frame axis
                 stack = stack[np.newaxis, ...]
             self._stack = stack              # shape (N, H, W)
+            self._reapply_roi()
 
     def close(self) -> None:
         self.stop()
@@ -82,7 +88,7 @@ class MockCameraThread(QThread):
     def set_frame_rate(self, hz: float) -> None:
         self.frame_rate = hz
 
-    # Store-only setters — TIFF content is fixed, ROI handled by GUI mask
+    # Store-only setters — TIFF content is fixed
     def set_exposure(self, us: float) -> None:
         self.exposure_us = us
 
@@ -96,8 +102,33 @@ class MockCameraThread(QThread):
         self.trigger_mode  = "On" if enabled else "Off"
         self.trigger_delay = delay_us
 
-    def set_roi(self, x: int, y: int, w: int, h: int) -> None:
+    def set_roi(self, x: int, y: int, w: int, h: int) -> Crop | None:
+        """Cut every frame to this rectangle from now on — see
+        CameraThread.set_roi(). None if not open yet."""
         self.roi_position = (x, y, w, h)
+        return self._reapply_roi()
+
+    def clear_roi(self) -> Crop | None:
+        self.roi_position = None
+        return self._reapply_roi()
+
+    def camera_steps(self) -> CameraSteps:
+        return PlaybackCrop.STEPS
+
+    def sensor_size(self) -> tuple[int, int] | None:
+        """(width, height) of the stack's frames — the "sensor" here."""
+        if self._stack is None:
+            return None
+        return int(self._stack.shape[2]), int(self._stack.shape[1])
+
+    def _reapply_roi(self) -> Crop | None:
+        if self._stack is None:
+            return None
+        self.applied_crop, refused = self._crop.apply(self.roi_position, *self.sensor_size())
+        if refused:
+            self.roi_position = None
+            self.warning.emit(refused)
+        return self.applied_crop
 
     def get_info(self) -> dict:
         h = self._stack.shape[1] if self._stack is not None else 0
@@ -125,7 +156,7 @@ class MockCameraThread(QThread):
                 target_dt = 1.0 / max(self.frame_rate, 1e-3)
                 t0 = time.perf_counter()
 
-                frame = self._stack[idx]
+                frame = self._crop.cut(self._stack[idx])
                 t_capture = time.monotonic()
                 self.frames_emitted += 1
                 self.frame_ready.emit(frame, t_capture)

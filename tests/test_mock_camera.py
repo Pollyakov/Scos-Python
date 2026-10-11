@@ -204,3 +204,37 @@ class TestMockCameraGetInfo:
         mock.open()
         second_id = id(mock._stack)
         assert first_id == second_id
+
+
+# ---------------------------------------------------------------------------
+# "Cut Image" crops the frames, as the camera would (todo U6)
+# ---------------------------------------------------------------------------
+
+from core.crop import Crop
+
+
+class TestMockCameraCrop:
+
+    def test_cut_frames_are_the_stack_cut_out(self, tmp_path):
+        stack = _make_tiff(tmp_path / "stack.tif", n_frames=3, h=16, w=24)
+        mock  = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.frame_rate = 1000
+        mock.open()
+        assert mock.applied_crop == Crop(0, 0, 24, 16, 24, 16)
+        assert mock.set_roi(5, 2, 8, 6) == Crop(5, 2, 8, 6, 24, 16)
+
+        received = []
+        mock.frame_ready.connect(lambda f, t: received.append(f.copy()),
+                                 Qt.ConnectionType.DirectConnection)
+        mock.start_capture()
+        mock.wait()
+        assert len(received) == 3
+        for got, full in zip(received, stack):
+            np.testing.assert_array_equal(got, full[2:8, 5:13])
+
+    def test_full_image_restores_whole_frames(self, tmp_path):
+        _make_tiff(tmp_path / "stack.tif", n_frames=1, h=16, w=24)
+        mock = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.open()
+        mock.set_roi(5, 2, 8, 6)
+        assert mock.clear_roi().is_full_sensor

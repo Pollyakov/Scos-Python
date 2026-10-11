@@ -554,6 +554,32 @@ GUI thread altogether is the bigger alternative and a threading change — not b
 
 ---
 
+#### D9 · Intermittent fatal crash of the fast test suite *(found 2026-10-11)*
+
+`python -m pytest tests/ -m "not slow"` twice ended with a Python **fatal-error report**
+instead of a test summary — only its last line was seen: `File "<frozen runpy>", line 198
+in _run_module_as_main`. That line closes the stack dump pytest's `faulthandler` prints
+when the process dies in C code (an access violation), which here most likely means Qt or
+pyqtgraph while widgets are being torn down. It is **not** a failing test.
+
+What is known:
+- **Twice on 2026-10-11**: once during U9 (before any crop code existed — so not U6's), and
+  once right after a slow-suite run in the same command.
+- **Not reproducible on demand:** 8 consecutive runs afterwards all passed (557 passed).
+- **Risk:** the pre-commit hook runs this suite, so a crash can block a commit; re-running
+  gets past it. No effect on the app or on measurements has been seen.
+
+**Not the same as** the exit-127 crash found the same day (no report at all, reproducible: `test_folder_camera.py` run before `test_crop.py` left a bare `QCoreApplication` for a widget test) — that one was fixed in `tests/conftest.py`. D9 prints a fatal-error report and is not reproducible.
+
+**Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
+the test that was running and the C-level frame — then look at that test's window/thread
+teardown. Running with `-v` also shows which test had started last.
+
+**Done when:** the cause is found and fixed, or ≥ 30 consecutive runs pass after a change
+that plausibly fixes it.
+
+---
+
 ### Future Phases (post-v0)
 
 These are the next development phases after v0 is tagged.
@@ -688,7 +714,7 @@ unchanged.
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0)
   → B1 (overload dialog) → B2 (full disk monitor) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4/D7/D8 (any order; D8 sooner if step 5a finds a big flush); D5 at the rig; ~~D6~~
+  → D1/D2/D3/D4/D7/D8/D9 (any order; D8 sooner if step 5a finds a big flush; D9 as soon as a crash log is captured); D5 at the rig; ~~D6~~
   → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread) → F5 (reopenable figure)
   F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```

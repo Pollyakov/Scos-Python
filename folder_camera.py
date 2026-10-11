@@ -18,6 +18,8 @@ import numpy as np
 import tifffile
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.crop import CameraSteps, Crop, PlaybackCrop
+
 def _sort_tiffs(folder: Path) -> list[Path]:
     files = list(folder.glob("*.tiff")) + list(folder.glob("*.tif"))
     return sorted(
@@ -82,6 +84,10 @@ class FolderMockCamera(QThread):
         self.trigger_mode  = "Off"
         self.trigger_delay = 0.0
         self.roi_position  = None
+        # "Cut Image" crops the frames here, as the camera would (todo U6).
+        self._crop = PlaybackCrop()
+        self._sensor: tuple[int, int] | None = None   # (width, height) of the TIFFs
+        self.applied_crop: Crop | None = None
 
     # ------------------------------------------------------------------
     # Public API — mirrors CameraThread exactly
@@ -97,6 +103,9 @@ class FolderMockCamera(QThread):
                 f"No TIFF files found in {self._recording_dir}"
             )
         self._recording_params = self._parse_recording_params()
+        h, w = tifffile.imread(str(self._tiff_files[0])).shape[:2]
+        self._sensor = (w, h)
+        self._reapply_roi()
 
         dark_dir = find_dark_dir(self._recording_dir)
         self._dark_files = _sort_tiffs(dark_dir) if dark_dir is not None else []
@@ -137,8 +146,31 @@ class FolderMockCamera(QThread):
         self.trigger_mode  = "On" if enabled else "Off"
         self.trigger_delay = delay_us
 
-    def set_roi(self, x: int, y: int, w: int, h: int) -> None:
+    def set_roi(self, x: int, y: int, w: int, h: int) -> Crop | None:
+        """Cut every frame to this rectangle from now on, recording and dark
+        folder alike — see CameraThread.set_roi(). None if not open yet."""
         self.roi_position = (x, y, w, h)
+        return self._reapply_roi()
+
+    def clear_roi(self) -> Crop | None:
+        self.roi_position = None
+        return self._reapply_roi()
+
+    def camera_steps(self) -> CameraSteps:
+        return PlaybackCrop.STEPS
+
+    def sensor_size(self) -> tuple[int, int]:
+        """(width, height) of the recorded frames — the "sensor" here."""
+        return self._sensor
+
+    def _reapply_roi(self) -> Crop | None:
+        if self._sensor is None:
+            return None
+        self.applied_crop, refused = self._crop.apply(self.roi_position, *self._sensor)
+        if refused:
+            self.roi_position = None
+            self.warning.emit(refused)
+        return self.applied_crop
 
     def get_info(self) -> dict:
         h = w = 0
@@ -235,7 +267,7 @@ class FolderMockCamera(QThread):
                 if n == 0:
                     break
 
-                frame = tifffile.imread(str(files[idx]))
+                frame = self._crop.cut(tifffile.imread(str(files[idx])))
                 t_capture = time.monotonic()
                 self.frames_emitted += 1
                 self.frame_ready.emit(frame, t_capture)

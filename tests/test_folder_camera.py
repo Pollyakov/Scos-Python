@@ -181,3 +181,95 @@ class TestFolderCameraAPI:
         _write_tiffs(rec, n=2)
         cam = FolderMockCamera(str(rec))
         assert cam.get_mask_mat() is None
+
+
+# ---------------------------------------------------------------------------
+# "Cut Image" crops the frames, as the camera would (todo U6, plan decision D4)
+# ---------------------------------------------------------------------------
+
+from core.crop import Crop
+
+
+def _play(cam, contiguous: list | None = None) -> list:
+    received = []
+
+    def _on_frame(f, t):
+        if contiguous is not None:
+            # Checked on the emitted array itself — the copy kept below is
+            # always contiguous, so checking that would prove nothing.
+            contiguous.append(f.flags["C_CONTIGUOUS"])
+        received.append(f.copy())
+
+    cam.frame_ready.connect(_on_frame, Qt.ConnectionType.DirectConnection)
+    cam.start_capture()
+    cam.wait()
+    return received
+
+
+class TestFolderCameraCrop:
+
+    def _recording(self, tmp_path, n=3, h=20, w=30):
+        rec_dir = tmp_path / "recording"
+        rec_dir.mkdir()
+        paths = _write_tiffs(rec_dir, n=n, h=h, w=w)
+        return rec_dir, [tifffile.imread(str(p)) for p in paths]
+
+    def test_full_sensor_until_cut(self, tmp_path):
+        rec_dir, _ = self._recording(tmp_path)
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        assert cam.applied_crop is None            # not open yet
+        cam.open()
+        assert cam.sensor_size() == (30, 20)
+        assert cam.applied_crop == Crop(0, 0, 30, 20, 30, 20)
+
+    def test_cut_frames_are_the_recording_cut_out(self, tmp_path):
+        rec_dir, originals = self._recording(tmp_path)
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        cam.frame_rate = 1000
+        cam.open()
+        assert cam.set_roi(4, 3, 10, 8) == Crop(4, 3, 10, 8, 30, 20)
+        contiguous = []
+        received = _play(cam, contiguous)
+        assert len(received) == 3
+        for got, full in zip(received, originals):
+            np.testing.assert_array_equal(got, full[3:11, 4:14])
+        # A contiguous array of its own, like a camera buffer — not a view
+        # that keeps the whole full-size frame alive.
+        assert contiguous == [True, True, True]
+
+    def test_dark_folder_is_cut_the_same_way(self, tmp_path):
+        # The dark calibration must be built from frames of the same size and
+        # position as the measurement's.
+        rec_dir, _ = self._recording(tmp_path)
+        dark_dir = tmp_path / "recording_dark"
+        dark_dir.mkdir()
+        darks = [tifffile.imread(str(p)) for p in _write_tiffs(dark_dir, n=2, h=20, w=30)]
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        cam.frame_rate = 1000
+        cam.open()
+        cam.set_roi(4, 3, 10, 8)
+        assert cam.set_playback_source("dark")
+        received = _play(cam)
+        assert len(received) == 2
+        for got, full in zip(received, darks):
+            np.testing.assert_array_equal(got, full[3:11, 4:14])
+
+    def test_full_image_restores_whole_frames(self, tmp_path):
+        rec_dir, originals = self._recording(tmp_path)
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        cam.frame_rate = 1000
+        cam.open()
+        cam.set_roi(4, 3, 10, 8)
+        assert cam.clear_roi() == Crop(0, 0, 30, 20, 30, 20)
+        for got, full in zip(_play(cam), originals):
+            np.testing.assert_array_equal(got, full)
+
+    def test_a_crop_outside_the_frames_is_refused(self, tmp_path):
+        rec_dir, _ = self._recording(tmp_path)
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        cam.open()
+        warnings = []
+        cam.warning.connect(warnings.append, Qt.ConnectionType.DirectConnection)
+        applied = cam.set_roi(25, 0, 10, 8)          # 25 + 10 > 30
+        assert applied.is_full_sensor and cam.roi_position is None
+        assert len(warnings) == 1

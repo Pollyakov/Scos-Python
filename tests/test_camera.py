@@ -249,3 +249,148 @@ class TestGrabLoopTiming:
         cam = CameraThread()
         assert cam.frames_lost == 0
         assert cam.time_source == "pc"
+
+
+# ---------------------------------------------------------------------------
+# Camera-side crop (todo U6): set_roi / clear_roi / camera_steps, read-back
+# ---------------------------------------------------------------------------
+
+from core.crop import CameraSteps, Crop
+
+
+class _IntNode:
+    """A GenICam integer node that enforces its step, like a real camera:
+    a value off the step or outside min..max raises. `max_fn` lets Width's
+    maximum depend on the current OffsetX, as it does on a camera."""
+
+    def __init__(self, value, vmin, vmax, inc, max_fn=None, adjust=None):
+        self._v, self.Min, self._max, self.Inc = value, vmin, vmax, inc
+        self._max_fn, self._adjust = max_fn, adjust
+
+    @property
+    def Max(self):
+        return self._max_fn() if self._max_fn else self._max
+
+    @property
+    def Value(self):
+        return self._v
+
+    @Value.setter
+    def Value(self, v):
+        if self._adjust:                      # a camera that silently adjusts
+            v = self._adjust(v)
+        if v < self.Min or v > self.Max or (v - self.Min) % self.Inc:
+            raise ValueError(f"value {v} invalid (min {self.Min}, max {self.Max}, inc {self.Inc})")
+        self._v = v
+
+
+class _CropCamera:
+    """Just enough of a pylon InstantCamera for _apply_params()."""
+
+    SENSOR_W, SENSOR_H = 1936, 1216
+
+    def __init__(self, grabbing=False, inc=4, width_adjust=None, center=None):
+        W, H = self.SENSOR_W, self.SENSOR_H
+        self.OffsetX = _IntNode(0, 0, 0, inc, max_fn=lambda: W - self.Width.Value)
+        self.OffsetY = _IntNode(0, 0, 0, 2,   max_fn=lambda: H - self.Height.Value)
+        self.Width   = _IntNode(W, 4, 0, inc, max_fn=lambda: W - self.OffsetX.Value,
+                                adjust=width_adjust)
+        self.Height  = _IntNode(H, 2, 0, 2,   max_fn=lambda: H - self.OffsetY.Value)
+        self.WidthMax  = _types.SimpleNamespace(Value=W)
+        self.HeightMax = _types.SimpleNamespace(Value=H)
+        for name in ("PixelFormat", "TriggerMode", "TriggerSource", "TriggerDelay",
+                     "AcquisitionFrameRateEnable", "AcquisitionFrameRate",
+                     "ExposureTime", "Gain", "MaxNumBuffer"):
+            setattr(self, name, _types.SimpleNamespace(Value=None))
+        self.PixelFormat.Value = "Mono12"
+        if center is not None:
+            self.CenterX = _types.SimpleNamespace(Value=center)
+            self.CenterY = _types.SimpleNamespace(Value=center)
+        self._grabbing = grabbing
+        self.calls = []
+
+    def IsOpen(self):         return True
+    def IsGrabbing(self):     return self._grabbing
+    def StopGrabbing(self):   self.calls.append("stop");  self._grabbing = False
+    def StartGrabbing(self, strategy): self.calls.append("start"); self._grabbing = True
+
+
+def _crop_thread(**kw):
+    cam = CameraThread()
+    cam.pixel_format = "Mono12"
+    cam.camera = _CropCamera(**kw)
+    warnings = []
+    cam.warning.connect(warnings.append)
+    return cam, warnings
+
+
+class TestCameraCrop:
+
+    @pytest.fixture(autouse=True)
+    def _fake_genicam(self, monkeypatch):
+        # In the full suite another test imports camera.py first, with the real
+        # pypylon, so this file's sys.modules fake never reaches it — and the
+        # real genicam.IsWritable() rejects these fake nodes. Patch the module
+        # camera.py actually uses, for each test.
+        monkeypatch.setattr(camera_module, "genicam",
+                            _types.SimpleNamespace(IsWritable=lambda node: True))
+
+    def test_steps_and_sensor_are_read_from_the_camera(self):
+        cam, _ = _crop_thread(inc=4)
+        assert cam.camera_steps() == CameraSteps(4, 2, 4, 2, 4, 2)
+        assert cam.sensor_size() == (1936, 1216)
+
+    def test_crop_is_applied_and_read_back(self):
+        cam, warnings = _crop_thread()
+        applied = cam.set_roi(760, 402, 412, 412)
+        assert applied == Crop(760, 402, 412, 412, 1936, 1216)
+        assert cam.applied_crop == applied and not applied.is_full_sensor
+        assert not warnings
+
+    def test_changing_crop_while_grabbing_restarts_the_camera(self):
+        cam, _ = _crop_thread(grabbing=True)
+        cam.set_roi(760, 402, 412, 412)
+        assert cam.camera.calls == ["stop", "start"]
+        assert cam.camera.IsGrabbing()
+
+    def test_a_crop_far_right_works_from_any_previous_crop(self):
+        # Offsets go to 0 before the size changes, so OffsetX + Width never
+        # exceeds the sensor in between — the fake camera raises if it does.
+        cam, warnings = _crop_thread()
+        cam.set_roi(1500, 800, 436, 416)            # against the right edge
+        assert cam.set_roi(0, 0, 1000, 1000) == Crop(0, 0, 1000, 1000, 1936, 1216)
+        assert not warnings
+
+    def test_full_image_goes_back_to_the_whole_sensor(self):
+        cam, _ = _crop_thread(grabbing=True)
+        cam.set_roi(760, 402, 412, 412)
+        applied = cam.clear_roi()
+        assert applied.is_full_sensor and cam.roi_position is None
+        assert cam.camera.IsGrabbing()
+
+    def test_a_refused_crop_falls_back_to_the_full_sensor_and_warns(self):
+        # 413 is off the camera's step of 4. The camera must not be left
+        # stopped or half-configured: full sensor, grabbing again, a warning.
+        cam, warnings = _crop_thread(grabbing=True)
+        applied = cam.set_roi(760, 402, 413, 412)
+        assert applied.is_full_sensor and cam.roi_position is None
+        assert cam.camera.IsGrabbing()
+        assert len(warnings) == 1 and "refused" in warnings[0]
+
+    def test_mask_must_follow_what_the_camera_did_not_what_was_asked(self):
+        # A camera that silently rounds Width down to a multiple of 8: the
+        # read-back, not the request, is what applied_crop reports (pitfall P4).
+        cam, _ = _crop_thread(width_adjust=lambda v: v - v % 8)
+        applied = cam.set_roi(760, 402, 412, 412)
+        assert applied.width == 408
+
+    def test_old_camera_centering_switch_is_turned_off(self):
+        cam, _ = _crop_thread(center=True)
+        cam.set_roi(760, 402, 412, 412)
+        assert cam.camera.CenterX.Value is False and cam.camera.CenterY.Value is False
+
+    def test_not_open_yet_only_remembers_the_crop(self):
+        cam = CameraThread()
+        assert cam.set_roi(760, 402, 412, 412) is None
+        assert cam.roi_position == (760, 402, 412, 412)
+        assert cam.applied_crop is None

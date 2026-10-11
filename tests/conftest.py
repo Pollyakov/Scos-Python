@@ -20,9 +20,19 @@ from pathlib import Path
 
 import pytest
 
-from PyQt6.QtWidgets import QDialog, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 _REPO = Path(__file__).resolve().parent.parent
+
+# One full QApplication for the whole run, created here because pytest loads
+# this file before any test module. Some modules only need Qt's event system
+# and create a bare QCoreApplication (test_folder_camera.py, test_mock_camera.py);
+# if one of those ran first, every later module's `QApplication.instance() or
+# QApplication([])` got that QCoreApplication back, and the first widget built
+# killed the interpreter — exit code 127, no traceback (found 2026-10-11 running
+# test_folder_camera.py before test_crop.py). Created before anything imports
+# pyqtgraph, as tests/CLAUDE.md requires.
+_app = QApplication.instance() or QApplication([])
 
 
 _BLOCKED = (
