@@ -33,6 +33,7 @@ from core.recorder  import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder
                             write_calibration)
 from core.results_figure import save_results_figure
 from core.pipeline  import RealtimePipeline
+from core.crop      import Crop, crop_for_circle
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 # Imported as a module, not by name, so tests and tools/rehearsal.py can
@@ -168,6 +169,12 @@ class MainWindow(QMainWindow):
         self._arduino_thread: _ArduinoUploadThread | None = None
         self._recorder:       HDF5Recorder | None = None
         self._roi_circ:       dict = {}
+        # The camera's image area, read back from the camera after Start Video
+        # and after every Cut/Full Image (todo U6). None until known, and for
+        # sources that cannot crop. Frames of any other size are skipped — see
+        # _on_scos_frame — and counted here until the first right-size one.
+        self._camera_crop:    Crop | None = None
+        self._frames_wrong_size: int = 0
 
         # Session state machine
         self._state:           State       = State.IDLE
@@ -680,6 +687,10 @@ class MainWindow(QMainWindow):
     # State machine
     # ------------------------------------------------------------------
 
+    # From Start SCOS until the run has fully ended: ROI and crop are locked.
+    _RUN_STATES = (State.DARK_CAL, State.BRIGHT_CAL, State.MEASURING_INIT,
+                   State.MEASURING, State.FINISHED)
+
     _STATE_COLORS = {
         State.IDLE:           "#888888",
         State.PREVIEW:        "#aabbcc",
@@ -702,9 +713,18 @@ class MainWindow(QMainWindow):
         # Lock ROI edits while worker threads are reading processor ROI
         # state concurrently in process() — dragging the circle mid-run is
         # a data race, not just a UX nuisance (see merged_worklist.md #3).
-        self.image_widget.set_roi_locked(
-            new_state in (State.MEASURING_INIT, State.MEASURING)
-        )
+        # Since U6 the lock starts at Start SCOS (plan decision D2): the mask
+        # goes into Calibration.h5 at the end of the dark calibration, and the
+        # calibrations must be taken with the same crop as the measurement.
+        # It ends only at PREVIEW, which a finished run reaches after the
+        # laser-off check (that check measures a fresh frame with the run's
+        # mask) — not when _set_params_enabled(True) unlocks the fields, which
+        # happens before the check.
+        self.image_widget.set_roi_locked(new_state in self._RUN_STATES)
+        # Cut/Full Image restart the camera: only with the video running and
+        # no run on (plan 4.6).
+        self.image_widget.set_cut_available(
+            new_state == State.PREVIEW and hasattr(self.camera, "set_roi"))
 
     # ------------------------------------------------------------------
     # Signal connections
@@ -749,6 +769,7 @@ class MainWindow(QMainWindow):
 
         # ROI
         self.image_widget.roi_changed.connect(self._on_roi_changed)
+        self.image_widget.cut_requested.connect(self._on_cut_requested)
 
         # Window size → processor
         self.spn_window.valueChanged.connect(
@@ -827,6 +848,12 @@ class MainWindow(QMainWindow):
                 self.btn_start_video.setText("Stop Video")
                 self.btn_start_scos.setEnabled(True)
                 self.status.showMessage("Video running")
+                # The image area the camera starts with — the full sensor, or
+                # the crop kept from before a Stop Video — before the state
+                # change, which enables Cut/Full Image.
+                crop = getattr(self.camera, "applied_crop", None)
+                if crop is not None:
+                    self._apply_camera_crop(crop)
                 self._set_state(State.PREVIEW)
                 # Read back actual camera params and update spinboxes
                 self._sync_params_from_camera()
@@ -2149,21 +2176,39 @@ class MainWindow(QMainWindow):
         if self._frames_seen < self._skip_frames_until:
             return      # captured before the lighting changed — see _flush_stale_frames
 
+        # A frame of another size than the camera's current image area was
+        # captured before Cut/Full Image and is still queued: skip it (todo U6,
+        # plan 4.5). It must not reach the calibration collectors or the
+        # laser-off check, and it must not reset the mask below — that reset
+        # would silently replace the ROI circle by the whole frame (plan
+        # pitfall P1). Counted above all the same: _flush_stale_frames
+        # compares arrivals with the camera's count.
+        if self._camera_crop is not None and frame.shape != self._camera_crop.shape:
+            self._frames_wrong_size += 1
+            return
+        if self._frames_wrong_size:
+            logger.info("Skipped %d frame(s) of the previous image size after "
+                        "the camera's image area changed", self._frames_wrong_size)
+            self._frames_wrong_size = 0
+
         # End-of-session laser-off check (E3): grab the first frame that
-        # survives the stale-frame guard above, i.e. the first one genuinely
-        # captured after the operator confirmed the laser was switched off.
-        # Copied because a real pypylon buffer is reused once this handler
-        # returns; gated by the flag so the copy costs nothing the rest of the
-        # time.
+        # survives the stale-frame and size guards above, i.e. the first one
+        # genuinely captured after the operator confirmed the laser was
+        # switched off. Copied because a real pypylon buffer is reused once
+        # this handler returns; gated by the flag so the copy costs nothing
+        # the rest of the time.
         if self._awaiting_laser_off_frame and self._laser_off_frame is None:
             self._laser_off_frame = frame.copy()
 
-        # Default mask = whole frame when no ROI is set
+        # Default mask = whole frame when no ROI is set. (With a camera that
+        # reports its image area, a frame reaching this line has that area's
+        # size, and an ROI circle's mask was rebuilt for it at Cut/Full Image.)
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)
             self.processor.set_roi(self._mask)
             h, w = frame.shape
-            self.lbl_size.setText(f"Size : {w}×{h}")
+            if self._camera_crop is None:
+                self.lbl_size.setText(f"Size : {w}×{h}")
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
         # FPS counter — counts all camera frames, not the display-capped ones
@@ -2520,6 +2565,61 @@ class MainWindow(QMainWindow):
             h, w = mask.shape
             self.lbl_roi.setText(f"ROI  : full frame ({w}x{h})")
 
+    def _on_cut_requested(self, cut: bool) -> None:
+        """"Cut Image" / "Full Image" clicked (todo U6).
+
+        Cut asks the camera for the ROI circle plus CROP_MARGIN_PX on every
+        side, rounded to the camera's own steps (core.crop.crop_for_circle);
+        Full asks for the whole sensor. Either way the camera restarts
+        grabbing, and what counts afterwards is the image area it *reports*
+        (applied_crop), never the one asked for — it may round, or refuse and
+        fall back to the full sensor (plan pitfall P4).
+
+        Only reachable in PREVIEW (_set_state), so never between a
+        calibration and its measurement (pitfall P3). Contained: an exception
+        escaping a Qt slot aborts the whole app.
+        """
+        cam = self.camera
+        try:
+            if cut:
+                circ = self.image_widget.roi_circle
+                if circ is None:
+                    return
+                sensor_w, sensor_h = cam.sensor_size()
+                req = crop_for_circle(circ["cx"], circ["cy"], circ["r"],
+                                      sensor_w, sensor_h, cam.camera_steps())
+                logger.info("Cut Image — asking the camera for %d × %d at (%d, %d)",
+                            req.width, req.height, req.offset_x, req.offset_y)
+                crop = cam.set_roi(req.offset_x, req.offset_y, req.width, req.height)
+            else:
+                logger.info("Full Image — asking the camera for the full sensor")
+                crop = cam.clear_roi()
+        except Exception:
+            logger.exception("Could not change the camera's image area")
+            self.status.showMessage("Could not change the camera's image area — see app.log")
+            crop = getattr(cam, "applied_crop", None)
+        if crop is None:
+            self.status.showMessage("Start Video first — the camera is not open")
+            return
+        self._apply_camera_crop(crop)
+        if cut and crop.is_full_sensor:
+            # The camera refused; its own warning says why.
+            self.status.showMessage("The camera kept the full image — see app.log")
+
+    def _apply_camera_crop(self, crop: Crop) -> None:
+        """Make everything follow the camera's image area: the frame size
+        _on_scos_frame accepts, the image display and its ROI mask (re-emitted
+        through roi_changed → _on_roi_changed, so _mask and the processor's
+        crop follow), and the Size label."""
+        self._camera_crop = crop
+        self._frames_wrong_size = 0
+        self.image_widget.set_camera_crop(crop)
+        if crop.is_full_sensor:
+            self.lbl_size.setText(f"Size : {crop.width}×{crop.height}")
+        else:
+            self.lbl_size.setText(f"Size : {crop.width}×{crop.height} of "
+                                  f"{crop.sensor_width}×{crop.sensor_height}")
+
     def _on_camera_warning(self, msg: str):
         """Camera-side warning — most often frames lost before reaching the app
         ("Camera: N frame(s) lost", counted from BlockID gaps by FrameClock).
@@ -2646,6 +2746,14 @@ class MainWindow(QMainWindow):
         # Load ROI mask from Mask.mat (fast — just reads one small file)
         mask_mat = getattr(self, "_pending_mask_mat", None)
         if mask_mat is not None:
+            # Mask.mat is full-sensor and replaces the circle. If the operator
+            # cut the image while the calibration was loading, go back to the
+            # full sensor first: a full-size totMask against cropped frames
+            # would be thrown away for the whole frame (plan pitfall P1), and
+            # the new circle need not lie inside the old crop.
+            if self.image_widget.is_cut:
+                logger.info("Mask.mat replaces the ROI — back to the full image first")
+                self._on_cut_requested(False)
             try:
                 mat = scipy.io.loadmat(str(mask_mat))
                 if "totMask" in mat:
