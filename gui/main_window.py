@@ -29,7 +29,8 @@ from processor import SCOSProcessor, GainTableError, shrink_mask_for_window
 from core.session   import (BrightCalCollector, DarkCalCollector, State,
                             NORM_METHOD_MEAN, NORM_METHOD_PERCENTILE,
                             choose_norm_method, normalization_constant)
-from core.recorder  import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
+from core.recorder  import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder,
+                            write_calibration)
 from core.results_figure import save_results_figure
 from core.pipeline  import RealtimePipeline
 from gui.image_widget import ImageWidget
@@ -1212,8 +1213,9 @@ class MainWindow(QMainWindow):
             # dialog. Data still plots live; it is just not written to disk.
             logger.warning("No session folder — SCOS runs without auto-save")
             return
-        # Name and contents come from `docs/session_tab`; the spelling is hers.
-        path = self._session_folder / "rBfi_results.h5"
+        # Name from the protocol's step 6 (todo U9); contents from
+        # `docs/session_tab` and the supervisor's answers of 2026-09-23.
+        path = self._session_folder / RESULTS_FILENAME
         # Engineering provenance — kept out of Params on purpose, see recorder.
         meta = {
             "camera_sn":      str(self.processor.camera_sn or ""),
@@ -1942,7 +1944,7 @@ class MainWindow(QMainWindow):
     #
     #   ROI, not the whole frame — this is the region the measurement actually
     #   used, and it is the same quantity written as `Intensity` in
-    #   rBfi_results.h5, so the before/after comparison is apples to apples. A
+    #   the results file, so the before/after comparison is apples to apples. A
     #   full-frame mean would be diluted by background pixels that never saw
     #   laser light, which makes a genuine 90 % drop look smaller than it is
     #   and would produce false warnings.

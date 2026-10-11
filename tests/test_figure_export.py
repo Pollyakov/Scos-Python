@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _app = QApplication.instance() or QApplication([])
 
 import core.results_figure as results_figure
-from core.recorder import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
+from core.recorder import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder,
+                           write_calibration)
 from core.results_figure import (MISSING, build_results_figure,
                                  parameter_lines, read_calibration_info,
                                  save_results_figure)
@@ -64,7 +65,7 @@ META = {
 def _results_file(tmp_path, seconds=10.0, fps=20.0, bad=(), rbfi=True,
                   calibration=True):
     """A finished results file (and Calibration.h5) like a session leaves."""
-    rec = HDF5Recorder(tmp_path / "rBfi_results.h5", dict(META), dict(PARAMS))
+    rec = HDF5Recorder(tmp_path / RESULTS_FILENAME, dict(META), dict(PARAMS))
     n = int(seconds * fps)
     for i in range(n):
         k2 = -0.01 if i in bad else 0.01 * (1.0 + 0.2 * np.sin(i / 3.0))
@@ -81,7 +82,7 @@ def _results_file(tmp_path, seconds=10.0, fps=20.0, bad=(), rbfi=True,
                           {"n_frames": 600, "window_size": 7})
         write_calibration(cal, "bright", {"spIm": np.ones((4, 4))},
                           {"n_frames": 60, "window_size": 7})
-    return tmp_path / "rBfi_results.h5"
+    return tmp_path / RESULTS_FILENAME
 
 
 class TestResultsFigure:
@@ -291,7 +292,7 @@ class TestSessionWritesTheFigure:
         window._stop_recorder()
 
         assert "fig" in built and built["fig"] is not None
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             rbfi, inten = f["rBFi"][:], f["Intensity"][:]
         np.testing.assert_array_equal(built["fig"].axes[0].lines[0].get_ydata(), rbfi)
         np.testing.assert_array_equal(built["fig"].axes[1].lines[0].get_ydata(), inten)
@@ -310,7 +311,7 @@ class TestSessionWritesTheFigure:
         assert "Could not save the plot figure" in caplog.text
         # And the thing that actually matters is still on disk.
         window._stop_recorder()
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "rBFi" in f
 
     def test_no_session_folder_means_no_attempt(self, window):

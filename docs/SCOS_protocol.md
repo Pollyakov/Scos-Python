@@ -66,7 +66,7 @@ Show it in the GUI's "Advanced settings" panel so a user can override it for one
 *[Vika's text of 2026-10-08 still reads “X default is 5. Where should we store this setting for your opinion? In setting file or additional manu?”. That question was answered in this repo on 2026-05-05 (commit 341f24b) with the two lines above, and the app follows them: the plot refreshes every 1 s by design.]*
 End when “Stop SCOS” is pressed or when time’s up. I suppose that some limit should be set. Lets say to 4 hours (also in some setting file).
 Save  into .h5  file “rBFi_resultsAndParameters” : rBFi , <I> ,time vectors and all the parameters used. (TBD)
-*[As implemented: the app writes `rBfi_results.h5` (not “rBFi_resultsAndParameters”) with `rBFi`, `Intensity` (<I>), `timeVec`, `startTime`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group; the calibration goes to `Calibration.h5`.]*
+*[As implemented: the app writes `rBFi_resultsAndParameters.h5` (since 2026-10-11, todo U9; earlier sessions have `rBfi_results.h5`) with `rBFi`, `Intensity` (<I>), `timeVec`, `startTime`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group; the calibration goes to `Calibration.h5`.]*
 Create a figure with two axes:  rBfi vs time  and <I> vs time. Add text box with all parameters used.  save into figure file (in python format). (TBD)
 *[As implemented (todo U5, 2026-10-10): `rBfi_fig.png` — rBFi on top and <I> below, two separate plots, each with its own axes, and a box with the parameters the results files record. Drawn from the results file. The reopenable “python format” figure is todo F5.]*
 

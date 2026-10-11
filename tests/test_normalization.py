@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # The QApplication must exist before gui.main_window is imported — see CLAUDE.md.
 _app = QApplication.instance() or QApplication([])
 
+from core.recorder import RESULTS_FILENAME
 from core.session import (NORM_LONG_RECORDING_S, NORM_METHOD_MEAN,
                           NORM_METHOD_PERCENTILE, State, choose_norm_method,
                           normalization_constant)
@@ -325,7 +326,7 @@ class TestResultsFileGetsTheFinalValues:
 
         expected = normalization_constant(_baseline_bfi(window),
                                           NORM_METHOD_PERCENTILE)
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             p = f["Params"].attrs
             assert p["normalizationMethod"] == NORM_METHOD_PERCENTILE
             assert p["normalizationConstant"] == pytest.approx(expected)
@@ -352,7 +353,7 @@ class TestResultsFileRecordsTheNormType:
         window._finish_session()
         window._stop_recorder()
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert f["metadata"].attrs["normalization_type"] == label
             assert f["Params"].attrs["normalizationMethod"] == NORM_METHOD_PERCENTILE
             assert "normalization_type" not in f["Params"].attrs, (
@@ -375,7 +376,7 @@ class TestResultsFileRecordsTheNormType:
         window._finish_session()
         window._stop_recorder()
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "normalization_type" not in f["metadata"].attrs
 
 
@@ -406,7 +407,7 @@ class TestEarlyStop:
         # BFi value the run produced, because the whole run was the baseline.
         expected = normalization_constant(_baseline_bfi(window),
                                           NORM_METHOD_PERCENTILE)
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "rBFi" in f, "an early stop must still produce rBFi"
             p = f["Params"].attrs
             assert p["normalizationMethod"] == NORM_METHOD_PERCENTILE
@@ -420,7 +421,7 @@ class TestEarlyStop:
 
         self._stop_at(window, 3.0)
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(3.0), (
                 "the baseline was 3 s of data; writing the spinbox's 5 s would "
                 "describe a window that never happened"
@@ -461,7 +462,7 @@ class TestEarlyStop:
         window._toggle_scos(False)
 
         assert window._state is State.PREVIEW
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "rBFi" in f
             assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(3.0)
         assert len(window.plot_widget.get_data()[1]) > 0
@@ -477,7 +478,7 @@ class TestEarlyStop:
         window._stop_recorder()
 
         assert window._bfi_norm is None
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "rBFi" not in f
             assert f["bfi"].shape == (20,)
 
@@ -490,7 +491,7 @@ class TestEarlyStop:
         window._finish_session()
         window._stop_recorder()
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert f["Params"].attrs["normalizationWindowSec"] == pytest.approx(5.0)
 
 
@@ -510,7 +511,7 @@ class TestResultsFileValues:
         window._finish_session()
         window._stop_recorder()
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             k2 = f["k2_corr"][:]
             const = f["Params"].attrs["normalizationConstant"]
             # The κ² values must be the ones that were actually measured...
@@ -528,7 +529,7 @@ class TestResultsFileValues:
         window._finish_session()
         window._stop_recorder()
 
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             # 20 s at 40 Hz. In minutes this would be a third of a minute and
             # silently mismatch MATLAB's timeVec.
             assert float(np.max(f["timeVec"][:])) == pytest.approx(20.0, abs=0.05)

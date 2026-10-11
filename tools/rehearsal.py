@@ -72,7 +72,10 @@ RESULTS_GROUPS   = {"Params", "metadata"}
 METADATA_FIELDS  = {"camera_sn", "camera_model", "gain_du_per_e", "gain_source",
                     "time_source", "frames_lost_camera", "frames_dropped_queue",
                     "normalization_type"}
-SESSION_FILES    = {"Calibration.h5", "rBfi_results.h5", "rBfi_fig.png"}
+# Spelled out, not imported from core.recorder, so a wrong name in the app is
+# caught here (protocol step 6; todo U9).
+RESULTS_FILE     = "rBFi_resultsAndParameters.h5"
+SESSION_FILES    = {"Calibration.h5", RESULTS_FILE, "rBfi_fig.png"}
 # How long preview keeps playing after Stop SCOS before Stop Video, so the K1
 # check sees displayed frames arrive after the closing message.
 CLOSING_HOLD_S   = 3.0
@@ -498,7 +501,7 @@ class Slowdown:
         pipe    = w._scos_worker
         dropped = pipe.dropped_count
         t0 = pipe.t0_capture
-        res = folder / "rBfi_results.h5" if folder is not None else None
+        res = folder / RESULTS_FILE if folder is not None else None
         if not run.check(t0 is not None and res is not None and res.exists(),
                          "results file and t=0 available"):
             return
@@ -1031,17 +1034,17 @@ def verify_outputs(run: Run, folder: Path | None, w, cam, args,
                 run.check(n_frames == spin.value(),
                           f"{group} n_frames = {n_frames} (spinbox {spin.value()})")
 
-    res = folder / "rBfi_results.h5"
+    res = folder / RESULTS_FILE
     if not res.exists():
         return
     with h5py.File(res, "r") as f:
         keys     = set(f.keys())
         expected = RESULTS_DATASETS | RESULTS_GROUPS
         run.check(keys == expected,
-                  f"rBfi_results.h5 holds exactly the expected entries "
+                  f"{RESULTS_FILE} holds exactly the expected entries "
                   f"(missing {sorted(expected - keys)}, extra {sorted(keys - expected)})")
         hits = sat_names(f)
-        run.check(not hits, f"no satCapacity in rBfi_results.h5 {hits or ''}")
+        run.check(not hits, f"no satCapacity in {RESULTS_FILE} {hits or ''}")
         if not RESULTS_DATASETS <= keys or "Params" not in keys:
             return
 

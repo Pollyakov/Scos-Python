@@ -163,7 +163,7 @@ from the start of the run for the whole recording (your answer to question 15).
 
 | File | Contents |
 |---|---|
-| `rBfi_results.h5` | `startTime`, `timeVec`, `rBFi`, `Intensity` (mean over the ROI, DU), `Params`, and also `k2_raw`, `k2_corr`, `bfi`. About 3.5 MB per hour. |
+| `rBFi_resultsAndParameters.h5` (sessions before 2026-10-11: `rBfi_results.h5`) | `startTime`, `timeVec`, `rBFi`, `Intensity` (mean over the ROI, DU), `Params`, and also `k2_raw`, `k2_corr`, `bfi`. About 3.5 MB per hour. |
 | `Calibration.h5` | one file, two groups: `dark` (`mean_dark`, `var_dark`, `mask`) and `bright` (`spIm`, `spVar`), each with `n_frames`. ≤ 10 MB at 700 × 700. |
 | `rBfi_fig.png` | rBFi vs time on top and <I> vs time below (two separate plots), with a box of the parameters used — drawn from the results file, so it shows exactly what was saved. PNG for now; an interactive version is on the list (your answer to question 7). |
 

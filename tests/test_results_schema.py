@@ -28,7 +28,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.recorder import CALIBRATION_FILENAME, HDF5Recorder, write_calibration
+from core.recorder import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder,
+                           write_calibration)
 
 
 PARAMS_AT_START = {
@@ -49,7 +50,7 @@ EXPECTED_PARAM_FIELDS = set(PARAMS_AT_START) | {
 
 
 def _recorder(tmp_path, **meta):
-    return HDF5Recorder(tmp_path / "rBfi_results.h5",
+    return HDF5Recorder(tmp_path / RESULTS_FILENAME,
                         {"camera_sn": "40513592", **meta},
                         dict(PARAMS_AT_START))
 
@@ -64,7 +65,20 @@ def _finished_session(tmp_path, n=10, bad_index=None):
         rec.append(0.05 * i, 0.1, k2, 500.0 + i)
     rec.write_rbfi(norm_constant=12.5, method="mean", window_seconds=5.0)
     rec.close()
-    return tmp_path / "rBfi_results.h5", k2_cors
+    return tmp_path / RESULTS_FILENAME, k2_cors
+
+
+# ----------------------------------------------------------------------
+# File name
+# ----------------------------------------------------------------------
+
+class TestFileName:
+
+    def test_is_the_protocol_name(self):
+        # Protocol step 6: "Save into .h5 file 'rBFi_resultsAndParameters'"
+        # (todo U9). Spelled out here because every other test reaches the
+        # file through the constant, so they would pass with any name.
+        assert RESULTS_FILENAME == "rBFi_resultsAndParameters.h5"
 
 
 # ----------------------------------------------------------------------
@@ -76,7 +90,7 @@ class TestStartTime:
     def test_parses_as_a_matlab_datetime(self, tmp_path):
         rec = _recorder(tmp_path)
         rec.close()
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             raw = f["startTime"][()]
         text = raw.decode("ascii") if isinstance(raw, bytes) else str(raw)
         # The format MATLAB's datetime() reads back: 23-Sep-2026 15:41:47
@@ -87,7 +101,7 @@ class TestStartTime:
         """Variable-length UTF-8 reaches MATLAB as a cell array, not a char row."""
         rec = _recorder(tmp_path)
         rec.close()
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             dt = f["startTime"].dtype
             assert h5py.check_string_dtype(dt) is not None
             assert h5py.check_string_dtype(dt).length is not None, (
@@ -136,7 +150,7 @@ class TestParams:
     def test_git_commit_is_recorded(self, tmp_path):
         rec = _recorder(tmp_path)
         rec.close()
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             commit = f["Params"].attrs["gitCommit"]
         assert commit
         # Either a real short hash (optionally marked dirty) or the honest
@@ -180,7 +194,7 @@ class TestRbfi:
         for i in range(5):
             rec.append(0.05 * i, 0.1, 0.08, 500.0)
         rec.close()
-        with h5py.File(tmp_path / "rBfi_results.h5", "r") as f:
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
             assert "rBFi" not in f
             assert f["bfi"].shape == (5,)
             assert "startTime" in f
@@ -313,7 +327,7 @@ class TestGuiWiring:
             w._finish_session()
             w._stop_recorder()
 
-            path = tmp_path / "rBfi_results.h5"
+            path = tmp_path / RESULTS_FILENAME
             assert path.exists(), "the file must carry the name session_tab asks for"
             with h5py.File(path, "r") as f:
                 assert set(f["Params"].attrs) == EXPECTED_PARAM_FIELDS

@@ -6,7 +6,7 @@ came back with a corrected κ² of about −0.0029, so `bfi_raw = 1/κ²` was ne
 computed, `_bfi_norm_buffer` stayed empty, and the session never advanced out
 of MEASURING_INIT. The app showed an empty plot and a frozen
 "Normalizing — 22.3 / 5 s" label for 22 seconds and said nothing. Stopping it
-produced a schema-valid `rBfi_results.h5` with an all-NaN `bfi` and no `rBFi`
+produced a schema-valid results file with an all-NaN `bfi` and no `rBFi`
 at all, and the only trace of the failure was one WARNING line in `app.log`.
 
 That run's cause was specific to `--mock-folder` playback, where the "dark"
@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # the same for the same reason.
 _app = QApplication.instance() or QApplication([])
 
+from core.recorder import RESULTS_FILENAME
 from core.session import State
 from gui.main_window import MainWindow
 
@@ -163,7 +164,7 @@ class TestAbortsOnAllNegative:
         assert str(tmp_path) in text, (
             "an aborted run still wrote raw data; the message must say where"
         )
-        assert (tmp_path / "rBfi_results.h5").exists()
+        assert (tmp_path / RESULTS_FILENAME).exists()
 
     def test_further_results_raise_no_second_dialog(self, window, dialogs):
         _feed(window, [-0.0029] * N_RESULTS)

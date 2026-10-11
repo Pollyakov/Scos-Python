@@ -35,6 +35,15 @@ FLUSH_EVERY = 300   # flush every N appended results (~15 s at 20 Hz)
 # DarkCalibration.h5 / BrightCalibration.h5 — that part of it is superseded.
 CALIBRATION_FILENAME = "Calibration.h5"
 
+# The results file, named as the protocol's step 6 names it: "Save into .h5
+# file 'rBFi_resultsAndParameters'" (user's decision, 2026-10-08, todo U9).
+# Sessions recorded before 2026-10-11 hold `rBfi_results.h5` — the name from
+# `docs/session_tab`, which the protocol text has since replaced. Nothing in
+# the app opens a results file by name (`--mock-h5` takes a path), so old
+# sessions still open; anything added later that looks for the file inside a
+# session folder must accept both names.
+RESULTS_FILENAME = "rBFi_resultsAndParameters.h5"
+
 
 def write_calibration(path: Path, group: str,
                       datasets: dict[str, Any],

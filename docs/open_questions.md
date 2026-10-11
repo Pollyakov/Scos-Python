@@ -34,7 +34,7 @@ let the operator continue? *Implemented:* warn with "Continue anyway?". **No** d
 discard anything. It asks again to turn the laser off and repeats the check.
 *Her reply (2026-10-07):* "What are the failure scenarios? Saving what?"
 
-> **Draft answer to send.** *Saving what:* the results file `rBfi_results.h5`. By the time
+> **Draft answer to send.** *Saving what:* the results file `rBFi_resultsAndParameters.h5`. By the time
 > the check runs, the whole measurement is already recorded. `Calibration.h5` is complete.
 > `timeVec`, `k2_raw`, `k2_corr`, raw `bfi` and `Intensity` are in the results file (written
 > every 300 frames, about 15 s at 20 Hz; the rest is in memory and written at close).
@@ -74,7 +74,7 @@ recording length, and whether frames are saved.
 > (2 bytes per pixel), so they need the same space. Mono8 needs half. All sizes scale
 > linearly with the frame rate. These are for **20 Hz**; at 40 Hz, double them.
 >
-> **Without saving frames**, a session writes very little. `rBfi_results.h5` holds 6 numbers
+> **Without saving frames**, a session writes very little. `rBFi_resultsAndParameters.h5` holds 6 numbers
 > per frame (`timeVec`, `k2_raw`, `k2_corr`, `bfi`, `Intensity`, `rBFi`): about 3.5 MB per
 > hour, 14 MB over 4 h. `Calibration.h5` holds 5 frame-sized float32 images: at most 10 MB
 > at 700 × 700. (47 MB at 1216 × 1936 uncompressed; 23 MB was measured with gzip on
@@ -157,7 +157,7 @@ section B.
 
 **7. Figure format.** **`.png` is fine as a first version.** *Later* she wants a figure that
 can be reopened and explored (zoom, pan) in Python, not MATLAB. Either save an interactive
-HTML file next to the PNG, or add a button that rebuilds the plot from `rBfi_results.h5`.
+HTML file next to the PNG, or add a button that rebuilds the plot from the results file.
 → todo F5. Note: `--mock-h5` already reads a results file, but it *replays* it in real time
 through the live plot. It does not open a finished session in one step.
 
