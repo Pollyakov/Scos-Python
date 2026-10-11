@@ -1939,8 +1939,12 @@ class MainWindow(QMainWindow):
         The calibration collectors run on the GUI thread behind a queued
         connection. When the camera outruns this handler — and at 40 Hz with
         per-frame percentiles over 2.4 Mpx it does — a backlog builds up in
-        Qt's event queue. Measured on the lab recording: 60 to 130 frames,
-        two to three seconds' worth.
+        Qt's event queue. Measured headless on the lab recording, where the
+        prompts return at once: 60 to 130 frames with 60-frame calibrations;
+        with 600 frames, 1555 after the dark one on 2026-10-06, 559 on
+        2026-10-11 with the old dark collector and 31 with the in-place one
+        (todo D8). A real pop-up keeps draining frames while it is open, so
+        on the rig it was 2-3 (2026-10-08).
 
         Every one of those was captured before the operator clicked OK. Without
         this, the dark collector's first frames are laser-on and the bright

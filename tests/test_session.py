@@ -82,6 +82,72 @@ def test_result_raises_with_too_few_frames():
         col.result()
 
 
+class _PlainWelfordDark(DarkCalCollector):
+    """add_frame exactly as it was before todo D8 — a new array for every
+    intermediate. The faster in-place version must give the same bits."""
+
+    def add_frame(self, frame):
+        f = frame.astype(np.float64)
+        self._n += 1
+        if self._mean is None:
+            self._mean = np.zeros_like(f)
+            self._M2   = np.zeros_like(f)
+        delta       = f - self._mean
+        self._mean += delta / self._n
+        self._M2   += delta * (f - self._mean)
+
+
+@pytest.mark.parametrize("dtype, shape", [
+    (np.uint16,  (32, 32)),
+    (np.uint16,  (354, 361)),    # a camera crop: odd, not square
+    (np.uint8,   (17, 23)),      # Mono8
+    (np.float64, (20, 30)),      # already float (e.g. a playback source)
+    (np.float32, (20, 30)),
+])
+def test_in_place_welford_is_bit_identical_to_the_plain_form(dtype, shape):
+    """D8: same arithmetic, so the dark arrays must not change in the last
+    bit — array_equal, not allclose."""
+    rng = np.random.default_rng(3)
+    if np.issubdtype(dtype, np.integer):
+        frames = rng.integers(0, np.iinfo(dtype).max, size=(40, *shape), dtype=dtype)
+    else:
+        frames = (rng.random((40, *shape)) * 4095).astype(dtype)
+    new, ref = DarkCalCollector(40, 7), _PlainWelfordDark(40, 7)
+    for f in frames:
+        new.add_frame(f)
+        ref.add_frame(f)
+    for got, want in zip(new.result(), ref.result()):
+        assert got.dtype == np.float64
+        assert np.array_equal(got, want)
+
+
+@pytest.mark.parametrize("dtype", [np.uint16, np.float64])
+def test_in_place_welford_never_writes_into_the_frame(dtype):
+    """The camera's frame may be shown or saved after the collector has seen
+    it; scratch space must be the collector's own. float64 too: a frame of
+    the scratch arrays' own type is the one an `out=` could reuse unnoticed."""
+    rng = np.random.default_rng(4)
+    frames = _make_frames(rng, n=5).astype(dtype)
+    copies = frames.copy()
+    col = DarkCalCollector(5, 3)
+    for f in frames:
+        col.add_frame(f)
+    assert np.array_equal(frames, copies)
+
+
+def test_two_collectors_do_not_share_scratch_space():
+    rng = np.random.default_rng(5)
+    a_frames, b_frames = _make_frames(rng, n=10), _make_frames(rng, n=10)
+    a, b = DarkCalCollector(10, 1), DarkCalCollector(10, 1)
+    for fa, fb in zip(a_frames, b_frames):       # interleaved
+        a.add_frame(fa)
+        b.add_frame(fb)
+    np.testing.assert_allclose(a.result()[0], a_frames.astype(np.float64).mean(axis=0),
+                               rtol=1e-12)
+    np.testing.assert_allclose(b.result()[1], b_frames.astype(np.float64).var(axis=0, ddof=1),
+                               rtol=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # SessionConfig defaults
 # ---------------------------------------------------------------------------

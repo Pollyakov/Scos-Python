@@ -129,6 +129,9 @@ class DarkCalCollector:
         self._n:    int             = 0
         self._mean: np.ndarray | None = None
         self._M2:   np.ndarray | None = None
+        # Scratch space for add_frame(), allocated with _mean (todo D8).
+        self._delta: np.ndarray | None = None
+        self._tmp:   np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -145,15 +148,30 @@ class DarkCalCollector:
     # Frame accumulation
 
     def add_frame(self, frame: np.ndarray) -> None:
-        """Incorporate one frame into the running statistics."""
-        f = frame.astype(np.float64)
+        """Incorporate one frame into the running statistics.
+
+        Welford's update, with every intermediate written into arrays
+        allocated once, on the first frame (todo D8). The plain form —
+        `delta = f - mean; mean += delta / n; M2 += delta * (f - mean)` —
+        made four or five new full-frame float64 arrays per frame (19 MB each
+        at 1216 × 1936). Same operations in the same order, so the results
+        are bit-for-bit those of the plain form (tests/test_session.py);
+        `frame` itself is never written to. Subtracting a uint16 frame from a
+        float64 array converts it exactly, as `astype(np.float64)` did.
+        """
         self._n += 1
         if self._mean is None:
-            self._mean = np.zeros_like(f)
-            self._M2   = np.zeros_like(f)
-        delta       = f - self._mean
-        self._mean += delta / self._n
-        self._M2   += delta * (f - self._mean)   # Welford update
+            self._mean  = np.zeros(frame.shape, dtype=np.float64)
+            self._M2    = np.zeros(frame.shape, dtype=np.float64)
+            self._delta = np.empty(frame.shape, dtype=np.float64)
+            self._tmp   = np.empty(frame.shape, dtype=np.float64)
+        delta, tmp = self._delta, self._tmp
+        np.subtract(frame, self._mean, out=delta)    # delta = f - mean
+        np.divide(delta, self._n, out=tmp)
+        self._mean += tmp                            # mean += delta / n
+        np.subtract(frame, self._mean, out=tmp)      # f - (new) mean
+        tmp *= delta
+        self._M2 += tmp                              # M2 += delta * (f - mean)
 
     # ------------------------------------------------------------------
     # Final computation
