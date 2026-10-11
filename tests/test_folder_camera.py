@@ -273,3 +273,47 @@ class TestFolderCameraCrop:
         applied = cam.set_roi(25, 0, 10, 8)          # 25 + 10 > 30
         assert applied.is_full_sensor and cam.roi_position is None
         assert len(warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# Dark calibration at the maximum rate (todo U11)
+# ---------------------------------------------------------------------------
+
+class TestFolderCameraMaxFrameRate:
+
+    def _cam(self, tmp_path, n):
+        rec_dir = tmp_path / "recording"
+        rec_dir.mkdir()
+        _write_tiffs(rec_dir, n=n)
+        cam = FolderMockCamera(str(rec_dir), loop=False)
+        cam.open()
+        cam.set_frame_rate(20.0)
+        cam.set_exposure(5000.0)
+        return cam
+
+    def test_maximum_is_one_over_the_exposure_and_off_goes_back(self, tmp_path):
+        cam = self._cam(tmp_path, 2)
+        assert cam.set_max_frame_rate(True) == pytest.approx(200.0)
+        assert cam.set_max_frame_rate(False) == 20.0
+
+    def test_playback_really_runs_faster(self, tmp_path):
+        # 6 frames at 20 Hz take >= 0.25 s; at 200 fps far less.
+        cam = self._cam(tmp_path, 6)
+        cam.set_max_frame_rate(True)
+        stamps = []
+        cam.frame_ready.connect(lambda f, t: stamps.append(t),
+                                Qt.ConnectionType.DirectConnection)
+        cam.start_capture()
+        cam.wait()
+        assert len(stamps) == 6
+        assert stamps[-1] - stamps[0] < 0.2
+
+    def test_at_the_set_rate_it_stays_slow(self, tmp_path):
+        # The control for the test above: same frames, limit on.
+        cam = self._cam(tmp_path, 6)
+        stamps = []
+        cam.frame_ready.connect(lambda f, t: stamps.append(t),
+                                Qt.ConnectionType.DirectConnection)
+        cam.start_capture()
+        cam.wait()
+        assert stamps[-1] - stamps[0] >= 0.2

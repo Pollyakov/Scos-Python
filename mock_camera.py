@@ -53,6 +53,8 @@ class MockCameraThread(QThread):
         self.trigger_mode  = "Off"
         self.trigger_delay = 0.0
         self.roi_position  = None
+        # The dark calibration's maximum rate (todo U11), set_max_frame_rate().
+        self.max_frame_rate = False
         # "Cut Image" crops the frames here, as the camera would (todo U6).
         self._crop = PlaybackCrop()
         self.applied_crop: Crop | None = None
@@ -101,6 +103,22 @@ class MockCameraThread(QThread):
     def set_trigger(self, enabled: bool, delay_us: float = 0.0) -> None:
         self.trigger_mode  = "On" if enabled else "Off"
         self.trigger_delay = delay_us
+
+    def set_max_frame_rate(self, enabled: bool) -> float:
+        """Play as fast as a camera at this exposure could deliver frames —
+        the dark calibration's maximum rate (todo U11; see
+        CameraThread.set_max_frame_rate()). A real camera is limited by its
+        exposure, readout and USB bandwidth; playback mimics only the first,
+        1 / exposure, so it never spins faster than any camera could. (Reading
+        full lab TIFFs from disk is slower than that anyway, ~21 fps.)
+        Returns the rate playback now aims for."""
+        self.max_frame_rate = enabled
+        return self._playback_rate()
+
+    def _playback_rate(self) -> float:
+        if self.max_frame_rate:
+            return 1e6 / max(self.exposure_us, 1.0)
+        return self.frame_rate
 
     def set_roi(self, x: int, y: int, w: int, h: int) -> Crop | None:
         """Cut every frame to this rectangle from now on — see
@@ -153,7 +171,7 @@ class MockCameraThread(QThread):
         n_frames = len(self._stack)
         try:
             while self._running:
-                target_dt = 1.0 / max(self.frame_rate, 1e-3)
+                target_dt = 1.0 / max(self._playback_rate(), 1e-3)
                 t0 = time.perf_counter()
 
                 frame = self._crop.cut(self._stack[idx])

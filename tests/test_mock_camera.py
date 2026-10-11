@@ -238,3 +238,39 @@ class TestMockCameraCrop:
         mock.open()
         mock.set_roi(5, 2, 8, 6)
         assert mock.clear_roi().is_full_sensor
+
+
+# ---------------------------------------------------------------------------
+# Dark calibration at the maximum rate (todo U11)
+# ---------------------------------------------------------------------------
+
+def _play_time(source, n):
+    """Seconds from the first to the last of n frames played without looping."""
+    stamps = []
+    source.frame_ready.connect(lambda f, t: stamps.append(t),
+                               Qt.ConnectionType.DirectConnection)
+    source.start_capture()
+    source.wait()
+    assert len(stamps) == n
+    return stamps[-1] - stamps[0]
+
+
+class TestMockCameraMaxFrameRate:
+
+    def test_maximum_is_one_over_the_exposure_and_off_goes_back(self, tmp_path):
+        _make_tiff(tmp_path / "stack.tif", n_frames=2)
+        mock = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.set_frame_rate(20.0)
+        mock.set_exposure(8000.0)
+        assert mock.set_max_frame_rate(True) == pytest.approx(125.0)
+        assert mock.set_max_frame_rate(False) == 20.0
+
+    def test_playback_really_runs_faster(self, tmp_path):
+        # 6 frames at 20 Hz take >= 0.25 s; at 1 / 5 ms = 200 fps far less,
+        # even with Windows' coarse msleep.
+        _make_tiff(tmp_path / "stack.tif", n_frames=6)
+        mock = MockCameraThread(str(tmp_path / "stack.tif"), loop=False)
+        mock.set_frame_rate(20.0)
+        mock.set_exposure(5000.0)
+        mock.set_max_frame_rate(True)
+        assert _play_time(mock, 6) < 0.2

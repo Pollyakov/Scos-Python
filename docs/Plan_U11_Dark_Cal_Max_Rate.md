@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–2 done 2026-10-11 (results at the end of section 6). Next: step 3.**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–3 done 2026-10-11 (results at the end of section 6). Next: step 4.**
 
 ---
 
@@ -162,7 +162,9 @@ if state is DARK_CAL and camera.frames_emitted - self._frames_seen > K:   # K �
 ### 4.5 Playback and mock sources
 
 `folder_camera.py` and `mock_camera.py` get the same `set_max_frame_rate()`. "Maximum" means
-no sleep between frames. CLAUDE.md's list of what a new frame source must provide gets this
+**1 / exposure** (125 fps at 8 ms) — the limit a real camera's exposure sets. *(Changed in
+step 3 from "no sleep": with frames in memory, `--mock-tiff` would then spin at thousands of
+frames per second, faster than any camera.)* CLAUDE.md's list of what a new frame source must provide gets this
 method too.
 
 Caveat: on the dev/rig PC a full lab TIFF reads at only about 21 fps. Playback cannot show
@@ -220,7 +222,7 @@ together with `n_frames` always gives the rate the collector actually got.)*
 |---|---|---|
 | 1 | **Check and measure, no app code.** (a) Basler docs + pylon emulator: the points in P6. (b) On this PC (it is the rig PC): time the whole `_on_scos_frame` in `DARK_CAL` on full-size and on 611 × 611 frames (offscreen `MainWindow`; extend `tools/bench_dark_collector.py`). Gives the real "GUI can take" numbers for 4.4 and the K. | 30–45 min |
 | 2 | **`camera.py`**: `set_max_frame_rate()`, flag in `_apply_params()`, read-back + log. Fake-camera tests: on → Enable False; off → Enable True + rate, written while not grabbing too; nothing else written; a restart keeps the flag. Mutations: restore without the rate; restore only while grabbing. | 45 min |
-| 3 | **Playback/mock**: the same method in `folder_camera.py` and `mock_camera.py` (no sleep while on). Tests. | 30 min |
+| 3 | **Playback/mock**: the same method in `folder_camera.py` and `mock_camera.py` (1 / exposure while on). Tests. | 30 min |
 | 4 | **`main_window.py`**: switch on/off at every exit (4.2 table, one test per row), the skip (4.4, if D1 = A), the end-of-calibration log line, the `Calibration.h5` attributes (if D2 = yes). Update the `_flush_stale_frames()` docstring (the D8 note asks for it). | 1.5 h |
 | 5 | **Rehearsal** (`tools/rehearsal.py`): checks — the source was at maximum during `DARK_CAL`, back to the set rate at `BRIGHT_CAL` and at `MEASURING`, the queue never above K + margin during `DARK_CAL`. Mutations in `tools/rehearsal_mutations.py`: no restore, no skip. Runs: `normal`, `--cut`, `slowdown` — one at a time. | 45 min |
 | 6 | **`tools/dark_rate_ab.py`** — the A/B tool of section 3 (20 Hz → max → 20 Hz, same session, ROI comparison, pass/fail printed). Tried on the pylon emulator so it runs on the rig the first time. | 45 min |
@@ -291,6 +293,13 @@ read-back exposure, gain, pixel format, image area and the USB throughput limit.
   The log on the emulator: "Frame-rate limit off — camera at its maximum (camera does not
   report its rate; exposure 8000.0 µs, gain 0.00 dB, Mono8, 4096 × 4096 at (0, 0); USB
   throughput limit On, 360 MB/s)".
+
+### Step 3 results (2026-10-11)
+
+`folder_camera.py`, `mock_camera.py`: `set_max_frame_rate()` + `_playback_rate()` (1 / exposure
+while on, else `frame_rate`), used by the playback loop. Tests: `TestMockCameraMaxFrameRate`
+(2), `TestFolderCameraMaxFrameRate` (3, including the 20 Hz control). Mutation "maximum ignored"
+caught in both files.
 
 **Expected dark-calibration duration after U11** (estimates; step 1 and the rig replace
 them). They depend on the exposure (the maximum rate is at most 1000 ÷ exposure in ms, so
