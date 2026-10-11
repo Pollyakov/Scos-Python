@@ -78,6 +78,9 @@ class CameraThread(QThread):
         # so the ROI mask must be built from this, never from roi_position
         # (todo U6, plan pitfall P4). None until the camera is configured.
         self.applied_crop: Crop | None = None
+        # True during the dark calibration: the camera runs as fast as it can
+        # instead of at frame_rate (todo U11, set_max_frame_rate()).
+        self.max_frame_rate = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -131,9 +134,87 @@ class CameraThread(QThread):
 
     def set_frame_rate(self, hz: float):
         self.frame_rate = hz
+        if self.max_frame_rate:
+            return      # stored; set_max_frame_rate(False) writes it
         if self.camera and self.camera.IsOpen() and self.camera.IsGrabbing():
             self.camera.AcquisitionFrameRateEnable.Value = True
             self.camera.AcquisitionFrameRate.Value = hz
+
+    def set_max_frame_rate(self, enabled: bool) -> float | None:
+        """Let the camera run as fast as it can, or put frame_rate back.
+
+        For the dark calibration (todo U11, Vika 2026-10-08): the spacing
+        between dark frames does not matter, so the camera's frame-rate limit
+        is switched off and it runs as fast as exposure, readout and USB
+        bandwidth allow. Exposure, gain, pixel format and image area are not
+        touched — the dark noise depends on them.
+
+        `False` writes the limit back on *and* the rate, explicitly, whatever
+        the trigger mode: "back to normal" must be a written value, never an
+        assumption, because _apply_params() writes neither node with the
+        trigger On (plan pitfall P1). Writes whenever the camera is open,
+        grabbing or not — a camera keeps the setting until it is powered off
+        (P3). No restart: both nodes can be written while grabbing (verified
+        on the pylon emulator, plan step 1).
+
+        Returns the rate the camera reports, or None if it is not open or
+        reports none (the pylon emulator has no such node).
+        """
+        self.max_frame_rate = enabled
+        if not (self.camera and self.camera.IsOpen()):
+            return None
+        self._write_frame_rate()
+        rate = self.resulting_frame_rate()
+        rate_txt = (f"camera reports {rate:.1f} fps" if rate is not None
+                    else "camera does not report its rate")
+        if enabled:
+            cam, c = self.camera, self.applied_crop
+            area = (f"{c.width} × {c.height} at ({c.offset_x}, {c.offset_y})"
+                    if c is not None else "image area unknown")
+            logger.info(
+                "Frame-rate limit off — camera at its maximum (%s; exposure "
+                "%.1f µs, gain %.2f dB, %s, %s; %s)",
+                rate_txt, cam.ExposureTime.Value, cam.Gain.Value,
+                cam.PixelFormat.Value, area, self._throughput_limit())
+        else:
+            logger.info("Frame-rate limit back on — %.1f Hz (%s)",
+                        self.frame_rate, rate_txt)
+        return rate
+
+    def resulting_frame_rate(self) -> float | None:
+        """The frame rate the camera says it will deliver, or None. Newer
+        Basler cameras call it BslResultingAcquisitionFrameRate, older ones
+        ResultingFrameRate (the rig's a2A1920 answers to the latter); the
+        pylon emulator has neither."""
+        for name in ("BslResultingAcquisitionFrameRate", "ResultingFrameRate"):
+            try:
+                node = getattr(self.camera, name)
+                if genicam.IsReadable(node):
+                    return float(node.Value)
+            except Exception:
+                pass
+        return None
+
+    def _throughput_limit(self) -> str:
+        """The USB bandwidth cap, for the log: when On it also caps the
+        maximum frame rate (Basler, DeviceLinkThroughputLimitMode). Read
+        only — U11 does not change it."""
+        try:
+            mode = self.camera.DeviceLinkThroughputLimitMode.Value
+            if mode == "On":
+                limit = self.camera.DeviceLinkThroughputLimit.Value
+                return f"USB throughput limit On, {limit / 1e6:.0f} MB/s"
+            return f"USB throughput limit {mode}"
+        except Exception:
+            return "USB throughput limit not reported"
+
+    def _write_frame_rate(self) -> None:
+        cam = self.camera
+        if self.max_frame_rate:
+            cam.AcquisitionFrameRateEnable.Value = False
+        else:
+            cam.AcquisitionFrameRateEnable.Value = True
+            cam.AcquisitionFrameRate.Value       = self.frame_rate
 
     def set_trigger(self, enabled: bool, delay_us: float = 0.0):
         self.trigger_mode  = "On" if enabled else "Off"
@@ -296,8 +377,9 @@ class CameraThread(QThread):
             cam.TriggerSource.Value = "Line2"
             cam.TriggerDelay.Value  = self.trigger_delay
         else:
-            cam.AcquisitionFrameRateEnable.Value = True
-            cam.AcquisitionFrameRate.Value       = self.frame_rate
+            # Honours max_frame_rate, so a restart during the dark calibration
+            # keeps the maximum rate (todo U11).
+            self._write_frame_rate()
 
         # Exposure & gain
         cam.ExposureTime.Value = self.exposure_us

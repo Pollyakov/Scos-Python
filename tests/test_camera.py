@@ -411,3 +411,131 @@ class TestCameraCrop:
         assert cam.set_roi(760, 402, 412, 412) is None
         assert cam.roi_position == (760, 402, 412, 412)
         assert cam.applied_crop is None
+
+
+# ---------------------------------------------------------------------------
+# Dark calibration at the camera's maximum frame rate (todo U11):
+# set_max_frame_rate() — docs/Plan_U11_Dark_Cal_Max_Rate.md, step 2
+# ---------------------------------------------------------------------------
+
+def _rate_thread(grabbing=True, trigger="Off", **nodes):
+    """A CameraThread on the fake camera, configured as Start Video leaves it:
+    20 Hz, trigger as given. `nodes` adds e.g. ResultingFrameRate=118.0."""
+    cam, warnings = _crop_thread(grabbing=grabbing)
+    cam.frame_rate = 20.0
+    cam.exposure_us, cam.gain_db = 8000.0, 8.0
+    cam.trigger_mode = trigger
+    cam._apply_params()
+    for name, value in nodes.items():
+        setattr(cam.camera, name, _types.SimpleNamespace(Value=value))
+    cam.camera.calls.clear()
+    return cam, warnings
+
+
+def _settings(fake):
+    """Everything the dark noise depends on, as the camera holds it."""
+    return (fake.ExposureTime.Value, fake.Gain.Value, fake.PixelFormat.Value,
+            fake.TriggerMode.Value, fake.OffsetX.Value, fake.OffsetY.Value,
+            fake.Width.Value, fake.Height.Value)
+
+
+class TestMaxFrameRate:
+
+    @pytest.fixture(autouse=True)
+    def _fake_genicam(self, monkeypatch):
+        # As in TestCameraCrop: patch the genicam camera.py actually uses.
+        monkeypatch.setattr(camera_module, "genicam", _types.SimpleNamespace(
+            IsWritable=lambda node: True, IsReadable=lambda node: True))
+
+    def test_on_switches_the_limit_off(self):
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is False
+        assert cam.max_frame_rate is True
+
+    def test_off_writes_the_limit_and_the_rate_back(self):
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        # Whatever the rate node holds now, "back to normal" is written, not
+        # assumed (a fresh camera's value is its own default, not ours).
+        cam.camera.AcquisitionFrameRate.Value = 160.0
+        cam.set_max_frame_rate(False)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is True
+        assert cam.camera.AcquisitionFrameRate.Value == 20.0
+
+    def test_off_is_written_even_when_not_grabbing(self):
+        # A camera keeps the setting until it is powered off: the restore
+        # after Stop Video or at close must reach it (plan pitfall P3).
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        cam.camera._grabbing = False
+        cam.set_max_frame_rate(False)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is True
+        assert cam.camera.AcquisitionFrameRate.Value == 20.0
+
+    def test_off_is_written_with_the_trigger_on_too(self):
+        # _apply_params() writes neither node with the trigger On, so the
+        # restore must do it itself (plan pitfall P1).
+        cam, _ = _rate_thread(trigger="On")
+        cam.set_max_frame_rate(True)
+        cam.set_max_frame_rate(False)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is True
+        assert cam.camera.AcquisitionFrameRate.Value == 20.0
+
+    def test_nothing_else_changes_and_nothing_restarts(self):
+        # The dark noise depends on exposure, gain, pixel format and image
+        # area — only the spacing between frames may change.
+        cam, _ = _rate_thread()
+        cam.set_roi(760, 402, 412, 412)
+        cam.camera.calls.clear()
+        before = _settings(cam.camera)
+        cam.set_max_frame_rate(True)
+        assert _settings(cam.camera) == before
+        cam.set_max_frame_rate(False)
+        assert _settings(cam.camera) == before
+        assert cam.camera.calls == [], "switching the rate must not restart grabbing"
+        assert cam.camera.IsGrabbing()
+
+    @pytest.mark.parametrize("restart", [
+        lambda cam: cam.set_trigger(False),
+        lambda cam: cam.set_pixel_format("Mono12"),
+        lambda cam: cam.set_roi(760, 402, 412, 412),
+    ])
+    def test_a_restart_during_the_dark_calibration_keeps_the_maximum(self, restart):
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        restart(cam)
+        assert cam.camera.calls == ["stop", "start"]
+        assert cam.camera.AcquisitionFrameRateEnable.Value is False
+
+    def test_a_restart_after_it_keeps_the_set_rate(self):
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        cam.set_max_frame_rate(False)
+        cam.set_trigger(False)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is True
+        assert cam.camera.AcquisitionFrameRate.Value == 20.0
+
+    def test_a_new_rate_meanwhile_is_kept_for_later(self):
+        # The parameter boxes are locked during the dark calibration, but if a
+        # rate arrived anyway it must not switch the limit back on mid-way.
+        cam, _ = _rate_thread()
+        cam.set_max_frame_rate(True)
+        cam.set_frame_rate(25.0)
+        assert cam.camera.AcquisitionFrameRateEnable.Value is False
+        cam.set_max_frame_rate(False)
+        assert cam.camera.AcquisitionFrameRate.Value == 25.0
+
+    def test_not_open_yet_only_remembers(self):
+        cam = CameraThread()
+        assert cam.set_max_frame_rate(True) is None
+        assert cam.max_frame_rate is True
+
+    @pytest.mark.parametrize("nodes, expected", [
+        ({"BslResultingAcquisitionFrameRate": 118.3}, 118.3),     # newer cameras
+        ({"ResultingFrameRate": 76.0}, 76.0),                     # the rig's a2A1920
+        ({}, None),                                               # pylon emulator
+    ])
+    def test_the_resulting_rate_is_reported_when_the_camera_has_it(self, nodes, expected):
+        cam, _ = _rate_thread(**nodes)
+        assert cam.set_max_frame_rate(True) == expected
