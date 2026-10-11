@@ -135,6 +135,23 @@ ready to send:
 >    "Advanced settings" panel.
 > Could you update the document, or tell me if either should be different?
 
+**19. Where the ROI circle is, in a cut session** *(raised 2026-10-11 with U10; a confirmation,
+plan decision D3)*. Message, ready to send:
+
+> "Cut Image" now crops on the camera itself, so every session records which part of the
+> sensor was used: the results file has a group `metadata/crop` with `OffsetX`, `OffsetY`,
+> `Width`, `Height`, `SensorWidth`, `SensorHeight` (the full sensor when there is no cut), and
+> `Calibration.h5` has the same group inside `dark` and `bright`. `Params.ROI` (cx, cy, r) stays
+> in **full-sensor** coordinates, so the circle means the same place in every file; to place it
+> in a cut session's arrays, subtract `OffsetX` from cx and `OffsetY` from cy. In MATLAB, read
+> them with `double(h5readatt(file, '/metadata/crop', 'OffsetX'))` — they come back as `int64`,
+> and without `double()` the subtraction is rounded to whole pixels. Is this convention OK for
+> you?
+
+*Checked before sending:* MATLAB R2020b reads all six values from the results file and both
+calibration groups (cut rehearsal, crop 354 × 354 at (1039, 508)), 2026-10-11 — that is where
+the `int64` rounding was found.
+
 ---
 
 ## Notes on where these came from

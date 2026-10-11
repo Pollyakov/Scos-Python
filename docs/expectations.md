@@ -182,11 +182,11 @@ anywhere.**
 | **`frames_dropped_queue`** | frames that reached the PC but were not processed (the "Dropped" count) |
 | **`normalization_type`** | the "Norm. type" chosen in the app for this run: `Number of seconds` or `Pulsation lower level`. `Params.normalizationMethod` says which statistic divided the data (`mean` or `percentile5`); this says why — a short recording gets `percentile5` under either type. Absent when no rBFi was written. |
 
-| **`crop`** (a subgroup, since 2026-10-11) | the part of the sensor the camera sent — your request of 2026-10-08: **`OffsetX`**, **`OffsetY`** (the sensor column and row of the image's top-left pixel), **`Width`**, **`Height`**, plus **`SensorWidth`**, **`SensorHeight`**. Without Cut Image it is the full sensor (offsets 0). The same subgroup is in `Calibration.h5`'s `dark` and `bright`, so a calibration file always says which crop its arrays belong to. In MATLAB: `h5readatt(file, '/metadata/crop', 'OffsetX')` |
+| **`crop`** (a subgroup, since 2026-10-11) | the part of the sensor the camera sent — your request of 2026-10-08: **`OffsetX`**, **`OffsetY`** (the sensor column and row of the image's top-left pixel), **`Width`**, **`Height`**, plus **`SensorWidth`**, **`SensorHeight`**. Without Cut Image it is the full sensor (offsets 0). The same subgroup is in `Calibration.h5`'s `dark` and `bright`, so a calibration file always says which crop its arrays belong to. In MATLAB: `double(h5readatt(file, '/metadata/crop', 'OffsetX'))` — the values come back as `int64`, and without `double()` arithmetic with the decimal ROI is rounded to whole pixels (`1215.1 - OffsetX` gives 176, not 176.1; checked in MATLAB R2020b, 2026-10-11) |
 
 **`Params.ROI` stays in full-sensor coordinates**, cut or not: the circle (cx, cy, r) means the
 same place on the sensor in every file. To find it in a cut session's arrays (e.g.
-`Calibration.h5`'s `mask`), subtract `OffsetX` from cx and `OffsetY` from cy.
+`Calibration.h5`'s `mask`), subtract `OffsetX` from cx and `OffsetY` from cy (as `double`, see above).
 
 Both counts are from Start SCOS and should be **0**. If not, `timeVec` still has the true
 time of every frame that *was* processed, so the gaps are visible in the data rather than
