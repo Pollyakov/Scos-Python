@@ -64,6 +64,13 @@ U6 — the camera-side crop (these add --cut; measured 2026-10-11 with
            slicing, wrong pixels, no error → "processor.bright_var is
            (1216, 1936), the frames' size (354, 354)" (--cut-radius 150)
 
+U10 — the crop recorded in the files (adds --cut):
+  crop-xy      OffsetX and OffsetY swapped when the crop is written → all
+           three "<group>/crop = the camera's image area at MEASURING" checks
+           (metadata, dark, bright; measured 2026-10-11: written (0, 284),
+           expected (284, 0)). Width/Height are kept, so this is the swap the
+           array-shape check cannot see.
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -82,9 +89,10 @@ MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "leak": "slowdown", "never-rearm": "recovery",
              "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown",
              "frame-text": "slowdown",
-             "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal"}
+             "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal",
+             "crop-xy": "normal"}
 # These test the crop, so they always run with --cut.
-NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright"}
+NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright", "crop-xy"}
 
 
 def apply(mutation: str) -> None:
@@ -188,6 +196,16 @@ def apply(mutation: str) -> None:
             finally:
                 self._camera_crop = crop
         MainWindow._on_scos_frame = _on_scos_frame
+
+    elif mutation == "crop-xy":
+        import core.recorder as R
+        original = R.crop_attrs
+
+        def crop_attrs(crop):
+            a = original(crop)
+            a["OffsetX"], a["OffsetY"] = a["OffsetY"], a["OffsetX"]
+            return a
+        R.crop_attrs = crop_attrs
 
     elif mutation == "cut-stale-bright":
         from gui.main_window import MainWindow

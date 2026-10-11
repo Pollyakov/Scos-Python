@@ -106,6 +106,18 @@ def parameter_lines(results: h5py.Group,
     if g is not None and g_src:
         g_text += f" ({g_src})"
     n_invalid = int(np.count_nonzero(~np.isfinite(bfi))) if bfi.size else 0
+    # The camera's image area (todo U10). Two short rows: one long line ran
+    # past the figure's right edge.
+    crop = (results["metadata/crop"].attrs
+            if "metadata" in results and "crop" in results["metadata"] else None)
+    area_text = sensor_text = MISSING          # sessions before 2026-10-11
+    if crop is not None and all(k in crop for k in ("OffsetX", "OffsetY", "Width", "Height",
+                                                    "SensorWidth", "SensorHeight")):
+        w, h = int(crop["Width"]), int(crop["Height"])
+        sw, sh = int(crop["SensorWidth"]), int(crop["SensorHeight"])
+        sensor_text = f"{sw} × {sh} px"
+        area_text = ("full sensor" if (w, h) == (sw, sh) else
+                     f"{w} × {h} at ({int(crop['OffsetX'])}, {int(crop['OffsetY'])})")
 
     def frames(group: str) -> str:
         n = cal.get(group, {}).get("n_frames")
@@ -124,6 +136,8 @@ def parameter_lines(results: h5py.Group,
         ("Frame rate",      _fmt(_attr(p, "frameRate"), "g", "Hz")),
         ("Window size",     _fmt(_attr(p, "windowSize"), "", "px")),
         ("ROI",             roi_text),
+        ("Image area",      area_text),
+        ("Sensor",          sensor_text),
         ("Dark cal.",       frames("dark")),
         ("Bright cal.",     frames("bright")),
         ("Norm. type",      _fmt(_attr(meta, "normalization_type"))),

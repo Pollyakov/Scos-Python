@@ -26,6 +26,8 @@ from typing import Any
 
 import h5py
 
+from core.crop import Crop
+
 
 FLUSH_EVERY = 300   # flush every N appended results (~15 s at 20 Hz)
 
@@ -44,10 +46,41 @@ CALIBRATION_FILENAME = "Calibration.h5"
 # session folder must accept both names.
 RESULTS_FILENAME = "rBFi_resultsAndParameters.h5"
 
+# The camera's image area a session used (todo U10). Vika asked for it as "a
+# struct with metadata": a group of attributes, named after the camera's own
+# features, so MATLAB reads h5readatt(file, '/metadata/crop', 'OffsetX'). The
+# same group sits in Calibration.h5's `dark` and `bright` groups, so a
+# calibration file always says which crop its arrays belong to. No Cut Image →
+# the full sensor (offsets 0, Width/Height = SensorWidth/SensorHeight).
+CROP_GROUP = "crop"
+
+
+def crop_attrs(crop: Crop) -> dict[str, int]:
+    """The crop as the attributes stored in a `crop` group. Offsets are the
+    sensor pixel (column, row) of the frame's top-left pixel."""
+    return {
+        "OffsetX":      int(crop.offset_x),
+        "OffsetY":      int(crop.offset_y),
+        "Width":        int(crop.width),
+        "Height":       int(crop.height),
+        "SensorWidth":  int(crop.sensor_width),
+        "SensorHeight": int(crop.sensor_height),
+    }
+
+
+def write_crop(parent: h5py.Group, crop: Crop) -> None:
+    """Write `crop` as a `crop` group under `parent`, replacing any old one."""
+    if CROP_GROUP in parent:
+        del parent[CROP_GROUP]
+    g = parent.create_group(CROP_GROUP)
+    for k, v in crop_attrs(crop).items():
+        g.attrs[k] = v
+
 
 def write_calibration(path: Path, group: str,
                       datasets: dict[str, Any],
-                      attrs: dict[str, Any] | None = None) -> None:
+                      attrs: dict[str, Any] | None = None,
+                      crop: Crop | None = None) -> None:
     """Write one calibration group ("dark" or "bright") into the session file.
 
     Opened in append mode and called twice per session, because dark and bright
@@ -56,6 +89,9 @@ def write_calibration(path: Path, group: str,
 
     Arrays are stored float32 with gzip: these are full-frame images
     (1216×1936 for the a2A1920), and three of them uncompressed is ~28 MB.
+
+    `crop`, the camera's image area the arrays were taken with, goes into a
+    `crop` group inside this group (todo U10).
     """
     import numpy as np
 
@@ -72,6 +108,8 @@ def write_calibration(path: Path, group: str,
                              compression="gzip", compression_opts=4)
         for k, v in (attrs or {}).items():
             g.attrs[k] = v
+        if crop is not None:
+            write_crop(g, crop)
 
 
 def _git_commit() -> str:
@@ -109,7 +147,8 @@ class HDF5Recorder:
     """
 
     def __init__(self, path: Path, metadata: dict[str, Any],
-                 params_fields: dict[str, Any] | None = None) -> None:
+                 params_fields: dict[str, Any] | None = None,
+                 crop: Crop | None = None) -> None:
         self._path = Path(path)
         self._buf_t:      list[float] = []
         self._buf_k2raw:  list[float] = []
@@ -128,6 +167,8 @@ class HDF5Recorder:
         meta = self._f.create_group("metadata")
         for k, v in metadata.items():
             meta.attrs[k] = v
+        if crop is not None:
+            write_crop(meta, crop)          # metadata/crop (todo U10)
 
         # Fixed-length ASCII, not h5py's variable-length UTF-8 default —
         # MATLAB's h5read returns the latter as a cell array instead of a char

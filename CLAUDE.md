@@ -123,7 +123,7 @@ Known camera parameters:
 | Basler a2A1920-160umBAS (SN 40075248, "DAN01") — **the rig camera**, USB | 12 | 1216×1936 sensor (less after Cut Image); in the gain table at Mono12, 8 dB only (G = 0.9564). USB block IDs start at 0 (Done item 41). First rig session 2026-10-08 |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
-- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBFi_resultsAndParameters.h5` (the protocol's name, `core.recorder.RESULTS_FILENAME`; sessions before 2026-10-11 have `rBfi_results.h5`) (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts, `normalization_type`), `Calibration.h5` (`dark` + `bright` groups) and `rBfi_fig.png` (rBFi above ⟨I⟩ plus a parameters box, drawn from the results file by `core/results_figure.py`)
+- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBFi_resultsAndParameters.h5` (the protocol's name, `core.recorder.RESULTS_FILENAME`; sessions before 2026-10-11 have `rBfi_results.h5`) (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `time_source`, lost/dropped frame counts, `normalization_type`, and a `crop` subgroup — the camera's image area: `OffsetX`, `OffsetY`, `Width`, `Height`, `SensorWidth`, `SensorHeight`, todo U10), `Calibration.h5` (`dark` + `bright` groups, each with the same `crop` subgroup) and `rBfi_fig.png` (rBFi above ⟨I⟩ plus a parameters box, drawn from the results file by `core/results_figure.py`)
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
@@ -184,7 +184,8 @@ measurement alike. Rules that keep it accurate:
   to the full sensor (`MainWindow._apply_camera_crop()`).
 - The ROI circle stays in **sensor** coordinates; the mask is built for the crop with
   `core.crop.circle_mask(shape, circle, offset)`. `Params.ROI` is therefore the same in a cut
-  and an uncut session; the crop itself is in `metadata` (todo U10).
+  and an uncut session; the crop itself is in `metadata/crop` and in `Calibration.h5`'s
+  `dark/crop` and `bright/crop` (todo U10, `MainWindow._session_crop()`).
 - Frames of the previous size still queued after Cut/Full are **skipped**
   (`_on_scos_frame`, one "Skipped N frame(s)" log line) — before this the mask was reset to
   the whole frame, silently throwing the ROI away.

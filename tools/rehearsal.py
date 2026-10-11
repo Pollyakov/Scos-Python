@@ -859,6 +859,7 @@ def snapshot_measuring(w, run: Run) -> None:
     crop = w._camera_crop
     p = w.processor
     run.at_measuring = {
+        "crop": crop,
         "frame_shape": tuple(crop.shape) if crop is not None else None,
         "arrays": {n: (None if getattr(p, n, None) is None else tuple(getattr(p, n).shape))
                    for n in ("dark_mean", "dark_var", "bright_var")},
@@ -884,6 +885,58 @@ def check_measuring(run: Run) -> None:
               "Cut/Full Image and the ROI buttons locked during the measurement "
               f"(cut {'enabled' if m['cut_enabled'] else 'locked'}, "
               f"ROI {'enabled' if m['roi_enabled'] else 'locked'})")
+
+
+def check_crop_record(run: Run, folder: Path | None, args) -> None:
+    """Every run (todo U10): the camera's image area is recorded in the
+    results file's metadata/crop and in both Calibration.h5 groups, it is the
+    crop the camera reported when the measurement began, and its Width and
+    Height are the calibration arrays' columns and rows — which catches a
+    swapped x/y. Uncut: the full sensor. --cut: the crop that was clicked."""
+    import h5py
+
+    # Spelled out, not core.recorder.crop_attrs: a wrong attribute name or a
+    # swapped x/y in the app must not be expected the same wrong way here.
+    def crop_attrs(c) -> dict[str, int]:
+        return {"OffsetX": c.offset_x, "OffsetY": c.offset_y, "Width": c.width,
+                "Height": c.height, "SensorWidth": c.sensor_width,
+                "SensorHeight": c.sensor_height}
+
+    print("\nChecks — image area in the files (U10)")
+    crop = run.at_measuring.get("crop") if run.at_measuring else None
+    if folder is None or crop is None:
+        run.check(False, "the session folder and the measured image area are known")
+        return
+    expected = crop_attrs(crop)
+    found: dict[str, dict | None] = {}
+    shapes: dict[str, tuple] = {}
+    for fname, group in ((RESULTS_FILE, "metadata"), ("Calibration.h5", "dark"),
+                         ("Calibration.h5", "bright")):
+        path = folder / fname
+        if not path.exists():
+            found[group] = None
+            continue
+        with h5py.File(path, "r") as f:
+            g = f.get(f"{group}/crop")
+            found[group] = None if g is None else {k: int(v) for k, v in g.attrs.items()}
+            if group in ("dark", "bright"):
+                for name in ("mean_dark", "spIm"):
+                    if name in f[group]:
+                        shapes[group] = tuple(f[group][name].shape)
+    for group, got in found.items():
+        run.check(got == expected,
+                  f"{group}/crop = the camera's image area at MEASURING "
+                  f"({got} vs {expected})")
+    for group, shape in shapes.items():
+        run.check(shape == (expected["Height"], expected["Width"]),
+                  f"{group} arrays are Height × Width = "
+                  f"{expected['Height']} × {expected['Width']} (shape {shape})")
+    if args.cut:
+        run.check(run.cut_crop is not None and crop_attrs(run.cut_crop) == expected,
+                  f"recorded crop = the one Cut Image applied ({run.cut_crop})")
+    else:
+        run.check(crop.is_full_sensor,
+                  f"uncut session records the full sensor ({crop})")
 
 
 def check_cut(w, cam, run: Run, folder: Path | None) -> None:
@@ -1089,6 +1142,7 @@ def rehearse(args, run: Run) -> Path | None:
                   f"frame(s) (K1; now {run.closing_later!r})")
         check_measuring(run)
         verify_outputs(run, folder, w, cam, args, wall_start)
+        check_crop_record(run, folder, args)
         scenario.extra_checks(w, run, folder, args)
         if args.cut:
             check_cut(w, cam, run, folder)

@@ -28,6 +28,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from PyQt6.QtCore import QObject, pyqtSignal
+
+from core.crop import Crop, circle_mask
 from core.recorder import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder,
                            write_calibration)
 
@@ -66,6 +69,42 @@ def _finished_session(tmp_path, n=10, bad_index=None):
     rec.write_rbfi(norm_constant=12.5, method="mean", window_seconds=5.0)
     rec.close()
     return tmp_path / RESULTS_FILENAME, k2_cors
+
+
+class _FakeCamera(QObject):
+    """Just enough of a camera for MainWindow; no applied_crop, like a
+    source that cannot crop."""
+    frame_ready   = pyqtSignal(np.ndarray, float)
+    display_ready = pyqtSignal(np.ndarray)
+    error         = pyqtSignal(str)
+    warning       = pyqtSignal(str)
+    pixel_format  = "Mono12"
+    exposure_us   = 8000
+    gain_db       = 8.0
+    frame_rate    = 20.0
+    trigger_mode  = "Off"
+    trigger_delay = 0
+    frames_lost   = 0          # camera.py's BlockID count, since Start Video
+    time_source   = "camera"   # camera clock accepted by FrameClock
+
+    def set_trigger(self, *a, **k):      pass
+    def set_exposure(self, *a, **k):     pass
+    def set_gain(self, *a, **k):         pass
+    def set_frame_rate(self, *a, **k):   pass
+    def set_pixel_format(self, *a, **k): pass
+    def start_capture(self, *a, **k):    pass
+    def stop(self, *a, **k):             pass
+    def close(self, *a, **k):            pass
+    def get_info(self):
+        return {"serial": "40513592", "model": "a2A1920-160umPRO"}
+
+
+
+def _window():
+    from PyQt6.QtWidgets import QApplication
+    _app = QApplication.instance() or QApplication([])
+    from gui.main_window import MainWindow
+    return MainWindow(camera=_FakeCamera())
 
 
 # ----------------------------------------------------------------------
@@ -264,37 +303,7 @@ class TestGuiWiring:
     the GUI asks it to, with the values the operator set in the widgets."""
 
     def test_finish_session_writes_a_complete_results_file(self, tmp_path, monkeypatch):
-        from PyQt6.QtCore import QObject, pyqtSignal
-        from PyQt6.QtWidgets import QApplication
-        _app = QApplication.instance() or QApplication([])
-        from gui.main_window import MainWindow
-
-        class _FakeCamera(QObject):
-            frame_ready   = pyqtSignal(np.ndarray, float)
-            display_ready = pyqtSignal(np.ndarray)
-            error         = pyqtSignal(str)
-            warning       = pyqtSignal(str)
-            pixel_format  = "Mono12"
-            exposure_us   = 8000
-            gain_db       = 8.0
-            frame_rate    = 20.0
-            trigger_mode  = "Off"
-            trigger_delay = 0
-            frames_lost   = 0          # camera.py's BlockID count, since Start Video
-            time_source   = "camera"   # camera clock accepted by FrameClock
-
-            def set_trigger(self, *a, **k):      pass
-            def set_exposure(self, *a, **k):     pass
-            def set_gain(self, *a, **k):         pass
-            def set_frame_rate(self, *a, **k):   pass
-            def set_pixel_format(self, *a, **k): pass
-            def start_capture(self, *a, **k):    pass
-            def stop(self, *a, **k):             pass
-            def close(self, *a, **k):            pass
-            def get_info(self):
-                return {"serial": "40513592", "model": "a2A1920-160umPRO"}
-
-        w = MainWindow(camera=_FakeCamera())
+        w = _window()
         try:
             w.spn_fps.setValue(20.0)
             w.spn_exposure.setValue(5.0)
@@ -348,3 +357,131 @@ class TestGuiWiring:
                 assert f["rBFi"].shape == f["timeVec"].shape
         finally:
             w.close()
+
+
+# ----------------------------------------------------------------------
+# The camera's image area (todo U10)
+# ----------------------------------------------------------------------
+
+# Offsets, width and height all different, so a swapped x/y or width/height
+# cannot pass by coincidence.
+CUT = Crop(offset_x=16, offset_y=10, width=24, height=18,
+           sensor_width=64, sensor_height=48)
+CUT_ATTRS = {"OffsetX": 16, "OffsetY": 10, "Width": 24, "Height": 18,
+             "SensorWidth": 64, "SensorHeight": 48}
+
+
+def _crop_of(group) -> dict:
+    return {k: int(v) for k, v in group["crop"].attrs.items()}
+
+
+class TestCropRecord:
+    """Vika, 2026-10-08: record the crop that was used — width, height,
+    OffsetX, OffsetY and the full sensor size — as a struct in `metadata`,
+    and the same in Calibration.h5."""
+
+    def test_results_file_has_it_in_metadata(self, tmp_path):
+        rec = HDF5Recorder(tmp_path / RESULTS_FILENAME, {"camera_sn": "1"},
+                           dict(PARAMS_AT_START), crop=CUT)
+        rec.close()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            assert _crop_of(f["metadata"]) == CUT_ATTRS
+            # Engineering provenance — Params stays exactly her fields.
+            assert "crop" not in f["Params"]
+            assert set(f["Params"].attrs) == set(PARAMS_AT_START) | {"gitCommit"}
+
+    def test_both_calibration_groups_have_it(self, tmp_path):
+        path = tmp_path / CALIBRATION_FILENAME
+        write_calibration(path, "dark", {"mean_dark": np.zeros((18, 24))},
+                          {"n_frames": 600}, crop=CUT)
+        write_calibration(path, "bright", {"spIm": np.zeros((18, 24))},
+                          {"n_frames": 600}, crop=CUT)
+        with h5py.File(path, "r") as f:
+            assert set(f) == {"dark", "bright"}, "no new top-level group"
+            assert _crop_of(f["dark"]) == CUT_ATTRS
+            assert _crop_of(f["bright"]) == CUT_ATTRS
+            assert f["dark"].attrs["n_frames"] == 600, "attrs are kept too"
+
+    def test_recalibrating_replaces_the_crop(self, tmp_path):
+        path = tmp_path / CALIBRATION_FILENAME
+        write_calibration(path, "dark", {}, crop=CUT)
+        full = Crop(0, 0, 64, 48, 64, 48)
+        write_calibration(path, "dark", {}, crop=full)
+        with h5py.File(path, "r") as f:
+            assert _crop_of(f["dark"])["Width"] == 64
+
+    def test_no_crop_given_writes_no_group(self, tmp_path):
+        rec = HDF5Recorder(tmp_path / RESULTS_FILENAME, {}, {})
+        rec.close()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            assert "crop" not in f["metadata"]
+
+    def test_the_session_writes_the_cameras_crop_into_all_three_places(
+            self, tmp_path, monkeypatch):
+        """The real path: dark calibration → bright calibration → results
+        file, on frames the camera cut. What is recorded is the crop the
+        camera reported (_camera_crop), which is what the frames really are."""
+        from core.session import BrightCalCollector, DarkCalCollector, State
+        w = _window()
+        try:
+            w._camera_crop = CUT
+            w._mask = circle_mask(CUT.shape, {"cx": 28.0, "cy": 19.0, "r": 6.0},
+                                  (CUT.offset_x, CUT.offset_y))
+            w._session_folder = tmp_path
+            w.processor.bit_depth = 12
+            w.processor.gain_db   = 8.0
+            assert w._prepare_gain()
+            rng = np.random.default_rng(0)
+            frame = lambda: rng.integers(90, 110, CUT.shape).astype(np.uint16)
+
+            w._dark_cal_collector = DarkCalCollector(2, 7)
+            for _ in range(2):
+                w._dark_cal_collector.add_frame(frame())
+            w._set_state(State.DARK_CAL)
+            monkeypatch.setattr(w, "_start_bright_cal", lambda: None)
+            w._finish_dark_cal()
+
+            w._bright_cal_collector = BrightCalCollector(1, 7)
+            w._bright_cal_collector.add_frame(frame() + 100)
+            w._set_state(State.BRIGHT_CAL)
+            w._finish_bright_cal()          # → measurement → _start_recorder
+            assert w._recorder is not None
+            w._stop_recorder()
+
+            with h5py.File(tmp_path / CALIBRATION_FILENAME, "r") as f:
+                assert _crop_of(f["dark"]) == CUT_ATTRS
+                assert _crop_of(f["bright"]) == CUT_ATTRS
+                assert f["dark/mean_dark"].shape == CUT.shape
+            with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+                assert _crop_of(f["metadata"]) == CUT_ATTRS
+        finally:
+            w._set_state(State.PREVIEW)
+            w.close()
+
+    def test_a_source_that_cannot_crop_records_its_full_frame(self):
+        w = _window()
+        try:
+            assert w._camera_crop is None          # the fake has no applied_crop
+            assert w._session_crop() is None       # no frame, no mask: nothing known
+            w._mask = np.ones((18, 24), dtype=bool)
+            assert w._session_crop() == Crop(0, 0, 24, 18, 24, 18)
+        finally:
+            w.close()
+
+    def test_the_figure_shows_the_image_area(self, tmp_path):
+        from core.results_figure import parameter_lines
+        rec = HDF5Recorder(tmp_path / RESULTS_FILENAME, {}, {}, crop=CUT)
+        rec.close()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            rows = dict(parameter_lines(f))
+        assert rows["Image area"] == "24 × 18 at (16, 10)"
+        assert rows["Sensor"] == "64 × 48 px"
+
+    def test_the_figure_says_full_sensor_when_uncut(self, tmp_path):
+        from core.results_figure import parameter_lines
+        rec = HDF5Recorder(tmp_path / RESULTS_FILENAME, {}, {},
+                           crop=Crop(0, 0, 64, 48, 64, 48))
+        rec.close()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            rows = dict(parameter_lines(f))
+        assert rows["Image area"] == "full sensor"

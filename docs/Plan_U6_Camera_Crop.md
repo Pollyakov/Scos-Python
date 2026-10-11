@@ -216,7 +216,7 @@ rig check.
 ---
 
 ## 8. Not in U6
-- **U10** — writing the crop into `metadata` / `Calibration.h5` (next task; the record
-  in 4.1 is shaped for it).
+- **U10** — writing the crop into `metadata` / `Calibration.h5`. ✅ Done 2026-10-11 (todo
+  Done item 50): `metadata/crop`, `dark/crop`, `bright/crop`.
 - **U11** — dark calibration at the maximum frame rate (needs D8).
 - Moving the calibration collectors off the GUI thread.

@@ -1264,7 +1264,7 @@ class MainWindow(QMainWindow):
                              float(self._roi_circ.get("r",  -1))],
             "bitDepth":     int(self.cmb_format.currentText().replace("Mono", "")),
         }
-        self._recorder = HDF5Recorder(path, meta, params)
+        self._recorder = HDF5Recorder(path, meta, params, crop=self._session_crop())
         self.status.showMessage(f"Recording → {path}")
 
     def _finalize_normalization(self) -> None:
@@ -1669,6 +1669,7 @@ class MainWindow(QMainWindow):
                 },
                 {"n_frames":    n_collected,
                  "window_size": self._dark_cal_collector.window_size},
+                crop=self._session_crop(),
             )
             self._calib_label.setText(
                 f"Dark cal OK — {n_collected} frames, saved {cal_path.name}"
@@ -1762,6 +1763,7 @@ class MainWindow(QMainWindow):
                 },
                 {"n_frames":    n_collected,
                  "window_size": self._bright_cal_collector.window_size},
+                crop=self._session_crop(),
             )
             self._calib_label.setText(
                 f"Cal OK — dark+bright done, saved {cal_path.name}"
@@ -2605,6 +2607,22 @@ class MainWindow(QMainWindow):
         if cut and crop.is_full_sensor:
             # The camera refused; its own warning says why.
             self.status.showMessage("The camera kept the full image — see app.log")
+
+    def _session_crop(self) -> Crop | None:
+        """The image area this session's frames have, for the files (todo U10).
+
+        The crop the camera reports — Cut/Full Image are locked from DARK_CAL
+        until FINISHED, so it is the same for both calibrations and the
+        measurement. A source that cannot crop (no applied_crop) sends whatever
+        it sends: recorded as a full frame of the mask's size. None only
+        before any frame has set the mask.
+        """
+        if self._camera_crop is not None:
+            return self._camera_crop
+        if self._mask is None:
+            return None
+        h, w = self._mask.shape
+        return Crop(0, 0, w, h, w, h)
 
     def _apply_camera_crop(self, crop: Crop) -> None:
         """Make everything follow the camera's image area: the frame size
