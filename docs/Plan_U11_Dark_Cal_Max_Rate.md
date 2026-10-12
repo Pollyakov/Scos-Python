@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–5 done 2026-10-11/12 (results at the end of section 6). Next: step 6.**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–6 done 2026-10-11/12 (results at the end of section 6). Next: step 7.**
 
 ---
 
@@ -360,6 +360,27 @@ there.
 | `slowdown` | all checks pass | 11.0 s, source 144 fps, 1480 skipped, queue +0 (held at 40) |
 | mutation `dark-no-restore` | **fails** "set rate was back…" (1141 frames with the maximum still on) | |
 | mutation `dark-no-skip` (`slowdown`) | **fails** "queue did not grow…" (+1402 frames) | |
+
+### Step 6 results (2026-10-12)
+
+`tools/dark_rate_ab.py`: three dark sets A (set rate) → B (maximum) → C (set rate) through
+`camera.py` and `DarkCalCollector`, collected on the camera thread (direct connection, no
+event loop, nothing queued). It asks for the lens to be capped (`--yes` skips the question),
+drops the first 0.5 s after each rate switch, and always puts the set rate back, even after
+an error. It prints per set the time, the rate the camera delivered, lost frames and the
+ROI means; then the verdict per quantity:
+
+- `|B − (A+C)/2|` must not exceed the larger of `|A − C|` and 3 × the statistical error of
+  that difference (N frames over P pixels, pixels taken as independent — a lower bound,
+  so a lucky A = C cannot fail B).
+- Exit 0 PASS, 1 FAIL (also if exposure, gain or pixel format differ between the sets), 2
+  INCONCLUSIVE (the maximum was not ≥ 1.2 × faster, so nothing was compared). `--save` writes
+  the numbers as JSON.
+
+Dry run on the pylon emulator (`--emulator --frames 20 --cut --roi 2048 2048 150`): 353 × 353
+crop, A 19.8 fps → B 58.3 fps → C 20.5 fps, 0 lost, JSON written. The verdict there is FAIL
+and means nothing: the emulator sends a moving test pattern, not dark noise. The decision
+rule has its own tests (`tests/test_dark_rate_ab.py`, 6).
 
 **Expected dark-calibration duration after U11** (estimates; step 1 and the rig replace
 them). They depend on the exposure (the maximum rate is at most 1000 ÷ exposure in ms, so
