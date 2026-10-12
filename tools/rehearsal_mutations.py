@@ -71,6 +71,14 @@ U10 — the crop recorded in the files (adds --cut):
            expected (284, 0)). Width/Height are kept, so this is the swap the
            array-shape check cannot see.
 
+U11 — the dark calibration at the frame source's maximum rate:
+  dark-no-restore  the set rate never put back after the dark calibration
+           → "the set rate was back for the bright calibration and the
+           measurement"
+  dark-no-skip  (slowdown) surplus dark frames never dropped, so Qt's queue
+           grows while the slowed GUI thread falls behind → "Qt's queue stayed
+           short during the dark calibration"
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -90,7 +98,8 @@ MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "divisor": "normal", "baseline": "normal", "meta-drops": "slowdown",
              "frame-text": "slowdown",
              "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal",
-             "crop-xy": "normal"}
+             "crop-xy": "normal",
+             "dark-no-restore": "normal", "dark-no-skip": "slowdown"}
 # These test the crop, so they always run with --cut.
 NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright", "crop-xy"}
 
@@ -206,6 +215,18 @@ def apply(mutation: str) -> None:
             a["OffsetX"], a["OffsetY"] = a["OffsetY"], a["OffsetX"]
             return a
         R.crop_attrs = crop_attrs
+
+    elif mutation == "dark-no-restore":
+        from gui.main_window import MainWindow
+        original = MainWindow._set_dark_max_rate
+
+        def _set_dark_max_rate(self, enabled):
+            return original(self, enabled) if enabled else None
+        MainWindow._set_dark_max_rate = _set_dark_max_rate
+
+    elif mutation == "dark-no-skip":
+        from gui.main_window import MainWindow
+        MainWindow._DARK_MAX_BACKLOG = 10 ** 9
 
     elif mutation == "cut-stale-bright":
         from gui.main_window import MainWindow

@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–4 done 2026-10-11/12 (results at the end of section 6). Next: step 5.**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–5 done 2026-10-11/12 (results at the end of section 6). Next: step 6.**
 
 ---
 
@@ -326,6 +326,40 @@ caught in both files.
 file record. Eight deliberate mistakes, each caught: restore after the trigger, no restore on
 finish, the abandon restore nested under the trigger condition, no restore on close, no
 backlog floor, skipping in every state, no skip, never switched on. Fast suite 652/652.
+
+### Step 5 results (2026-10-12)
+
+`tools/rehearsal.py`: `check_dark_rate()` in every run. The GUI-side spy samples the frame
+source at each arrival, and the checks are: the source was at its maximum during
+`DARK_CAL`; it was back at the set rate for every frame in `BRIGHT_CAL` / `MEASURING_INIT` /
+`MEASURING`; the backlog did not grow by more than `DARK_BACKLOG_LIMIT` = 20 frames beyond its
+value at the first post-flush dark frame; `Calibration.h5` holds `duration_s` and
+`camera_frame_rate_hz` (= playback's 1 / exposure); the log has the summary line. The
+`slowdown` scenario now also slows every collected dark frame by 0.1 s, so the GUI falls
+behind as it would on the rig's full sensor.
+
+**Found while running it:** the dark folder of the lab recording plays at **~146 fps**, not
+~21 (its TIFFs read much faster than the recording's), so even `normal` exercises the skip.
+For example, 60 frames in 3.8 s with 488 skipped. A first limit of 8 (an absolute backlog
+of 8) failed at 23. Two reasons:
+
+1. The window holds the queue at *its smallest backlog seen* + 3, so a backlog already there
+   at the first dark frame (16 here, 40 in `slowdown`) is held, not drained — bounded, so not
+   a leak, and the price of the floor that keeps a counter offset from stalling the
+   calibration.
+2. Frames keep arriving during a single slow call (a ~25 ms statistics pass at ~146 fps).
+
+The check therefore measures **growth** beyond the first value (+6 seen, limit +20). On the
+rig the backlog at the laser prompt is 2–3 frames (2026-10-08), so the held part is small
+there.
+
+| Run (60 + 60 frames) | Result | Dark calibration (from `rehearsal.log`) |
+|---|---|---|
+| `normal` | all checks pass | 3.8 s, source 146 fps, 488 skipped, queue +6 |
+| `normal --cut` | all checks pass | queue +4 |
+| `slowdown` | all checks pass | 11.0 s, source 144 fps, 1480 skipped, queue +0 (held at 40) |
+| mutation `dark-no-restore` | **fails** "set rate was back…" (1141 frames with the maximum still on) | |
+| mutation `dark-no-skip` (`slowdown`) | **fails** "queue did not grow…" (+1402 frames) | |
 
 **Expected dark-calibration duration after U11** (estimates; step 1 and the rig replace
 them). They depend on the exposure (the maximum rate is at most 1000 ÷ exposure in ms, so

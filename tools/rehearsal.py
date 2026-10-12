@@ -127,6 +127,15 @@ class Run:
     # --cut: the circle that was cut around, and the crop the camera reported.
     cut_circle: dict | None            = None
     cut_crop:   object                 = None
+    # U11 — the dark calibration at the frame source's maximum rate, sampled
+    # at every frame the GUI receives: was the source at its maximum during
+    # DARK_CAL, how often was it still there in a later calibration or
+    # measurement state, and the deepest backlog (frames emitted minus frames
+    # received) while DARK_CAL ran.
+    dark_at_max:        bool           = False
+    max_after_dark:     int            = 0
+    dark_backlog_max:   int            = 0
+    dark_backlog_first: int | None     = None   # at the first post-flush dark frame
     failures:   list[str]              = field(default_factory=list)
 
     def check(self, ok: bool, what: str) -> bool:
@@ -283,8 +292,14 @@ def _log_text() -> str:
 class Slowdown:
     """Rig prep 3b — a pipeline that cannot keep up, then one that stops dead.
 
-    Phases, all inside MEASURING (calibration and normalization run at full
-    speed, so the session itself stays valid):
+    Before them, the dark calibration: every collected dark frame takes
+    DARK_DELAY_S longer, so the GUI thread falls behind the frame source's
+    maximum rate, as it does on the rig's full sensor (todo U11), and has to
+    skip surplus dark frames. The result is unchanged — the collector still
+    gets N1 frames.
+
+    Phases, all inside MEASURING (the bright calibration and normalization run
+    at full speed, so the session itself stays valid):
 
       full   FULL_S at full speed — the baseline must not be overloaded, or
              "once per episode" below would be counting an older episode.
@@ -318,6 +333,7 @@ class Slowdown:
 
     PLAYBACK_HZ  = 10.0
     N_WORKERS    = 3
+    DARK_DELAY_S = 0.1     # per collected dark frame: ≈ 9 frames/s against ~21 offered
     SLOW_DELAY_S = 0.6     # 3 workers → ≈ 4 frames/s against 10 offered
     STALL_S      = 8.0
     FULL_S       = 3.0
@@ -348,9 +364,24 @@ class Slowdown:
 
     def before_start(self, w, cam, args) -> None:
         from PyQt6.QtCore import Qt
+        from core.session import DarkCalCollector
 
         w.spn_workers.setValue(self.N_WORKERS)
         cam.set_frame_rate(self.PLAYBACK_HZ)
+
+        # U11: the dark calibration runs at the source's maximum rate, which
+        # on the rig's full sensor is faster than the GUI thread (~76 vs ~58
+        # fps). Playback reads TIFFs at only ~21 fps, slower than the GUI, so
+        # without this the window's skip of surplus dark frames never runs
+        # here. Slowed, the GUI falls behind as it would on the rig, and
+        # check_dark_rate's backlog limit has something to hold.
+        original_add = DarkCalCollector.add_frame
+        delay = self.DARK_DELAY_S
+
+        def _slow_add(collector, frame):
+            original_add(collector, frame)
+            time.sleep(delay)
+        DarkCalCollector.add_frame = _slow_add
 
         # Runs on the camera thread, beside the pipeline's own intake slot:
         # the stamp each frame carried out of the frame source.
@@ -1030,7 +1061,19 @@ def rehearse(args, run: Run) -> Path | None:
 
     def _spy(frame, t_capture):
         run.frames[(w._state.name, cam.playback_source)] += 1
+        state = w._state
         original_on_frame(frame, t_capture)
+        if state is State.DARK_CAL:
+            run.dark_at_max |= bool(cam.max_frame_rate)
+            # Stale frames from before the laser prompt (_flush_stale_frames)
+            # are the backlog of the state before; only later ones count.
+            if w._frames_seen >= w._skip_frames_until:
+                backlog = cam.frames_emitted - w._frames_seen
+                if run.dark_backlog_first is None:
+                    run.dark_backlog_first = backlog
+                run.dark_backlog_max = max(run.dark_backlog_max, backlog)
+        elif state in (State.BRIGHT_CAL, State.MEASURING_INIT, State.MEASURING):
+            run.max_after_dark += bool(cam.max_frame_rate)
 
     cam.frame_ready.disconnect(w._on_scos_frame)
     cam.frame_ready.connect(_spy, Qt.ConnectionType.QueuedConnection)
@@ -1141,6 +1184,7 @@ def rehearse(args, run: Run) -> Path | None:
                   f"after Stop SCOS, over {run.display_frames_after_stop} displayed "
                   f"frame(s) (K1; now {run.closing_later!r})")
         check_measuring(run)
+        check_dark_rate(run, cam, folder)
         verify_outputs(run, folder, w, cam, args, wall_start)
         check_crop_record(run, folder, args)
         scenario.extra_checks(w, run, folder, args)
@@ -1163,6 +1207,52 @@ def rehearse(args, run: Run) -> Path | None:
         run.check(not still_running,
                   "SCOS pipeline thread had stopped when the window closed")
     return folder
+
+
+# How far the backlog may grow during the dark calibration beyond what it was
+# at the first dark frame: the window's _DARK_MAX_BACKLOG plus what arrives
+# during the slowest single call on the GUI thread — the dark folder plays at
+# ~146 fps here (2026-10-12), so a ~25 ms statistics pass alone lets ~4 in;
+# +6 was measured. Without the skip it grows by ~100 frames a second, so a
+# limit of 20 still tells the two apart with room to spare. The window counts from the smallest backlog it has
+# seen (so a counter offset cannot stall it), which means a backlog already
+# there at the start is held, not drained — bounded, so not a leak. Without
+# the skip it grows by the source's rate minus the GUI's, without limit.
+DARK_BACKLOG_LIMIT = 20
+
+
+def check_dark_rate(run: Run, cam, folder: Path | None) -> None:
+    """U11 — the dark calibration ran at the frame source's maximum rate, the
+    set rate was back for everything after it, the queue stayed short, and
+    Calibration.h5 says how it ran."""
+    print("\nChecks — dark calibration at the maximum rate (U11)")
+    run.check(run.dark_at_max,
+              "the frame source was at its maximum rate during the dark calibration")
+    run.check(run.max_after_dark == 0 and not cam.max_frame_rate,
+              f"the set rate was back for the bright calibration and the measurement "
+              f"({run.max_after_dark} frame(s) arrived with the maximum still on)")
+    first = run.dark_backlog_first if run.dark_backlog_first is not None else 0
+    grew = run.dark_backlog_max - first
+    run.check(grew <= DARK_BACKLOG_LIMIT,
+              f"Qt's queue did not grow during the dark calibration ({first} frames "
+              f"at the first dark frame, deepest {run.dark_backlog_max}: +{grew}, "
+              f"limit +{DARK_BACKLOG_LIMIT})")
+    if folder is None or not (folder / "Calibration.h5").exists():
+        run.check(False, "Calibration.h5 exists for the dark rate record")
+        return
+    import h5py
+    with h5py.File(folder / "Calibration.h5", "r") as f:
+        attrs = dict(f["dark"].attrs) if "dark" in f else {}
+    duration = attrs.get("duration_s")
+    run.check(duration is not None and duration > 0,
+              f"Calibration.h5 dark/duration_s = {duration}")
+    want = 1e6 / cam.exposure_us        # what playback reports as its maximum
+    got = attrs.get("camera_frame_rate_hz")
+    run.check(got is not None and abs(got - want) < 1e-6 * want,
+              f"Calibration.h5 dark/camera_frame_rate_hz = {got} (playback's "
+              f"1 / exposure = {want:.1f})")
+    run.check("Dark calibration took" in _log_text(),
+              "app.log has the dark calibration's rate summary")
 
 
 def verify_outputs(run: Run, folder: Path | None, w, cam, args,
