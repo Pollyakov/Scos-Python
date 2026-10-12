@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–3 done 2026-10-11 (results at the end of section 6). Next: step 4.**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–4 done 2026-10-11/12 (results at the end of section 6). Next: step 5.**
 
 ---
 
@@ -300,6 +300,32 @@ read-back exposure, gain, pixel format, image area and the USB throughput limit.
 while on, else `frame_rate`), used by the playback loop. Tests: `TestMockCameraMaxFrameRate`
 (2), `TestFolderCameraMaxFrameRate` (3, including the 20 Hz control). Mutation "maximum ignored"
 caught in both files.
+
+### Step 4 results (2026-10-12)
+
+`gui/main_window.py`:
+- `_set_dark_max_rate()` — the one place that calls the frame source. It never raises (it
+  runs inside Qt slots); a failed restore is shown in the status bar.
+- On in `_start_dark_cal()`, after the trigger switch and the flush. Back first thing in
+  `_finish_dark_cal()` (before anything that can fail, and before the trigger), in
+  `_abandon_calibration()` under `dark_pending` alone, and in `closeEvent` before the camera
+  stops.
+- The skip in `_on_scos_frame()` (D1), after the FPS counter and before the statistics and
+  `_to_du`, with `_DARK_MAX_BACKLOG = 3`. **Added while writing it:** the backlog is counted
+  from the smallest value seen in this calibration. If the camera's count and the window's
+  ever differed by a constant, a plain `emitted − seen > 3` would skip *every* frame and the
+  calibration would never end; counted from the floor, the offset cancels.
+- `Calibration.h5` `dark` attributes `duration_s` and `camera_frame_rate_hz` (the latter only
+  when the camera reports one) (D2). A second log line after "Dark calibration complete":
+  "Dark calibration took X s; the camera delivered Y fps[, Z fps reported]; N frame(s)
+  skipped while the PC caught up". "Delivered" is counted from the camera's own frame count,
+  so it is known even when the camera reports no rate.
+- `_flush_stale_frames()` docstring: the queue during the dark calibration is now bounded.
+
+`tests/test_dark_max_rate.py`: 18 tests, one per exit in the 4.2 table plus the skip and the
+file record. Eight deliberate mistakes, each caught: restore after the trigger, no restore on
+finish, the abandon restore nested under the trigger condition, no restore on close, no
+backlog floor, skipping in every state, no skip, never switched on. Fast suite 652/652.
 
 **Expected dark-calibration duration after U11** (estimates; step 1 and the rig replace
 them). They depend on the exposure (the maximum rate is at most 1000 ÷ exposure in ms, so

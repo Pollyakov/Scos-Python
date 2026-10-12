@@ -201,6 +201,18 @@ class MainWindow(QMainWindow):
         # they are stale — see _flush_stale_frames().
         self._frames_seen:         int  = 0
         self._skip_frames_until:   int  = 0
+        # Dark calibration at the camera's maximum frame rate (todo U11): dark
+        # frames skipped because this thread fell behind (_on_scos_frame), the
+        # capture times of the first and last one collected, the rate the
+        # camera reported and its frame count at the start — for the summary
+        # line and Calibration.h5 (_finish_dark_cal).
+        self._dark_skipped:         int          = 0
+        self._dark_t_first:         float | None = None
+        self._dark_t_last:          float | None = None
+        self._dark_camera_rate:     float | None = None
+        self._dark_emitted_start:   int          = 0
+        self._dark_wall_start:      float        = 0.0
+        self._dark_backlog_floor:   int | None   = None
         self._invalid_k2_reported: bool = False
         # Trailing (t, mean_i) from every result, for the end-of-session
         # laser-off check (E3). todo.md claims the last mean_i is "already
@@ -1022,6 +1034,11 @@ class MainWindow(QMainWindow):
         self._calib_label.setText(label)
         # K3 — a no-op unless --mock-folder playback is on its dark folder.
         self._set_playback_source("main")
+        # The set frame rate back (todo U11) — under dark_pending alone, so a
+        # run with the trigger Off gets it too (plan pitfall P2), and before
+        # the trigger below (P1).
+        if dark_pending:
+            self._set_dark_max_rate(False)
         # Only while dark calibration still had the trigger switched off:
         # _finish_dark_cal has restored it for every later exit, and setting
         # it again would make a real camera restart grabbing for nothing.
@@ -1612,7 +1629,19 @@ class MainWindow(QMainWindow):
         self._set_playback_source("dark")
         self._flush_stale_frames("the laser was switched off")
 
-        # Step 4: start collecting
+        # Step 4: the camera at its maximum frame rate. Dark frames depend on
+        # exposure, gain, pixel format and image area, not on the spacing
+        # between them (Vika, 2026-10-08, todo U11), and the operator waits in
+        # the dark. Every way out of DARK_CAL puts the set rate back:
+        # _finish_dark_cal, _abandon_calibration, closeEvent.
+        self._dark_skipped = 0
+        self._dark_backlog_floor = None
+        self._dark_t_first = self._dark_t_last = None
+        self._dark_emitted_start = int(getattr(self.camera, "frames_emitted", 0))
+        self._dark_wall_start = time.monotonic()
+        self._dark_camera_rate = self._set_dark_max_rate(True)
+
+        # Step 5: start collecting
         n1 = self.spn_n1.value()
         self._dark_cal_collector = DarkCalCollector(n1, self.spn_window.value())
         self._calib_label.setText(f"Dark cal: 0 / {n1}")
@@ -1630,12 +1659,42 @@ class MainWindow(QMainWindow):
         if setter(source):
             logger.info("Playback source \u2192 %s", source)
 
+    def _set_dark_max_rate(self, enabled: bool) -> float | None:
+        """Camera at its maximum frame rate for the dark calibration, or back
+        to the set rate (todo U11). Returns the rate the camera reports, if any.
+
+        All three frame sources have set_max_frame_rate(); a test stub without
+        it is left alone. Never raises — this runs inside Qt slots, where an
+        exception would end the app — but a failed restore is shown: the
+        measurement would then run at the wrong rate.
+        """
+        setter = getattr(self.camera, "set_max_frame_rate", None)
+        if setter is None:
+            return None
+        try:
+            return setter(enabled)
+        except Exception:
+            if enabled:
+                logger.exception("Could not switch the camera to its maximum "
+                                 "frame rate — dark calibration at the set rate")
+            else:
+                logger.exception("Could not put the camera's frame rate back")
+                self.status.showMessage(
+                    "WARNING: could not put the camera's frame rate back after "
+                    "the dark calibration — stop and check the FPS")
+            return None
+
     def _finish_dark_cal(self):
         """
         Called (on GUI thread) when N1 frames have been collected.
         Computes dark_mean + dark_var, stores them in the processor,
         saves a .mat file, and restores the camera trigger.
         """
+        # The set frame rate back first: before anything below can fail, and
+        # before the trigger is switched back on — with the trigger On the
+        # camera's restart writes no frame-rate setting at all (todo U11,
+        # plan pitfall P1).
+        self._set_dark_max_rate(False)
         try:
             dark_mean, dark_var = self._dark_cal_collector.result()
         except RuntimeError as exc:
@@ -1646,6 +1705,9 @@ class MainWindow(QMainWindow):
 
         n_collected = self._dark_cal_collector.n_collected
         logger.info("Dark calibration complete — %d frames collected", n_collected)
+        dark_attrs = {"n_frames":    n_collected,
+                      "window_size": self._dark_cal_collector.window_size}
+        dark_attrs.update(self._dark_rate_record())
         # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
         self.processor.dark_var  = dark_var
@@ -1667,8 +1729,7 @@ class MainWindow(QMainWindow):
                     # it was applied to.
                     "mask":      self._mask,
                 },
-                {"n_frames":    n_collected,
-                 "window_size": self._dark_cal_collector.window_size},
+                dark_attrs,
                 crop=self._session_crop(),
             )
             self._calib_label.setText(
@@ -1693,6 +1754,28 @@ class MainWindow(QMainWindow):
         self._dark_cal_collector = None
         # Automatically move to bright calibration
         self._start_bright_cal()
+
+    def _dark_rate_record(self) -> dict:
+        """Log how the dark calibration ran and return what Calibration.h5
+        keeps of it (todo U11, decision D2): `duration_s`, first to last
+        collected frame, and `camera_frame_rate_hz`, the rate the camera
+        reported at its maximum — left out when it reports none (the pylon
+        emulator; never guessed). duration_s with n_frames gives the rate the
+        collector actually got."""
+        record: dict = {}
+        if self._dark_t_first is not None and self._dark_t_last is not None:
+            record["duration_s"] = float(self._dark_t_last - self._dark_t_first)
+        if self._dark_camera_rate is not None:
+            record["camera_frame_rate_hz"] = float(self._dark_camera_rate)
+        elapsed = time.monotonic() - self._dark_wall_start
+        emitted = int(getattr(self.camera, "frames_emitted", 0)) - self._dark_emitted_start
+        delivered = emitted / elapsed if elapsed > 0 else 0.0
+        reported = (f", {self._dark_camera_rate:.1f} fps reported"
+                    if self._dark_camera_rate is not None else "")
+        logger.info("Dark calibration took %.1f s; the camera delivered %.1f fps%s; "
+                    "%d frame(s) skipped while the PC caught up",
+                    elapsed, delivered, reported, self._dark_skipped)
+        return record
 
     def _start_bright_cal(self):
         """
@@ -1932,6 +2015,11 @@ class MainWindow(QMainWindow):
     # is nudged past it. Waiting two frames too long costs 50 ms at 40 Hz;
     # accepting one frame from before the laser changed corrupts a calibration.
     _FLUSH_MARGIN_FRAMES = 2
+    # Frames allowed to wait in Qt's queue during the dark calibration before
+    # _on_scos_frame starts dropping them (todo U11, plan 4.4). With a 23 ms
+    # statistics pass at ~76 fps about 2 more arrive, so the queue peaks near
+    # 5 full frames (~24 MB) instead of growing by ~85 MB/s.
+    _DARK_MAX_BACKLOG = 3
 
     def _flush_stale_frames(self, reason: str) -> None:
         """Ignore frames captured before the lighting changed.
@@ -1944,7 +2032,10 @@ class MainWindow(QMainWindow):
         with 600 frames, 1555 after the dark one on 2026-10-06, 559 on
         2026-10-11 with the old dark collector and 31 with the in-place one
         (todo D8). A real pop-up keeps draining frames while it is open, so
-        on the rig it was 2-3 (2026-10-08).
+        on the rig it was 2-3 (2026-10-08). Since the dark calibration runs at
+        the camera's maximum rate (todo U11), _on_scos_frame keeps the queue
+        to about _DARK_MAX_BACKLOG frames while it lasts, so the flush after
+        the bright prompt finds only a few.
 
         Every one of those was captured before the operator clicked OK. Without
         this, the dark collector's first frames are laser-on and the bright
@@ -2227,6 +2318,27 @@ class MainWindow(QMainWindow):
             self._fps_count = 0
             self._last_fps_time = now
 
+        # Dark calibration at the camera's maximum rate (todo U11, plan 4.4):
+        # on the full sensor the camera outruns this thread (~76 vs ~58 fps on
+        # the rig PC), and every frame it is behind is a frame copy waiting in
+        # Qt's queue. So while more than a few are waiting, dark frames are
+        # dropped here — before the statistics and _to_du, which are what cost
+        # time. Dark frames are interchangeable samples of the same noise and
+        # the collector still gets N1 of them; none of them is ever part of the
+        # measurement, whose timeVec and lost/dropped counts start later.
+        # The backlog is counted from the smallest seen in this calibration:
+        # a constant offset between the two counters (none is known) could
+        # otherwise make every frame look late and the calibration never end.
+        if self._state == State.DARK_CAL:
+            emitted = getattr(self.camera, "frames_emitted", None)
+            if emitted is not None:
+                backlog = emitted - self._frames_seen
+                if self._dark_backlog_floor is None or backlog < self._dark_backlog_floor:
+                    self._dark_backlog_floor = backlog
+                if backlog - self._dark_backlog_floor > self._DARK_MAX_BACKLOG:
+                    self._dark_skipped += 1
+                    return
+
         # Intensity stats — update every 0.5s regardless of SCOS state
         if self._mask is not None and (now - self._last_stats_time) >= 0.5:
             # Same units as everything else on screen and in the file: these
@@ -2248,6 +2360,9 @@ class MainWindow(QMainWindow):
             if self._dark_cal_collector is None:
                 return   # guard: frame arrived during state transition
             self._dark_cal_collector.add_frame(self._to_du(frame))
+            if self._dark_t_first is None:
+                self._dark_t_first = t_capture
+            self._dark_t_last = t_capture
             n       = self._dark_cal_collector.n_collected
             n_total = self._dark_cal_collector.n_target
             self._calib_label.setText(f"Dark cal: {n} / {n_total}")
@@ -2833,6 +2948,10 @@ class MainWindow(QMainWindow):
         self._scos_worker.wait(2000)
         if self._h5_replay is not None:
             self._h5_replay.stop()
+        # A camera keeps its frame-rate setting until it is powered off; the
+        # next session must not inherit the dark calibration's maximum (U11, P3).
+        if self._state == State.DARK_CAL:
+            self._set_dark_max_rate(False)
         self.camera.stop()
         self.camera.close()
         if self._recorder is not None:
