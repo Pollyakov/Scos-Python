@@ -48,8 +48,18 @@ keyboard should be done before the room is dark:
 - ⟨I⟩ drops to the camera's black level and the label counts **"Dark cal: n / 600"**.
   The live image keeps running, but on a dark sensor nothing much changes on screen —
   **only the counter moves. That is normal.**
-- At 20 Hz it takes **at least 30 s** (600 ÷ 20). On the lab PC we expect about 30–40 s;
-  it will be measured on the day.
+- **The camera runs at its maximum frame rate for this step** — your request of 2026-10-08
+  (todo U11): the frame rate does not matter for dark frames. Exposure, gain, pixel format
+  and image area stay exactly as in the measurement; only the spacing between frames
+  changes. The FPS label jumps up, then back to 20 when the step ends. Expected about 10 s
+  with the full image, 5–8 s after Cut Image (it was 30 s at 20 Hz); measured on the day.
+  When the PC falls behind the camera it skips surplus dark frames; the calibration still
+  uses exactly 600.
+- `Calibration.h5`'s `dark` group now also records how it ran: `duration_s` (first to last
+  frame used) and, when the camera reports one, `camera_frame_rate_hz`.
+- Before relying on it we check on the rig that it gives the same dark calibration: three
+  dark sets in one session, 20 Hz → maximum → 20 Hz (`tools/dark_rate_ab.py`); the maximum
+  must fall within the difference between the two 20 Hz sets.
 - If the external trigger was on, the app switches it off for this step and afterwards
   puts it back to what it was before (the protocol says "set it ON"; the app restores the
   operator's choice, which is ON in a triggered session).

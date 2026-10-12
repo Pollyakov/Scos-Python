@@ -105,8 +105,8 @@ into the results file's `metadata` (`time_source`, `frames_lost_camera`,
 
 Still on the GUI thread, by design for now: the dark/bright calibration collectors and the
 raw-frame HDF5 write (tasks 14/16). Intake backpressure bounds Qt's queued-connection event
-queue only while a measurement is running; during DARK_CAL / BRIGHT_CAL it is unbounded as
-before.
+queue only while a measurement is running. During DARK_CAL `_on_scos_frame` drops surplus
+dark frames instead (todo U11, below); during BRIGHT_CAL it is unbounded as before.
 
 ## Critical Gotchas
 
@@ -200,6 +200,29 @@ measurement alike. Rules that keep it accurate:
 Measured: κ² with and without the crop is identical over the same ROI
 (`tests/test_crop_accuracy_offline.py`, slow); `tools/rehearsal.py --cut` rehearses a whole
 cut session.
+
+IMPORTANT: **the dark calibration runs at the camera's maximum frame rate** (todo U11, Vika
+2026-10-08; `docs/Plan_U11_Dark_Cal_Max_Rate.md`). `_start_dark_cal()` switches the camera's
+frame-rate limit off (`camera.set_max_frame_rate(True)` → `AcquisitionFrameRateEnable =
+False`); exposure, gain, pixel format and crop are not touched and are read back into `app.log`.
+Rules that keep it safe:
+- **Every way out of DARK_CAL puts the set rate back** — `_finish_dark_cal()` first thing,
+  `_abandon_calibration()` under `dark_pending` alone, `closeEvent` — and **before** the
+  external trigger is switched back on: with the trigger On, `_apply_params()` writes no
+  frame-rate setting, so a late restore would leave a triggered measurement without its
+  limit. `set_max_frame_rate(False)` writes the limit *and* the rate, in any trigger mode,
+  grabbing or not (a camera keeps the setting until it is powered off).
+- On the full sensor the camera (~76 fps, USB-limited) outruns the GUI thread (~58 fps), so
+  `_on_scos_frame` drops dark frames while more than `_DARK_MAX_BACKLOG` (3) wait — before
+  the statistics and `_to_du` — counted from the smallest backlog seen, so an offset between
+  the two frame counters can never stall the calibration. The collector still gets N1.
+- `Calibration.h5` `dark` attributes `duration_s` and `camera_frame_rate_hz` (the latter only
+  when the camera reports a rate; the pylon emulator does not — never guessed).
+- Playback's "maximum" is `core.crop.playback_max_rate()` (1 / exposure, capped at 360 MB/s).
+  In playback it does not make the dark calibration faster — the GUI thread is the limit.
+- A new frame source must provide `set_max_frame_rate(enabled)`.
+- **Not yet proven on the rig:** `tools/dark_rate_ab.py` (20 Hz → maximum → 20 Hz in one
+  session, lens capped) must PASS before U11 counts as done (`rig_checklist.md` R6g–R6i).
 
 IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
 part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder

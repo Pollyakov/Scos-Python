@@ -48,11 +48,18 @@ Anything that does not match — even if it looks harmless — goes into step 4.
   | Frames | Range | Measured on the dev PC, 2026-10-05 |
   |---|---|---|
   | 60  | ≈ 2–6 s each   | dark ≈ 4–5 s, bright ≈ 3–4 s |
-  | 600 | ≈ 15–70 s each | dark ≈ 69 s, bright ≈ 41 s (2026-10-05); dark ≈ 20 s, bright ≈ 21 s headless on 2026-10-11 after the faster dark collector (todo D8) |
+  | 600 | ≈ 15–70 s each | dark ≈ 69 s, bright ≈ 41 s (2026-10-05); dark ≈ 20 s, bright ≈ 21 s headless on 2026-10-11 after the faster dark collector (todo D8); dark ≈ 39 s, bright ≈ 35 s headless on 2026-10-12 (U11, a slower day — see below) |
 
   While it runs, the "Dark cal: n / 600" counter may climb slowly (≈ 9 per second for
   dark on the dev PC on 2026-10-05, ≈ 30 per second since D8) — that is the PC, not a hang. On the rig (full 1216 × 1936 frames at
   20 Hz) 600 frames took 30 s each on 2026-10-08 — the PC kept up.
+- **Since 2026-10-12 the dark calibration runs at the "camera's maximum frame rate"** (todo
+  U11): playback plays the dark folder as fast as the rig camera could send these frames —
+  76 fps for full frames — and the window drops surplus dark frames when it falls behind.
+  **In playback this does not make the dark calibration faster:** this PC is the limit, and
+  the faster playback thread takes processor time from the window. Measured back to back on
+  2026-10-12: 600 dark frames 38.9 s at the maximum, 32.4 s at the set rate (bright 35 s
+  both times). On the rig it should be faster — that is checked there (rig checklist R5g).
 
 ### Three things that look wrong but are normal
 
@@ -109,7 +116,7 @@ Set up first: type a **Recording name** (try one with a space and a colon, e.g.
 | ☐ B1 | Click **Start SCOS** | **First pop-up: "Estimated G[DU/e]"** — "CameraSN 40513592 Mono10 is in the G[DU/e] table, but not at 24 dB … G was rescaled from the closest measured gain (G=1.4597 DU/e)". Normal: the table has this camera at 16/18/20 dB only. Click OK. | "Can't calculate SCOS … was not found" → the serial was not read from the recording; step 4 |
 | ☐ B2 | — | **Second: the folder dialog** "Choose folder to save this session's results". Pick your empty folder. | |
 | ☐ B3 | — | **Third: "Calibration — Step 1 of 2: Dark Frames"** — "Please turn off the laser." Click **OK**. This order (G → folder → laser) is the protocol's, `SCOS_protocol.md:11-17`. | Any other order → step 4 (it is asserted by `tests/test_recording_name.py`) |
-| ☐ B4 | Watch | The parameter boxes turn dark grey (locked). The live image goes **darker** — playback switches to the dark folder — and **⟨I⟩ drops to ≈ 99 DU**. The label counts **"Dark cal: n / 600"** — slowly on this PC (see "Before you start"). You may briefly see **"Discarding N buffered frames…"** — normal, those were captured before you clicked OK. | ⟨I⟩ stays ≈ 121 during dark cal → playback did not switch; the run will then abort at B8 |
+| ☐ B4 | Watch | The parameter boxes turn dark grey (locked). The live image goes **darker** — playback switches to the dark folder — and **⟨I⟩ drops to ≈ 99 DU**. The label counts **"Dark cal: n / 600"** — slowly on this PC (see "Before you start"). The **FPS** label jumps to ≈ 60 (the maximum rate, todo U11) and returns to the set rate when the step ends. You may briefly see **"Discarding N buffered frames…"** — normal, those were captured before you clicked OK. | ⟨I⟩ stays ≈ 121 during dark cal → playback did not switch; the run will then abort at B8 |
 | ☐ B5 | — | **"Calibration — Step 2 of 2: Bright Frames"** — "Please turn on the laser. Keep the subject in the measurement area. … The measurement starts automatically when this calibration ends." Click **OK**. | |
 | ☐ B6 | Watch | The image is bright again, **⟨I⟩ ≈ 121 DU**, label counts **"Bright cal: n / 600"**, then **"Cal OK — dark+bright done, saved Calibration.h5"**. First you may see **"Discarding N buffered frames…"** with N in the **tens to hundreds** (1555 with 600 frames on the dev PC on 2026-10-06, 31 headless after the faster dark collector of 2026-10-11; with real pop-ups usually fewer) — normal here: frames captured during the dark calibration that the PC had not reached yet, dropped so they cannot enter the bright one (todo D8) | |
 | ☐ B7 | Watch | Label **"Normalizing — t / 5 s (… s left)"**. The plot stays **empty** for these 5 s — the curve can't be scaled until the window closes. | |

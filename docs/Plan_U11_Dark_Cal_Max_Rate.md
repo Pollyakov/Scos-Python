@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–6 done 2026-10-11/12 (results at the end of section 6). Next: step 7.**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–7 done 2026-10-11/12 (results at the end of section 6; todo Done item 52). **Open: the rig check, step 8** (`rig_checklist.md` R5d/R5g/R5h, R6g–R6i).**
 
 ---
 
@@ -162,9 +162,11 @@ if state is DARK_CAL and camera.frames_emitted - self._frames_seen > K:   # K �
 ### 4.5 Playback and mock sources
 
 `folder_camera.py` and `mock_camera.py` get the same `set_max_frame_rate()`. "Maximum" means
-**1 / exposure** (125 fps at 8 ms) — the limit a real camera's exposure sets. *(Changed in
-step 3 from "no sleep": with frames in memory, `--mock-tiff` would then spin at thousands of
-frames per second, faster than any camera.)* CLAUDE.md's list of what a new frame source must provide gets this
+**1 / exposure capped by USB bandwidth** (`core.crop.playback_max_rate()`: 76.5 fps for full
+Mono12 frames, 125 fps for a 611 × 611 crop at 8 ms) — the limits a real camera has. *(Step 3
+first said "no sleep", then 1 / exposure alone; the rehearsal showed the dark folder then
+playing at ~146 fps, faster than the rig camera can send full frames, so the USB cap was added
+in step 7's run-up.)* CLAUDE.md's list of what a new frame source must provide gets this
 method too.
 
 Caveat: on the dev/rig PC a full lab TIFF reads at only about 21 fps. Playback cannot show
@@ -381,6 +383,30 @@ Dry run on the pylon emulator (`--emulator --frames 20 --cut --roi 2048 2048 150
 crop, A 19.8 fps → B 58.3 fps → C 20.5 fps, 0 lost, JSON written. The verdict there is FAIL
 and means nothing: the emulator sends a moving test pattern, not dark noise. The decision
 rule has its own tests (`tests/test_dark_rate_ab.py`, 6).
+
+### Step 7 results (2026-10-12)
+
+**First, a fix found while measuring for the docs** (commit `6f845aa`): playback's maximum is
+now capped by USB bandwidth as well (4.5). Then a fair comparison, 600 + 600 frames, back to
+back on this PC:
+
+| Dark calibration in playback | Time | Source delivered | Skipped |
+|---|---|---|---|
+| at the capped maximum (U11) | 38.9 s | 60.7 fps | 1745 |
+| at the set rate (U11 switched off for the comparison) | 32.4 s | 30.7 fps | 388 |
+| bright calibration, both runs (not touched by U11) | ≈ 35 s | | |
+
+In playback the maximum rate makes the dark calibration **slower**, not faster. The window is
+the limit (≈ 18 collected frames/s here), and a faster playback thread — one TIFF decode per
+frame — takes processor time from it. The real camera thread does far less per frame, and
+step 1 measured ≈ 58 full frames/s for the window alone, so the rig should still gain. This is
+an **assumption until the rig shows it**: `rig_checklist.md` R5g now says what to do if the dark
+calibration takes 30 s or longer.
+
+**Docs:** CLAUDE.md (new IMPORTANT note; the queue during DARK_CAL is bounded now),
+`rig_checklist.md` (R5d, R5g, R5h, the "still to do" list, new R6g–R6i for the A/B test, what
+to bring back), `simulation_checklist.md` ("Before you start", B4), `expectations.md` §2 (for
+Vika), `todo.md` (U11 row, Done item 52, D9 — the blocked commit of step 4, order line).
 
 **Expected dark-calibration duration after U11** (estimates; step 1 and the rig replace
 them). They depend on the exposure (the maximum rate is at most 1000 ÷ exposure in ms, so
