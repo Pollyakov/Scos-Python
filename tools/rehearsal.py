@@ -1246,11 +1246,13 @@ def check_dark_rate(run: Run, cam, folder: Path | None) -> None:
     duration = attrs.get("duration_s")
     run.check(duration is not None and duration > 0,
               f"Calibration.h5 dark/duration_s = {duration}")
-    want = 1e6 / cam.exposure_us        # what playback reports as its maximum
+    from core.crop import playback_max_rate
+    # What playback reports as its maximum: 1 / exposure, capped by USB bandwidth.
+    want = playback_max_rate(cam.exposure_us, cam.applied_crop, cam.pixel_format)
     got = attrs.get("camera_frame_rate_hz")
     run.check(got is not None and abs(got - want) < 1e-6 * want,
               f"Calibration.h5 dark/camera_frame_rate_hz = {got} (playback's "
-              f"1 / exposure = {want:.1f})")
+              f"maximum for this image = {want:.1f})")
     run.check("Dark calibration took" in _log_text(),
               "app.log has the dark calibration's rate summary")
 

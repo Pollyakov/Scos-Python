@@ -185,3 +185,31 @@ class _StubCamera(QObject):
     def close(self, *a, **k):            pass
     def get_info(self):
         return {"serial": "40513592", "model": "a2A1920-160umPRO"}
+
+
+# ---------------------------------------------------------------------------
+# Playback's maximum frame rate for the dark calibration (todo U11)
+# ---------------------------------------------------------------------------
+
+from core.crop import PLAYBACK_USB_BYTES_PER_S, playback_max_rate
+
+
+class TestPlaybackMaxRate:
+
+    def test_full_mono12_frames_are_limited_by_usb(self):
+        full = Crop(0, 0, 1936, 1216, 1936, 1216)
+        assert playback_max_rate(8000.0, full) == pytest.approx(
+            PLAYBACK_USB_BYTES_PER_S / (1936 * 1216 * 2))
+        assert playback_max_rate(8000.0, full) == pytest.approx(76.5, abs=0.1)
+
+    def test_a_small_crop_is_limited_by_the_exposure(self):
+        cut = Crop(660, 300, 611, 611, 1936, 1216)
+        assert playback_max_rate(8000.0, cut) == pytest.approx(125.0)
+
+    def test_mono8_carries_half_the_bytes(self):
+        full = Crop(0, 0, 1936, 1216, 1936, 1216)
+        assert playback_max_rate(1000.0, full, "Mono8") == pytest.approx(
+            2 * playback_max_rate(1000.0, full, "Mono12"))
+
+    def test_unknown_image_area_is_limited_by_the_exposure_only(self):
+        assert playback_max_rate(5000.0, None) == pytest.approx(200.0)

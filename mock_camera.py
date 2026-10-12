@@ -9,7 +9,7 @@ import numpy as np
 import tifffile
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from core.crop import CameraSteps, Crop, PlaybackCrop
+from core.crop import CameraSteps, Crop, PlaybackCrop, playback_max_rate
 
 
 class MockCameraThread(QThread):
@@ -105,19 +105,23 @@ class MockCameraThread(QThread):
         self.trigger_delay = delay_us
 
     def set_max_frame_rate(self, enabled: bool) -> float:
-        """Play as fast as a camera at this exposure could deliver frames —
-        the dark calibration's maximum rate (todo U11; see
-        CameraThread.set_max_frame_rate()). A real camera is limited by its
-        exposure, readout and USB bandwidth; playback mimics only the first,
-        1 / exposure, so it never spins faster than any camera could. (Reading
-        full lab TIFFs from disk is slower than that anyway, ~21 fps.)
-        Returns the rate playback now aims for."""
+        """Play as fast as a camera without its frame-rate limit could
+        deliver these frames — the dark calibration's maximum rate (todo U11;
+        see CameraThread.set_max_frame_rate()): one frame per exposure, capped
+        by USB bandwidth, core.crop.playback_max_rate(), as the rig camera is.
+        At 1 / exposure alone the lab's dark folder played at ~146 fps, faster
+        than any camera sends full frames. Even capped, playback cannot show the
+        speed-up: here the GUI thread is the limit, and a faster playback thread
+        (a TIFF decode per frame) takes processor time from it — 600 dark frames
+        took 38.9 s at the capped maximum against 32.4 s at the set rate, back
+        to back on 2026-10-12. Returns the rate playback now aims for."""
         self.max_frame_rate = enabled
         return self._playback_rate()
 
     def _playback_rate(self) -> float:
         if self.max_frame_rate:
-            return 1e6 / max(self.exposure_us, 1.0)
+            return playback_max_rate(self.exposure_us, self.applied_crop,
+                                     self.pixel_format)
         return self.frame_rate
 
     def set_roi(self, x: int, y: int, w: int, h: int) -> Crop | None:

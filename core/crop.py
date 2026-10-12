@@ -189,3 +189,25 @@ class PlaybackCrop:
         crop, or the frame itself when there is no crop."""
         c = self._cut                     # one read — see the class docstring
         return frame if c is None else frame[c].copy()
+
+
+# The USB bandwidth a Basler camera keeps to by default: DeviceLinkThroughputLimit
+# is On at 360 MB/s on the pylon emulator (todo U11, plan step 1). Playback uses
+# it to mimic the camera's maximum frame rate; the rig camera's own value is
+# logged when the dark calibration switches the limit off (camera.py).
+PLAYBACK_USB_BYTES_PER_S = 360e6
+
+
+def playback_max_rate(exposure_us: float, crop: Crop | None,
+                      pixel_format: str = "Mono12") -> float:
+    """The frame rate a playback source plays at during the dark calibration
+    (todo U11): what a camera running without its frame-rate limit could
+    deliver — at most one frame per exposure, and no more bytes per second
+    than the USB link carries. Full 1216 x 1936 Mono12 frames: 76 fps; a
+    611 x 611 crop at 8 ms: 125 fps, set by the exposure. Mono10/Mono12 travel
+    as 2 bytes per pixel here (unpacked), Mono8 as 1."""
+    rate = 1e6 / max(exposure_us, 1.0)
+    if crop is not None:
+        bytes_per_frame = crop.width * crop.height * (1 if pixel_format == "Mono8" else 2)
+        rate = min(rate, PLAYBACK_USB_BYTES_PER_S / bytes_per_frame)
+    return rate
