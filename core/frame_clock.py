@@ -24,10 +24,16 @@ Otherwise — a camera without timestamps, or a tick frequency that does not
 fit — the PC stamp stays, for good, and `time_source` says so. A wrong tick
 frequency would stretch the whole timeVec, so guessing is never allowed.
 
-The check runs while the camera previews; a measurement starts only after the
-dark and bright calibrations, far later than VALIDATE_S. So within one
-measurement the source does not change, except in the one case handled below
-(the camera clock going backwards), which falls back to the PC and says so.
+The check runs while the camera previews, and again after every restart of
+grabbing — the dark calibration's trigger switch is one. With the default 600 +
+600 calibration frames the measurement starts far later than VALIDATE_S after
+it. With short calibrations it may not: 60 + 60 frames take ≈ 4 s with the dark
+ones at the camera's maximum rate (todo U11), or 3 s of bright frames after the
+trigger is switched back on — then the measurement's first frames keep the PC
+stamp and the rest get the camera's, a step of a few ms where they meet (todo
+D10). Otherwise the source does not change within a measurement, except in the
+one case handled below (the camera clock going backwards), which falls back to
+the PC and says so.
 
 Pure Python, no pypylon: `camera.py` feeds it the three numbers per frame.
 """

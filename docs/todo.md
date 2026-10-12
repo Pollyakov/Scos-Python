@@ -603,6 +603,27 @@ teardown. Running with `-v` also shows which test had started last.
 **Done when:** the cause is found and fixed, or ≥ 30 consecutive runs pass after a change
 that plausibly fixes it.
 
+#### D10 · Short calibrations can start the measurement before the camera clock is accepted *(found 2026-10-12, U11 review)*
+
+`core/frame_clock.py` uses the camera's own timestamps only after checking them against the
+PC clock for 5 s after every restart of grabbing. The dark calibration's trigger switch is
+such a restart (and, with the trigger On, so is switching it back after the dark
+calibration). If the measurement starts less than 5 s after the last restart, its first
+frames carry PC stamps and the rest camera stamps. Where they meet, `timeVec` steps by a few
+milliseconds: the camera clock is aligned to the least-delayed PC readings. The results file's
+`time_source` then says `camera` for a measurement that began on the PC clock.
+
+| Calibration frames (N1 + N2) | Trigger | Measurement starts after the last restart | |
+|---|---|---|---|
+| 600 + 600 (default, protocol) | either | ≥ 30 s | fine |
+| 60 + 60 | Off | before U11: 3 + 3 = 6 s; **with U11 ≈ 0.5–1 + 3 ≈ 4 s** | inside the check — **new with U11** |
+| 60 + 60 | On | 3 s (bright only, after the switch back) | inside the check — **already before U11** |
+
+Only quick-test settings are affected; `rig_checklist.md` R7b already warns about it for
+the overload test. **Not decided** — options: (a) leave it, documented (60 frames is a
+testing shortcut); (b) in `MEASURING_INIT`, wait until the clock has decided before the first
+result is kept; (c) a minimum calibration time. **User's call.**
+
 ---
 
 ### Future Phases (post-v0)

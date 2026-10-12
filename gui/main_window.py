@@ -213,6 +213,8 @@ class MainWindow(QMainWindow):
         self._dark_emitted_start:   int          = 0
         self._dark_wall_start:      float        = 0.0
         self._dark_backlog_floor:   int | None   = None
+        # Set when set_max_frame_rate(False) raised — see _set_dark_max_rate.
+        self._frame_rate_restore_failed: bool    = False
         self._invalid_k2_reported: bool = False
         # Trailing (t, mean_i) from every result, for the end-of-session
         # laser-off check (E3). todo.md claims the last mean_i is "already
@@ -1665,23 +1667,29 @@ class MainWindow(QMainWindow):
 
         All three frame sources have set_max_frame_rate(); a test stub without
         it is left alone. Never raises — this runs inside Qt slots, where an
-        exception would end the app — but a failed restore is shown: the
-        measurement would then run at the wrong rate.
+        exception would end the app. A failed restore sets
+        `_frame_rate_restore_failed`, and _finish_dark_cal then stops the run:
+        the measurement would otherwise run at the camera's maximum while
+        Params.frameRate records the set rate.
         """
         setter = getattr(self.camera, "set_max_frame_rate", None)
         if setter is None:
             return None
         try:
-            return setter(enabled)
+            rate = setter(enabled)
+            if not enabled:
+                self._frame_rate_restore_failed = False
+            return rate
         except Exception:
             if enabled:
                 logger.exception("Could not switch the camera to its maximum "
                                  "frame rate — dark calibration at the set rate")
             else:
                 logger.exception("Could not put the camera's frame rate back")
+                self._frame_rate_restore_failed = True
                 self.status.showMessage(
                     "WARNING: could not put the camera's frame rate back after "
-                    "the dark calibration — stop and check the FPS")
+                    "the dark calibration — check the FPS")
             return None
 
     def _finish_dark_cal(self):
@@ -1695,6 +1703,17 @@ class MainWindow(QMainWindow):
         # camera's restart writes no frame-rate setting at all (todo U11,
         # plan pitfall P1).
         self._set_dark_max_rate(False)
+        if self._frame_rate_restore_failed:
+            # Measuring now would record the set rate in Params while the
+            # camera runs at its maximum. Undo first, dialog second.
+            self._abandon_calibration("Dark cal stopped — frame rate not restored")
+            QMessageBox.critical(
+                self, "Frame Rate Not Restored",
+                "The camera's frame rate could not be set back after the dark "
+                "calibration, so the run was stopped.\n\n"
+                "Stop Video, start it again, check the FPS, then Start SCOS "
+                "again. app.log has the details.")
+            return
         try:
             dark_mean, dark_var = self._dark_cal_collector.result()
         except RuntimeError as exc:

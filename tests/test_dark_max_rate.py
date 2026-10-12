@@ -202,16 +202,42 @@ class TestSwitchedOnAndBack:
         w._set_state(State.PREVIEW)
         w.close()
 
-    def test_a_failed_restore_is_shown_not_raised(self, win, cam):
+    def test_a_failed_restore_stops_the_run(self, win, cam, monkeypatch):
+        # Measuring on would record 20 Hz in Params while the camera ran at its
+        # maximum. Nothing may raise out of the Qt slot, and the run must not
+        # reach the bright calibration.
         def _broken(enabled):
             if not enabled:
                 raise RuntimeError("node not writable")
             return None
+        shown = []
+        monkeypatch.setattr(QMessageBox, "critical",
+                            staticmethod(lambda *a, **k: shown.append(a[1])))
         _start(win, cam)
         cam.set_max_frame_rate = _broken
-        _feed(win, cam, N1)                 # must not raise out of the Qt slot
+        _feed(win, cam, N1)
+        assert win._state is State.PREVIEW
+        assert shown == ["Frame Rate Not Restored"]
+        assert win._session_folder is None, "the run's folder was not dealt with"
+
+    def test_a_restore_that_works_the_next_time_clears_the_failure(self, win, cam,
+                                                                  monkeypatch):
+        monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+        broken = {"on": True}
+        original = cam.set_max_frame_rate
+
+        def _sometimes(enabled):
+            if not enabled and broken["on"]:
+                raise RuntimeError("node not writable")
+            return original(enabled)
+        cam.set_max_frame_rate = _sometimes
+        _start(win, cam)
+        _feed(win, cam, N1)                 # first run: stopped
+        assert win._state is State.PREVIEW
+        broken["on"] = False
+        _start(win, cam)                    # second run: the restore works
+        _feed(win, cam, N1)
         assert win._state is State.BRIGHT_CAL
-        assert "frame rate back" in win.status.currentMessage()
 
 
 class TestSurplusDarkFramesAreDropped:

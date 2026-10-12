@@ -216,6 +216,15 @@ together with `n_frames` always gives the rate the collector actually got.)*
   - `ResultingFrameRate` follows the change;
   - `DeviceLinkThroughputLimitMode` may cap the rate, and we record that rather than change it.
 
+- **P7 — short calibrations and the camera-clock check** *(found in the final review,
+  2026-10-12)*. The clock check (`core/frame_clock.py`, 5 s after every restart of grabbing)
+  restarts at the dark calibration's trigger switch. With 60 + 60 frames and the trigger
+  Off, U11 shortens the time to the measurement from ≈ 6 s to ≈ 4 s, so the measurement
+  begins before the check ends: PC stamps first, then camera stamps, a step of a few ms.
+  With 600 + 600 frames (the default) nothing changes. With the trigger On it already
+  happened before U11 (3 s of bright frames after the switch back). → todo **D10**, not
+  decided.
+
 ---
 
 ## 6. Steps (in order)
@@ -402,6 +411,21 @@ frame — takes processor time from it. The real camera thread does far less per
 step 1 measured ≈ 58 full frames/s for the window alone, so the rig should still gain. This is
 an **assumption until the rig shows it**: `rig_checklist.md` R5g now says what to do if the dark
 calibration takes 30 s or longer.
+
+**Final review (2026-10-12), four points:**
+1. Can the maximum rate reach the FPS box, `Params.frameRate` or the saved settings? **No:**
+   `_sync_params_from_camera()` runs only at Start Video (`main_window.py:871`); the other
+   `get_info()` caller is playback-only (gain, bit depth). `Params.frameRate` and the
+   config come from the FPS box.
+2. Short calibrations and the camera-clock check: real, small, quick-test settings only —
+   pitfall P7, todo D10, left for the user to decide.
+3. The `recovery` scenario inherits `Slowdown.before_start`, so it now also runs with the
+   slowed dark collector — re-run, with its mutation `never-rearm`.
+4. **A failed restore now stops the run** (was: a status-bar warning, and the measurement
+   went on at the camera's maximum while `Params.frameRate` recorded 20 Hz).
+   `_finish_dark_cal` sends it through `_abandon_calibration` with a "Frame Rate Not
+   Restored" dialog. Two tests (`test_a_failed_restore_stops_the_run`,
+   `…_clears_the_failure`), two deliberate mistakes each caught.
 
 **Docs:** CLAUDE.md (new IMPORTANT note; the queue during DARK_CAL is bounded now),
 `rig_checklist.md` (R5d, R5g, R5h, the "still to do" list, new R6g–R6i for the A/B test, what

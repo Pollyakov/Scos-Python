@@ -211,7 +211,9 @@ Rules that keep it safe:
   external trigger is switched back on: with the trigger On, `_apply_params()` writes no
   frame-rate setting, so a late restore would leave a triggered measurement without its
   limit. `set_max_frame_rate(False)` writes the limit *and* the rate, in any trigger mode,
-  grabbing or not (a camera keeps the setting until it is powered off).
+  grabbing or not (a camera keeps the setting until it is powered off). If that write fails,
+  `_finish_dark_cal` stops the run ("Frame Rate Not Restored") rather than measure at the
+  wrong rate.
 - On the full sensor the camera (~76 fps, USB-limited) outruns the GUI thread (~58 fps), so
   `_on_scos_frame` drops dark frames while more than `_DARK_MAX_BACKLOG` (3) wait — before
   the statistics and `_to_du` — counted from the smallest backlog seen, so an offset between
