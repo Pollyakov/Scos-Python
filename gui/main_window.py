@@ -1954,13 +1954,6 @@ class MainWindow(QMainWindow):
             frames_lost=self._camera_frames_lost,
         )
 
-    def keyPressEvent(self, event):
-        """Press 'v' to toggle External Trigger (and trigger Arduino upload)."""
-        if event.key() == Qt.Key.Key_V:
-            self.chk_trigger.setChecked(not self.chk_trigger.isChecked())
-        else:
-            super().keyPressEvent(event)
-
     def _on_duration_changed(self, minutes: float) -> None:
         """Convert spinbox value (minutes) to internal seconds; 0 means infinite."""
         self._measurement_duration_s = float('inf') if minutes == 0.0 else minutes * 60.0

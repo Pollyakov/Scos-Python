@@ -103,7 +103,8 @@ always makes one); until then, or for good if it never agrees, it is the PC time
 latches t = 0 only once `camera.clock_settled` is True, so `timeVec` does not start on one
 clock and continue on the other — after short calibrations the first result can come up to
 ≈ 5 s later, and `startTime` is the time of t = 0 (rewritten at the end, not the time the
-file opened). Open: the **V** key can still switch the trigger mid-run (Done item 53). A new frame
+file opened). The window has **no keyboard shortcuts** — the old **V** (toggle trigger) could
+restart the camera mid-run and was removed (Done item 54, `tests/test_no_hotkeys.py`). A new frame
 source needs `clock_settled` (playback: always True). The same class counts **lost frames from
 `BlockID` gaps** — under `GrabStrategy_OneByOne`, `GetNumberOfSkippedImages()` does not
 count frames lost to full buffers; a measurement's count starts at its t = 0
