@@ -147,6 +147,17 @@ class TestStartTime:
                 "startTime is variable-length; MATLAB will return a cell array"
             )
 
+    def test_set_start_time_replaces_the_opening_time(self, tmp_path):
+        """todo D10: the file opens before t=0; startTime must be t=0's time,
+        still a fixed-length ASCII char row."""
+        rec = _recorder(tmp_path)
+        t0 = datetime.datetime(2026, 10, 14, 9, 5, 7).timestamp()
+        rec.set_start_time(t0)
+        rec.close()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            assert f["startTime"][()] == b"14-Oct-2026 09:05:07"
+            assert h5py.check_string_dtype(f["startTime"].dtype).length == 20
+
 
 # ----------------------------------------------------------------------
 # Params
@@ -322,7 +333,11 @@ class TestGuiWiring:
             # 2 frames lost during preview/calibration, then 5 more while
             # measuring: only those 5 belong to this measurement.
             w.camera.frames_lost = 2
-            w._camera_lost_at_start = w._camera_frames_lost()
+            # The pipeline notes the count when it keeps its first frame (t=0).
+            w._enable_measurement_intake(np.ones((4, 4), dtype=bool))
+            w._scos_worker.on_frame(np.zeros((4, 4), dtype=np.uint16), 0.0)
+            w._scos_worker.disable_intake()
+            assert w._scos_worker.frames_lost_at_t0 == 2
             w._start_recorder()
             w.camera.frames_lost = 7
 
@@ -357,6 +372,81 @@ class TestGuiWiring:
                 assert f["rBFi"].shape == f["timeVec"].shape
         finally:
             w.close()
+
+    def test_measurement_waits_for_the_camera_clock_check(self):
+        """todo D10: the window hands the camera's `clock_settled` to the
+        intake, so t=0 is the first frame after the check — and a source
+        without it (this stub, as the existing test above) never waits."""
+        w = _window()
+        try:
+            w.camera.clock_settled = False
+            mask, frame = np.ones((4, 4), dtype=bool), np.zeros((4, 4), np.uint16)
+            w._enable_measurement_intake(mask)
+            w._scos_worker.on_frame(frame, 10.0)
+            assert w._scos_worker.t0_capture is None
+            w.camera.clock_settled = True
+            w._scos_worker.on_frame(frame, 10.05)
+            assert w._scos_worker.t0_capture == 10.05
+            assert w._scos_worker.skipped_before_t0 == 1
+            w._scos_worker.disable_intake()
+        finally:
+            w.close()
+
+    def _finish(self, w, tmp_path):
+        """Open the file, run the given frames through the intake, finish."""
+        w.cmb_format.setCurrentText("Mono12")
+        w.spn_gain.setValue(8.0)
+        w._roi_circ = {"cx": 2.0, "cy": 2.0, "r": 1.0}
+        w._session_folder = tmp_path
+        w.processor.bit_depth = 12
+        w.processor.gain_db   = 8.0
+        assert w._prepare_gain()
+        w._start_recorder()
+        w._finish_session()
+        w._stop_recorder()
+        with h5py.File(tmp_path / RESULTS_FILENAME, "r") as f:
+            return f["startTime"][()].decode("ascii"), f["timeVec"].shape[0]
+
+    def test_start_time_is_the_time_of_t0(self, tmp_path, monkeypatch):
+        """The window writes startTime from the pipeline's t=0 anchor, not
+        from when the file was opened (up to ≈ 5 s apart since D10)."""
+        import core.pipeline
+        w = _window()
+        try:
+            w._enable_measurement_intake(np.ones((4, 4), dtype=bool))
+            t0 = datetime.datetime(2026, 10, 14, 9, 5, 7).timestamp()
+            with monkeypatch.context() as m:
+                m.setattr(core.pipeline.time, "time", lambda: t0)
+                w._scos_worker.on_frame(np.zeros((4, 4), np.uint16), 0.0)
+            w._scos_worker.disable_intake()
+            start, _ = self._finish(w, tmp_path)
+            assert start == "14-Oct-2026 09:05:07"
+        finally:
+            w.close()
+
+    def test_stop_during_the_clock_wait_still_writes_a_file(self, tmp_path):
+        """Stop before the check ended: no t=0, no results — the file is
+        written, empty, and keeps the time it was opened."""
+        w = _window()
+        try:
+            w.camera.clock_settled = False
+            w._enable_measurement_intake(np.ones((4, 4), dtype=bool))
+            w._scos_worker.on_frame(np.zeros((4, 4), np.uint16), 0.0)
+            w._scos_worker.disable_intake()
+            assert w._scos_worker.t0_wall is None
+            start, n = self._finish(w, tmp_path)
+            assert n == 0
+            parsed = datetime.datetime.strptime(start, "%d-%b-%Y %H:%M:%S")
+            assert abs((datetime.datetime.now() - parsed).total_seconds()) < 300
+        finally:
+            w.close()
+
+    def test_playback_sources_never_wait(self, tmp_path):
+        """No camera clock to check — the constructors only store the path."""
+        from folder_camera import FolderMockCamera
+        from mock_camera import MockCameraThread
+        assert FolderMockCamera(tmp_path).clock_settled is True
+        assert MockCameraThread(str(tmp_path / "stack.tif")).clock_settled is True
 
 
 # ----------------------------------------------------------------------

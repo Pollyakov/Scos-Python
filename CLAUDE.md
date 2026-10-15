@@ -95,11 +95,19 @@ capture time on the **monotonic** scale, so GUI scheduling jitter can never ente
 
 IMPORTANT: on the real camera `t_capture` is the grab result's **hardware `TimeStamp`**
 (start of exposure), converted by `core/frame_clock.py` — but only after that clock has
-agreed with the PC clock within 1 % over the first 5 s after Start Video; until then, or
-for good if it never agrees, it is the PC time at `RetrieveResult()`. Never assume a tick
-rate: a wrong one stretches the whole `timeVec`. The same class counts **lost frames from
+agreed with the PC clock within 1 % over the first 5 s after Start Video — and again after
+**every** restart of grabbing (trigger switch, pixel format, crop; the dark calibration
+always makes one); until then, or for good if it never agrees, it is the PC time at
+`RetrieveResult()`. Never assume a tick rate: a wrong one stretches the whole `timeVec`.
+**A measurement keeps no frame until that check has ended** (todo D10): `RealtimePipeline.on_frame()`
+latches t = 0 only once `camera.clock_settled` is True, so `timeVec` does not start on one
+clock and continue on the other — after short calibrations the first result can come up to
+≈ 5 s later, and `startTime` is the time of t = 0 (rewritten at the end, not the time the
+file opened). Open: the **V** key can still switch the trigger mid-run (Done item 53). A new frame
+source needs `clock_settled` (playback: always True). The same class counts **lost frames from
 `BlockID` gaps** — under `GrabStrategy_OneByOne`, `GetNumberOfSkippedImages()` does not
-count frames lost to full buffers. Which clock was used and how many frames were lost go
+count frames lost to full buffers; a measurement's count starts at its t = 0
+(`frames_lost_at_t0`). Which clock was used and how many frames were lost go
 into the results file's `metadata` (`time_source`, `frames_lost_camera`,
 `frames_dropped_queue`). Rig verification: todo D5.
 

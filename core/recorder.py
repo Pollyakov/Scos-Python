@@ -170,14 +170,9 @@ class HDF5Recorder:
         if crop is not None:
             write_crop(meta, crop)          # metadata/crop (todo U10)
 
-        # Fixed-length ASCII, not h5py's variable-length UTF-8 default —
-        # MATLAB's h5read returns the latter as a cell array instead of a char
-        # row, and `datetime(startTime)` then fails on her side.
-        start = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
-        self._f.create_dataset(
-            "startTime", data=start.encode("ascii"),
-            dtype=h5py.string_dtype("ascii", len(start)),
-        )
+        # Provisional: the measurement's t=0 is not known yet. The window
+        # replaces it with the time of t=0 at the end (set_start_time).
+        self._write_start_time(datetime.datetime.now())
 
         params = self._f.create_group("Params")
         for k, v in (params_fields or {}).items():
@@ -252,6 +247,25 @@ class HDF5Recorder:
         ds[n] = frame
         if n % 10 == 9:
             self._f.flush()
+
+    def _write_start_time(self, when: datetime.datetime) -> None:
+        # Fixed-length ASCII, not h5py's variable-length UTF-8 default —
+        # MATLAB's h5read returns the latter as a cell array instead of a char
+        # row, and `datetime(startTime)` then fails on her side.
+        start = when.strftime("%d-%b-%Y %H:%M:%S")
+        if "startTime" in self._f:
+            del self._f["startTime"]
+        self._f.create_dataset(
+            "startTime", data=start.encode("ascii"),
+            dtype=h5py.string_dtype("ascii", len(start)),
+        )
+
+    def set_start_time(self, t_wall: float) -> None:
+        """`startTime` = the wall-clock time of timeVec's t=0 (time.time()
+        seconds). The file is opened before the first frame is kept — up to
+        ≈ 5 s before when the measurement waits for the camera-clock check
+        (todo D10) — so the time written at opening is only provisional."""
+        self._write_start_time(datetime.datetime.fromtimestamp(t_wall))
 
     def set_metadata(self, **attrs: Any) -> None:
         """Add or overwrite engineering-provenance attributes in `metadata`.

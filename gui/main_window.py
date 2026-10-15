@@ -160,9 +160,6 @@ class MainWindow(QMainWindow):
         self._proc_times  = []   # rolling window of process() durations (ms)
         self._last_proc_label_time = 0.0
         self._last_logged_dropped_count = 0   # for change-triggered app.log warnings
-        # camera.frames_lost when the measurement started — the camera counts
-        # from Start Video, the label and the results file from MEASURING_INIT.
-        self._camera_lost_at_start = 0
         self._last_stats_time = 0.0
         self._last_display_time = 0.0
         self._calib_thread:   _CalibrationLoaderThread | None = None
@@ -1236,6 +1233,7 @@ class MainWindow(QMainWindow):
         self._finalize_normalization()
         self._write_rbfi()
         self._write_frame_accounting()
+        self._write_start_time()
         self._save_plot_figure()
         # Released so the next run creates its own folder rather than writing
         # into this one. The parent (_output_root) is kept, so the operator is
@@ -1447,6 +1445,29 @@ class MainWindow(QMainWindow):
         frames this way (playback)."""
         return int(getattr(self.camera, "frames_lost", 0))
 
+    def _camera_frames_lost_in_run(self) -> int:
+        """Frames lost at the camera since this measurement's t=0. The camera
+        counts from Start Video; the pipeline notes that count when it keeps
+        its first frame, so frames lost before it — calibrations, the
+        camera-clock wait (todo D10) — are not charged to the measurement."""
+        base = self._scos_worker.frames_lost_at_t0
+        return 0 if base is None else self._camera_frames_lost() - base
+
+    def _write_start_time(self) -> None:
+        """`startTime` = the wall-clock time of timeVec's t=0, latched by the
+        pipeline with the first kept frame. The results file was opened
+        earlier — up to ≈ 5 s earlier when the measurement waited for the
+        camera-clock check (todo D10). If no frame was kept (Stop during
+        that wait), the time written at opening stays."""
+        t0_wall = self._scos_worker.t0_wall
+        if self._recorder is None or t0_wall is None:
+            return
+        try:
+            self._recorder.set_start_time(t0_wall)
+        except Exception:
+            logger.exception("Could not write startTime from t=0 — the file "
+                             "keeps the time it was opened")
+
     def _write_frame_accounting(self) -> None:
         """Record in the results file which clock timeVec came from and how
         many frames never made it into it. Runs inside _finish_session().
@@ -1456,7 +1477,7 @@ class MainWindow(QMainWindow):
         within milliseconds unless frames waited in Pylon's buffers (todo D5).
         """
         source  = str(getattr(self.camera, "time_source", "pc"))
-        lost    = self._camera_frames_lost() - self._camera_lost_at_start
+        lost    = self._camera_frames_lost_in_run()
         dropped = int(self._scos_worker.dropped_count)
         logger.info("Frame accounting — time source %s; %d frame(s) lost at the "
                     "camera, %d dropped from the processing queue",
@@ -1916,9 +1937,22 @@ class MainWindow(QMainWindow):
         if scos_mask is None:
             logger.warning("No ROI mask available — SCOS intake not started")
         else:
-            self._camera_lost_at_start = self._camera_frames_lost()
-            self._scos_worker.enable_intake(scos_mask)
+            self._enable_measurement_intake(scos_mask)
         self._start_recorder()
+
+    def _enable_measurement_intake(self, scos_mask: np.ndarray) -> None:
+        """Open the pipeline's intake for this measurement. It keeps no frame
+        until the camera-clock check since the last restart has ended — the
+        dark calibration always restarts the camera, so after short
+        calibrations the check may still be running (todo D10). Sources
+        without the property (playback, test stubs) never wait."""
+        settled = getattr(self.camera, "clock_settled", None)
+        self._scos_worker.enable_intake(
+            scos_mask,
+            clock_settled=(None if settled is None
+                           else lambda: self.camera.clock_settled),
+            frames_lost=self._camera_frames_lost,
+        )
 
     def keyPressEvent(self, event):
         """Press 'v' to toggle External Trigger (and trigger Arduino upload)."""
@@ -2506,7 +2540,7 @@ class MainWindow(QMainWindow):
             # log warning is only emitted when the count actually changes, so
             # a stalled pipeline doesn't spam app.log once per second.
             dropped = self._scos_worker.dropped_count
-            lost    = self._camera_frames_lost() - self._camera_lost_at_start
+            lost    = self._camera_frames_lost_in_run()
             # Two different losses: "Dropped" = the app's queue overflowed;
             # "lost at camera" = Pylon's buffers were full (or a transfer
             # failed) and the frame never reached the app at all.

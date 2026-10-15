@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -159,6 +159,10 @@ class _Intake:
     """
     mask:          np.ndarray
     put_timeout_s: float
+    # Both called on the camera thread, only until t=0 is latched; None =
+    # nothing to wait for / nothing to count (playback, tests).
+    clock_settled: Callable[[], bool] | None = None
+    frames_lost:   Callable[[], int]  | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +229,10 @@ class RealtimePipeline(QThread):
         self._intake: _Intake | None = None
         self._t0_capture: float | None = None   # monotonic — the timeVec origin
         self._t0_wall:    float | None = None   # wall clock at that same instant
+        # The camera's lost-frame count at t=0, and the frames the intake let
+        # pass before t=0 while the camera clock was still being checked.
+        self._frames_lost_at_t0: int | None = None
+        self._skipped_before_t0 = 0
         self._overloaded = False
 
     # ------------------------------------------------------------------
@@ -240,13 +248,22 @@ class RealtimePipeline(QThread):
         self._input_q.put((frame, mask, t))
 
     def enable_intake(self, mask: np.ndarray, *,
-                      put_timeout_s: float = 1.5) -> None:
+                      put_timeout_s: float = 1.5,
+                      clock_settled: Callable[[], bool] | None = None,
+                      frames_lost: Callable[[], int] | None = None) -> None:
         """Start accepting frames from the camera thread (call at MEASURING_INIT).
 
         `mask` is the shrunk SCOS mask; it is captured into an immutable bundle
         so the camera thread never reads it mid-update. The timeVec origin is
         latched from the first frame that actually arrives, not from this call,
         so t=0 is a real capture instant.
+
+        `clock_settled` (todo D10): while it returns False, frames are let pass
+        and t=0 is not latched — the camera clock is still being checked after
+        a restart, and a timeVec that began on PC stamps and continued on
+        camera stamps would step where they meet. Once t=0 is latched it is
+        never asked again. `frames_lost` is read at t=0, so frames lost while
+        waiting are not charged to the measurement (`frames_lost_at_t0`).
 
         Caller contract: this mask must stay in step with the one handed to
         `processor.set_roi()` — the workers read the processor's ROI crops, not
@@ -257,8 +274,12 @@ class RealtimePipeline(QThread):
         """
         self._t0_capture = None
         self._t0_wall    = None
+        self._frames_lost_at_t0 = None
+        self._skipped_before_t0 = 0
         self._overloaded = False
-        self._intake = _Intake(mask=mask, put_timeout_s=put_timeout_s)
+        self._intake = _Intake(mask=mask, put_timeout_s=put_timeout_s,
+                               clock_settled=clock_settled,
+                               frames_lost=frames_lost)
 
     def disable_intake(self) -> None:
         """Stop accepting camera frames (call on Stop SCOS / FINISHED)."""
@@ -283,6 +304,18 @@ class RealtimePipeline(QThread):
         """
         return self._t0_wall
 
+    @property
+    def frames_lost_at_t0(self) -> int | None:
+        """The frame source's lost-frame count when t=0 was latched (0 if it
+        has none); None until then. Subtract it from the current count to get
+        the frames lost during this measurement."""
+        return self._frames_lost_at_t0
+
+    @property
+    def skipped_before_t0(self) -> int:
+        """Frames let pass before t=0 while the camera clock was checked."""
+        return self._skipped_before_t0
+
     def on_frame(self, frame: np.ndarray, t_capture: float) -> None:
         """Camera-thread intake slot - connect with Qt.ConnectionType.DirectConnection.
 
@@ -296,8 +329,17 @@ class RealtimePipeline(QThread):
             return                       # not measuring: nothing to do
 
         if self._t0_capture is None:
+            if intake.clock_settled is not None and not intake.clock_settled():
+                self._skipped_before_t0 += 1     # todo D10 — see enable_intake
+                return
             self._t0_capture = t_capture
             self._t0_wall    = time.time()
+            self._frames_lost_at_t0 = (
+                int(intake.frames_lost()) if intake.frames_lost is not None else 0)
+            if self._skipped_before_t0:
+                logger.info("Measurement starts after the camera-clock check — "
+                            "%d frame(s) captured during the check were not used",
+                            self._skipped_before_t0)
         t = t_capture - self._t0_capture
 
         self._input_q.put((frame, intake.mask, t),

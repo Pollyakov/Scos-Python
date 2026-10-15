@@ -72,6 +72,9 @@ class FolderMockCamera(QThread):
         # _flush_stale_frames(), which uses that to discard frames captured
         # before the operator changed the lighting.
         self.frames_emitted = 0
+        # Playback has no camera clock to check, so a measurement never
+        # waits for one (CameraThread.clock_settled, todo D10).
+        self.clock_settled = True
         self._last_display    = 0.0
         self._display_interval = 1.0 / self.DISPLAY_FPS_CAP
         self._recording_params: dict = {}

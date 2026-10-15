@@ -299,6 +299,14 @@ class CameraThread(QThread):
         """"camera" once the camera's timestamps are in use, else "pc"."""
         return self._clock.time_source if self._clock else "pc"
 
+    @property
+    def clock_settled(self) -> bool:
+        """True once the camera-clock check since the last restart has ended
+        (core/frame_clock.py `settled`). The measurement keeps no frame before
+        that (todo D10). Meaningful on the camera thread, in a frame_ready
+        slot connected directly — that is where RealtimePipeline reads it."""
+        return self._clock.settled if self._clock else True
+
     def _restart_clock(self) -> None:
         # Grabbing restarts: frame numbers may start again at 1 and the
         # camera clock is re-checked. Thread-safe (one flag write). Called

@@ -4,6 +4,7 @@ Tests for core/pipeline.py — _DropOldestQueue and RealtimePipeline.
 RealtimePipeline requires a QApplication for Qt signals.
 """
 
+import logging
 import sys
 import os
 import time
@@ -748,6 +749,99 @@ class TestCameraThreadIntake:
 # ---------------------------------------------------------------------------
 # stop(discard_queued=True) — todo K5 (found by the 3b slowdown rehearsal)
 # ---------------------------------------------------------------------------
+
+class TestClockCheckGate:
+    """todo D10: no frame is kept — and t=0 is not latched — until the camera
+    clock check since the last restart has ended. The pipeline is not started,
+    so kept frames simply stay in its queue (fewer than its 20 places)."""
+
+    _SHAPE = (16, 16)
+
+    def _frame(self):
+        return np.zeros(self._SHAPE, dtype=np.uint16)
+
+    def _mask(self):
+        return np.ones(self._SHAPE, dtype=bool)
+
+    @staticmethod
+    def _gate(open_after):
+        """A clock that settles once it has been asked `open_after` times."""
+        calls = [0]
+
+        def settled():
+            calls[0] += 1
+            return calls[0] > open_after
+        return settled, calls
+
+    def test_frames_before_the_check_ends_are_not_kept(self):
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        settled, _ = self._gate(open_after=3)
+        pipeline.enable_intake(self._mask(), clock_settled=settled)
+        for i in range(3):
+            pipeline.on_frame(self._frame(), 100.0 + i * 0.05)
+        assert pipeline.queue_depth == 0
+        assert pipeline.t0_capture is None, "t=0 latched on an unchecked stamp"
+        assert pipeline.skipped_before_t0 == 3
+
+    def test_t0_is_the_first_frame_after_the_check(self, caplog):
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        settled, _ = self._gate(open_after=3)
+        pipeline.enable_intake(self._mask(), clock_settled=settled)
+        with caplog.at_level(logging.INFO, logger="core.pipeline"):
+            for i in range(6):
+                pipeline.on_frame(self._frame(), 100.0 + i * 0.05)
+        assert pipeline.t0_capture == pytest.approx(100.15)
+        assert pipeline.queue_depth == 3
+        kept = [item[2] for item in list(pipeline._input_q._dq)]
+        assert kept == pytest.approx([0.0, 0.05, 0.10])
+        assert "3 frame(s) captured during the check were not used" in caplog.text
+
+    def test_once_open_the_gate_is_never_asked_again(self):
+        """A later restart in mid-run must not cut frames out of timeVec."""
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        settled, calls = self._gate(open_after=0)
+        pipeline.enable_intake(self._mask(), clock_settled=settled)
+        for i in range(5):
+            pipeline.on_frame(self._frame(), 100.0 + i * 0.05)
+        assert calls[0] == 1
+        assert pipeline.queue_depth == 5
+
+    def test_no_gate_keeps_the_first_frame(self):
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        pipeline.enable_intake(self._mask())
+        pipeline.on_frame(self._frame(), 100.0)
+        assert pipeline.t0_capture == 100.0
+        assert pipeline.skipped_before_t0 == 0
+
+    def test_lost_frames_are_counted_from_t0(self):
+        """Frames lost while waiting belong to no measurement."""
+        lost = [4]
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        settled, _ = self._gate(open_after=2)
+        pipeline.enable_intake(self._mask(), clock_settled=settled,
+                               frames_lost=lambda: lost[0])
+        assert pipeline.frames_lost_at_t0 is None
+        pipeline.on_frame(self._frame(), 100.0)
+        lost[0] = 6                                  # two lost during the check
+        pipeline.on_frame(self._frame(), 100.05)
+        pipeline.on_frame(self._frame(), 100.10)     # t=0
+        lost[0] = 9
+        assert pipeline.frames_lost_at_t0 == 6
+
+    def test_a_new_measurement_starts_the_wait_and_counts_over(self):
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        settled, _ = self._gate(open_after=2)
+        pipeline.enable_intake(self._mask(), clock_settled=settled,
+                               frames_lost=lambda: 1)
+        for i in range(3):
+            pipeline.on_frame(self._frame(), 100.0 + i * 0.05)
+        pipeline.disable_intake()
+        settled, _ = self._gate(open_after=1)
+        pipeline.enable_intake(self._mask(), clock_settled=settled)
+        assert pipeline.skipped_before_t0 == 0
+        assert pipeline.frames_lost_at_t0 is None
+        assert pipeline.t0_capture is None
+
 
 class TestStopDiscardingBacklog:
     """When nobody will use the results (window closing, Start SCOS replacing

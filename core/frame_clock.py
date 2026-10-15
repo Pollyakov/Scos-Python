@@ -242,3 +242,13 @@ class FrameClock:
     @property
     def unusable_reason(self) -> str | None:
         return self._unusable_reason
+
+    @property
+    def settled(self) -> bool:
+        """True once the clock check since the last restart has ended — the
+        camera clock accepted, or given up on for good. Until then capture
+        times are PC stamps that will switch to camera stamps mid-stream
+        (todo D10). Read it on the camera thread right after stamp(): a
+        restart only *requests* the reset, which the next stamp() carries
+        out, so in between this still describes the previous run."""
+        return self.time_source == "camera" or self._unusable_reason is not None

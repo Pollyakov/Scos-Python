@@ -249,6 +249,62 @@ class TestGrabLoopTiming:
         cam = CameraThread()
         assert cam.frames_lost == 0
         assert cam.time_source == "pc"
+        assert cam.clock_settled
+
+
+class TestMeasurementWaitsForTheClockCheck:
+    """todo D10, end to end: the real grab loop feeds the real pipeline intake
+    the way MainWindow wires them, with the measurement opened right after a
+    camera restart (short calibrations). Retrieval delays jitter, so PC stamps
+    are uneven and camera stamps are not: one PC stamp in timeVec shows."""
+
+    @staticmethod
+    def _jittery(n, *, missing=()):
+        out = []
+        for r in _results_20hz(n, missing=missing):
+            r.t_retrieved += 0.003 * (r.BlockID % 4)      # 4–13 ms, uneven
+            out.append(r)
+        return out
+
+    def _run(self, monkeypatch, results, *, gate=True):
+        from core.pipeline import RealtimePipeline
+        pc_now = [0.0]
+        monkeypatch.setattr(camera_module.time, "monotonic", lambda: pc_now[0])
+        cam = CameraThread()
+        cam.camera = _FakePylonCamera(results, cam, pc_now)
+        pipeline = RealtimePipeline(object(), n_workers=1)
+        kept = []
+        # Stand-in for the worker queue: record what the intake keeps.
+        pipeline._input_q.put = lambda item, **_kw: kept.append(item[2])
+        pipeline.enable_intake(
+            np.ones((4, 4), dtype=bool),
+            clock_settled=(lambda: cam.clock_settled) if gate else None,
+            frames_lost=lambda: cam.frames_lost)
+        cam.frame_ready.connect(pipeline.on_frame)        # same thread: direct
+        cam._running = True
+        cam.run()
+        return cam, pipeline, kept
+
+    def test_timevec_is_camera_time_from_its_first_point(self, monkeypatch):
+        cam, pipeline, kept = self._run(monkeypatch, self._jittery(160))
+        assert cam.time_source == "camera"
+        assert kept[0] == 0.0
+        assert np.diff(kept) == pytest.approx([0.05] * (len(kept) - 1), abs=1e-9)
+        # ≈ 5 s at 20 Hz went to the check; the rest is the measurement.
+        assert 95 <= pipeline.skipped_before_t0 <= 105
+        assert len(kept) + pipeline.skipped_before_t0 == 160
+
+    def test_without_the_wait_timevec_mixes_the_two_clocks(self, monkeypatch):
+        """The fault D10 describes — proves the test above can see it."""
+        _, _, kept = self._run(monkeypatch, self._jittery(160), gate=False)
+        gaps = np.diff(kept)
+        assert max(abs(gaps - 0.05)) > 0.002
+
+    def test_frames_lost_during_the_check_are_not_the_measurements(self, monkeypatch):
+        cam, pipeline, _ = self._run(monkeypatch,
+                                     self._jittery(160, missing={40, 140}))
+        assert cam.frames_lost == 2
+        assert cam.frames_lost - pipeline.frames_lost_at_t0 == 1   # only #140
 
 
 # ---------------------------------------------------------------------------

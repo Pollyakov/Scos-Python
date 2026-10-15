@@ -275,6 +275,51 @@ class TestCameraClock:
         assert [s.t_capture for s in stamps] == [r[0] for r in later]
 
 
+class TestSettled:
+    """`settled`: the check since the last restart has ended, either way —
+    what the measurement waits for (todo D10)."""
+
+    def test_not_settled_while_checking_then_settled_when_accepted(self):
+        c = FrameClock()
+        assert not c.settled
+        rows = frames(200)
+        n_check = int(FrameClock.VALIDATE_S * FPS)
+        feed(c, rows[:n_check])
+        assert not c.settled                               # just under 5 s
+        feed(c, rows[n_check:])
+        assert c.time_source == "camera" and c.settled
+
+    def test_settled_when_the_camera_clock_is_rejected(self):
+        c = FrameClock()
+        feed(c, frames(200, hz=10e6))                      # not a Basler rate
+        assert c.time_source == "pc" and c.settled         # decided: PC for good
+
+    def test_camera_without_timestamps_is_settled_at_once(self):
+        c = FrameClock()
+        t, _, b, _ = frames(1)[0]
+        c.stamp(t, 0, b)
+        assert c.settled                                   # nothing to wait for
+
+    def test_a_restart_unsettles_it_at_the_next_frame(self):
+        c = FrameClock()
+        rows = frames(200)
+        feed(c, rows)
+        assert c.settled
+        c.request_reset()
+        assert c.settled        # only requested: still describes the old run
+        t, k, b, _ = rows[-1]
+        c.stamp(t + DT, k + round(DT * 1e9), b + 1)
+        assert not c.settled                               # checking again
+
+    def test_a_rejected_clock_stays_settled_after_a_restart(self):
+        c = FrameClock()
+        rows = [(t, 0, b, te) for t, _, b, te in frames(5)]
+        feed(c, rows)
+        c.request_reset()
+        feed(c, rows)
+        assert c.settled                                   # given up for good
+
+
 class TestClockCheckIsRobust:
     """A good camera must not be rejected because of one late frame or a
     coarse PC clock — rejection would silently switch the fix off."""
