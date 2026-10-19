@@ -263,6 +263,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._fit_to_screen()
         self._load_config()
+        self._apply_loaded_settings()
         self._connect_signals()
 
     # ------------------------------------------------------------------
@@ -635,6 +636,26 @@ class MainWindow(QMainWindow):
                     apply_fn(cfg[key])
                 except (ValueError, TypeError):
                     pass
+
+    def _apply_loaded_settings(self) -> None:
+        """Copy the loaded settings that live outside their widgets.
+
+        _load_config() runs before _connect_signals(), so the handlers that
+        copy these widgets into their attributes never saw the loaded values:
+        until 2026-10-19 a saved 1-min duration showed in its box but never
+        stopped the run, and a saved "Pulsation lower level" showed in the
+        dropdown while the run normalized by "Number of seconds". The camera
+        settings, window size and frame counts are read from their widgets
+        when they are used. (A loaded External Trigger tick does not upload
+        the Arduino sketch either; not changed here.)
+
+        Set directly, not through _on_duration_changed(): that one may open
+        the "Short Recording Detected" question at every launch.
+        """
+        minutes = float(self.spn_duration.value())
+        self._measurement_duration_s = float('inf') if minutes == 0.0 else minutes * 60.0
+        self._on_norm_type_changed(self.cmb_norm_type.currentIndex())
+        self._norm_seconds = float(self.spn_norm_seconds.value())
 
     def _current_settings(self) -> dict:
         """The widget values, under exactly the keys _load_config() reads."""

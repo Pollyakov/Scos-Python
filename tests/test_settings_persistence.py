@@ -138,6 +138,37 @@ class TestRoundTrip:
         finally:
             w2.close()
 
+    def test_loaded_duration_and_normalization_are_used_not_only_shown(self, isolated_config):
+        # 2026-10-19 on the rig: a saved 1-min duration showed in its box but
+        # the run went on until Stop SCOS (80 s and 138 s), and a saved
+        # "Pulsation lower level" showed in the dropdown while the run was
+        # normalized by "Number of seconds" — the settings were loaded before
+        # their handlers were connected. The round trip above only checks the
+        # widgets, so it passed throughout.
+        (isolated_config / LOCAL).write_text(json.dumps({
+            "measurement_duration_min": 1.0,
+            "norm_type": "pulsation",
+            "norm_seconds": 7,
+        }), encoding="utf-8")
+        w = _open()          # a question box at launch would raise (conftest)
+        try:
+            assert w._measurement_duration_s == pytest.approx(60.0)
+            assert w._norm_type == "pulsation"
+            assert w._norm_seconds == pytest.approx(7.0)
+            assert w.spn_norm_seconds.isHidden()   # only shown for "Number of seconds"
+        finally:
+            w.close()
+
+    def test_default_launch_runs_until_stop_and_normalizes_by_seconds(self, isolated_config):
+        w = _open()
+        try:
+            assert w._measurement_duration_s == float("inf")
+            assert w._norm_type == "seconds"
+            assert w._norm_seconds == pytest.approx(5.0)
+            assert not w.spn_norm_seconds.isHidden()
+        finally:
+            w.close()
+
     def test_saved_keys_are_exactly_the_keys_the_loader_reads(self, isolated_config):
         # A key written but never read (or read but never written) is a
         # setting that silently stops persisting.
