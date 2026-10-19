@@ -78,6 +78,12 @@ class CameraThread(QThread):
         # so the ROI mask must be built from this, never from roi_position
         # (todo U6, plan pitfall P4). None until the camera is configured.
         self.applied_crop: Crop | None = None
+        # The camera's BlackLevel as it reports it, read back after every
+        # _apply_params(). Never written by the app: it is whatever the camera
+        # holds (the rig camera reported 100 on 2026-10-19). A constant
+        # offset, removed with the dark mean, so it does not change κ² — it is
+        # recorded so mean_dark can be judged (2026-10-19). None = not reported.
+        self.black_level: float | None = None
         # True during the dark calibration: the camera runs as fast as it can
         # instead of at frame_rate (todo U11, set_max_frame_rate()).
         self.max_frame_rate = False
@@ -392,6 +398,20 @@ class CameraThread(QThread):
         # Exposure & gain
         cam.ExposureTime.Value = self.exposure_us
         cam.Gain.Value         = self.gain_db
+
+        self._read_black_level()
+
+    def _read_black_level(self) -> None:
+        """Read the camera's BlackLevel into black_level — read only, never
+        written. Never raises: a camera without the node gives None, and
+        nothing is guessed in its place."""
+        try:
+            self.black_level = float(self.camera.BlackLevel.Value)
+        except Exception:
+            self.black_level = None
+        logger.info("Camera black level: %s",
+                    "not reported" if self.black_level is None
+                    else f"{self.black_level:g} (an offset added to every pixel)")
 
     def _apply_roi(self) -> None:
         """Write roi_position (None = full sensor) to the camera, then read

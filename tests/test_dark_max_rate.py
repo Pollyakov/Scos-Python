@@ -49,11 +49,12 @@ class _FakeCamera(QObject):
     trigger_mode  = "Off"
     trigger_delay = 0
 
-    def __init__(self, reported_rate=118.0):
+    def __init__(self, reported_rate=118.0, black_level=None):
         super().__init__()
         self.calls = []
         self.frames_emitted = 0
         self.reported_rate = reported_rate
+        self.black_level = black_level
 
     def set_max_frame_rate(self, enabled):
         self.calls.append(("max", enabled))
@@ -327,3 +328,45 @@ class TestCalibrationFileRecordsTheRate:
         assert "duration_s" in attrs
         w._set_state(State.PREVIEW)
         w.close()
+
+
+class TestSessionFilesRecordTheBlackLevel:
+    """The offset the camera adds to every pixel (2026-10-19: the rig camera
+    reported BlackLevel 100, set outside the app). Recorded so tools/check_session.py can
+    judge mean_dark; left out when the source reports none — never guessed."""
+
+    def _session(self, monkeypatch, tmp_path, black_level):
+        cam = _FakeCamera(black_level=black_level)
+        monkeypatch.setattr(QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+        w = MainWindow(camera=cam)
+        w._output_root = tmp_path
+        w.spn_n1.setValue(N1)
+        w.spn_n2.setValue(N1)
+        # The calibrations and the results file only; no worker threads.
+        monkeypatch.setattr(w, "_enable_measurement_intake", lambda mask: None)
+        _start(w, cam)
+        _feed(w, cam, N1)                    # dark
+        w._skip_frames_until = 0
+        _feed(w, cam, N1)                    # bright → measurement → results file
+        assert w._recorder is not None
+        with h5py.File(w._session_folder / "Calibration.h5", "r") as f:
+            dark, bright = dict(f["dark"].attrs), dict(f["bright"].attrs)
+        meta = dict(w._recorder.file["metadata"].attrs)
+        w._recorder.close()
+        w._recorder = None
+        w._set_state(State.PREVIEW)
+        w.close()
+        return dark, bright, meta
+
+    def test_written_to_all_three_places(self, monkeypatch, tmp_path):
+        dark, bright, meta = self._session(monkeypatch, tmp_path, 100.0)
+        assert dark["camera_black_level"] == 100.0
+        assert bright["camera_black_level"] == 100.0
+        assert meta["camera_black_level"] == 100.0
+
+    def test_a_level_the_source_does_not_report_is_left_out(self, monkeypatch, tmp_path):
+        dark, bright, meta = self._session(monkeypatch, tmp_path, None)
+        assert "camera_black_level" not in dark
+        assert "camera_black_level" not in bright
+        assert "camera_black_level" not in meta

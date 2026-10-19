@@ -457,6 +457,21 @@ class TestCameraCrop:
         assert cam.applied_crop == cut
         assert (cam.camera.Width.Value, cam.camera.Height.Value) == (412, 412)
 
+    def test_black_level_is_read_back_and_never_written(self):
+        # 2026-10-19: the rig camera reported BlackLevel 100, set outside the app. The
+        # app records it for the session files and must leave it alone.
+        class _ReadOnlyNode:
+            Value = property(lambda self: 100.0)
+        cam, _ = _crop_thread()
+        cam.camera.BlackLevel = _ReadOnlyNode()     # a write would raise
+        cam._apply_params()
+        assert cam.black_level == 100.0
+
+    def test_a_camera_without_black_level_reports_none(self):
+        cam, _ = _crop_thread()                     # no BlackLevel node
+        cam._apply_params()
+        assert cam.black_level is None
+
     def test_old_camera_centering_switch_is_turned_off(self):
         cam, _ = _crop_thread(center=True)
         cam.set_roi(760, 402, 412, 412)

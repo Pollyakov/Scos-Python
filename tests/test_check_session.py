@@ -9,6 +9,7 @@ hard rule (an estimate, the subject, a case that is fine in some sessions).
 """
 
 import os
+import re
 import sys
 
 import numpy as np
@@ -39,7 +40,7 @@ GOOD_LOG = (
 
 def _session(folder, *, times=None, source="camera", lost=0, dark_crop=CUT,
              dark_duration=6.0, camera_rate=118.0, n_frames=600, log=GOOD_LOG,
-             old=False):
+             old=False, black_level=None, mean_dark=0.5):
     """A session folder. old=True: as written before U10/U11 (2026-10-08)."""
     times = [0.05 * i for i in range(6)] if times is None else times
     meta = {"camera_sn": "40075248", "time_source": source,
@@ -55,8 +56,10 @@ def _session(folder, *, times=None, source="camera", lost=0, dark_crop=CUT,
     dark_attrs = {"n_frames": n_frames, "window_size": 7}
     if not old:
         dark_attrs.update(duration_s=dark_duration, camera_frame_rate_hz=camera_rate)
+    if black_level is not None:
+        dark_attrs["camera_black_level"] = black_level
     write_calibration(folder / CALIBRATION_FILENAME, "dark",
-                      {"mean_dark": np.full(shape, 0.5), "var_dark": np.ones(shape)},
+                      {"mean_dark": np.full(shape, mean_dark), "var_dark": np.ones(shape)},
                       dark_attrs, crop=None if old else dark_crop)
     write_calibration(folder / CALIBRATION_FILENAME, "bright",
                       {"spIm": np.ones(shape), "spVar": np.ones(shape)},
@@ -92,6 +95,28 @@ def test_a_good_session_has_no_not_ok(tmp_path, capsys):
     assert "Summary:" in out and "0 NOT OK" in out
     assert "Laser-off check passed" in out
     assert "something unrelated" not in out
+
+
+def test_a_recorded_black_level_is_taken_off_mean_dark(tmp_path, capsys):
+    """2026-10-19: BlackLevel 100 made mean_dark 112.7 DU — 100 offset plus
+    light. The row shows what is left above the offset, still as a CHECK."""
+    _session(tmp_path, black_level=100.0, mean_dark=112.7)
+    code, out = _run(tmp_path, capsys)
+    assert code == 0
+    assert _verdict(out, "camera black level") == "-"
+    assert _verdict(out, "mean_dark - black level") == "CHECK"
+    row = next(l for l in out.splitlines() if "mean_dark - black level" in l)
+    # The value column, not just anywhere: "112.700 DU" also contains "12.700 DU".
+    assert re.search(r"mean_dark - black level\s+12\.700 DU", row), row
+    assert "mean_dark 112.700 DU" in row
+
+
+def test_without_a_black_level_mean_dark_is_shown_as_before(tmp_path, capsys):
+    _session(tmp_path, mean_dark=0.46)
+    _, out = _run(tmp_path, capsys)
+    row = next(l for l in out.splitlines() if l[11:].startswith("mean_dark "))
+    assert "0.460 DU" in row and "about 0.5 on the rig" in row
+    assert "black level" not in out.replace("the camera's black level", "")
 
 
 def test_another_crop_in_the_calibration_is_not_ok(tmp_path, capsys):

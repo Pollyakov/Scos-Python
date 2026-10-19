@@ -200,8 +200,18 @@ def calibration(rep: Report, path: Path, res: dict) -> dict:
                 rep.row(OK if same else NOT_OK, f"{name} arrays", shapes,
                         f"crop is {c['Height']} x {c['Width']}")
             if name == "dark" and "mean_dark" in g:
-                rep.row(CHECK, "mean_dark", f"{float(np.mean(g['mean_dark'][()])):.3f} DU",
-                        "about 0.5 on the rig (2026-10-08); depends on the camera's black level")
+                mean_dark = float(np.mean(g["mean_dark"][()]))
+                if "camera_black_level" in a:
+                    # The offset the camera adds to every pixel (recorded since
+                    # 2026-10-19); what is left above it is light or the sensor.
+                    level = float(a["camera_black_level"])
+                    rep.row(INFO, "camera black level", f"{level:g}")
+                    rep.row(CHECK, "mean_dark - black level", f"{mean_dark - level:.3f} DU",
+                            f"mean_dark {mean_dark:.3f} DU; light during the dark calibration "
+                            "raises it - no measured value with the lens capped yet")
+                else:
+                    rep.row(CHECK, "mean_dark", f"{mean_dark:.3f} DU",
+                            "about 0.5 on the rig (2026-10-08); depends on the camera's black level")
     return crops
 
 

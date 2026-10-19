@@ -1266,6 +1266,7 @@ class MainWindow(QMainWindow):
             "camera_model":   str(self.camera.get_info().get("model", "")),
             "gain_du_per_e":  float(self.processor.gain_du_per_e or 0.0),
             "gain_source":    str(self.processor.gain_source or ""),
+            **self._black_level_record(),
         }
         # Params: exactly the fields the supervisor listed (2026-09-23), named
         # as she named them. satCapacity is deliberately absent. The three
@@ -1748,6 +1749,7 @@ class MainWindow(QMainWindow):
         dark_attrs = {"n_frames":    n_collected,
                       "window_size": self._dark_cal_collector.window_size}
         dark_attrs.update(self._dark_rate_record())
+        dark_attrs.update(self._black_level_record())
         # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
         self.processor.dark_var  = dark_var
@@ -1794,6 +1796,16 @@ class MainWindow(QMainWindow):
         self._dark_cal_collector = None
         # Automatically move to bright calibration
         self._start_bright_cal()
+
+    def _black_level_record(self) -> dict:
+        """`camera_black_level` for the session's files: the offset the camera
+        adds to every pixel, as it reported it (CameraThread.black_level).
+        Left out when the source reports none — playback; never guessed.
+        Reads the cached value, never the camera, so it cannot fail and abort
+        a calibration. The app never changes BlackLevel, so it is the same
+        for both calibrations and the measurement."""
+        level = getattr(self.camera, "black_level", None)
+        return {} if level is None else {"camera_black_level": float(level)}
 
     def _dark_rate_record(self) -> dict:
         """Log how the dark calibration ran and return what Calibration.h5
@@ -1885,7 +1897,8 @@ class MainWindow(QMainWindow):
                     "spVar": bright_var,  # local spatial variance of spIm [DU²]
                 },
                 {"n_frames":    n_collected,
-                 "window_size": self._bright_cal_collector.window_size},
+                 "window_size": self._bright_cal_collector.window_size,
+                 **self._black_level_record()},
                 crop=self._session_crop(),
             )
             self._calib_label.setText(

@@ -81,7 +81,12 @@ What it checks as a hard rule (OK / NOT OK):
 What stays CHECK — compare by eye:
 - `k2_corr mean` — in the range of 2026-10-08 (0.0081, same rig): not identical (different
   frames, maybe another subject or ROI), but not 2× or ½×;
-- `mean_dark` — about 0.5 DU on the rig (0.46 on 2026-10-08);
+- `mean_dark - black level` — what the dark calibration reads above the offset the camera adds to
+  every pixel (`camera black level`, recorded since 2026-10-19; the rig camera reported **100**
+  on 2026-10-19 — not yet checked whether it survives a power cycle). Expected near 0 with the usual probe (inferred from 2026-10-08, not
+  yet measured at black level 100); light leaking in during the dark calibration raises it (12.7 DU with a leakier test probe on 2026-10-19). No lens-capped value
+  measured yet. Sessions recorded before then show plain `mean_dark` — 0.46 DU on 2026-10-08,
+  when the black level was 0;
 - `image area (crop)` — = the "Camera image area" line of B5;
 - dark duration against the estimate: ≈ 5–8 s cut, ≈ 10–11 s full;
 - `dark frames` / `bright frames` other than 600 (a short test, part E);

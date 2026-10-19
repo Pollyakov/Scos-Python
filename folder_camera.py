@@ -93,6 +93,8 @@ class FolderMockCamera(QThread):
         self._crop = PlaybackCrop()
         self._sensor: tuple[int, int] | None = None   # (width, height) of the TIFFs
         self.applied_crop: Crop | None = None
+        # No camera, so no black level to report (CameraThread.black_level).
+        self.black_level: float | None = None
 
     # ------------------------------------------------------------------
     # Public API — mirrors CameraThread exactly
