@@ -83,7 +83,7 @@ What stays CHECK — compare by eye:
   frames, maybe another subject or ROI), but not 2× or ½×;
 - `mean_dark - black level` — what the dark calibration reads above the offset the camera adds to
   every pixel (`camera black level`, recorded since 2026-10-19; the rig camera reported **100**
-  on 2026-10-19 — not yet checked whether it survives a power cycle). Expected near 0 with the usual probe (inferred from 2026-10-08, not
+  on 2026-10-19 — stored in UserSet1, its power-on set: confirmed by replug on 2026-10-19). Expected near 0 with the usual probe (inferred from 2026-10-08, not
   yet measured at black level 100); light leaking in during the dark calibration raises it (12.7 DU with a leakier test probe on 2026-10-19). No lens-capped value
   measured yet. Sessions recorded before then show plain `mean_dark` — 0.46 DU on 2026-10-08,
   when the black level was 0;
