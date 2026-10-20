@@ -93,7 +93,8 @@ class FolderMockCamera(QThread):
         self._crop = PlaybackCrop()
         self._sensor: tuple[int, int] | None = None   # (width, height) of the TIFFs
         self.applied_crop: Crop | None = None
-        # No camera, so no black level to report (CameraThread.black_level).
+        # No camera: the black level is the one in the recording's folder name,
+        # if any (open(); CameraThread.black_level reads the camera's).
         self.black_level: float | None = None
 
     # ------------------------------------------------------------------
@@ -109,8 +110,9 @@ class FolderMockCamera(QThread):
             raise FileNotFoundError(
                 f"No TIFF files found in {self._recording_dir}"
             )
-        self._recording_params = self._parse_recording_params()
-        h, w = tifffile.imread(str(self._tiff_files[0])).shape[:2]
+        first = tifffile.imread(str(self._tiff_files[0]))
+        self._recording_params = self._parse_recording_params(first)
+        h, w = first.shape[:2]
         self._sensor = (w, h)
         self._reapply_roi()
 
@@ -122,6 +124,12 @@ class FolderMockCamera(QThread):
         self.gain_db      = p.get("gain_db",       self.gain_db)
         self.frame_rate   = p.get("frame_rate",    self.frame_rate)
         self.pixel_format = p.get("pixel_format",  self.pixel_format)
+        # The black level the recording's name declares ("BL100DU"), reported
+        # like the camera's own. It matters for frames saved from playback:
+        # the MATLAB script subtracts the folder name's BL from the frames
+        # before fitting the mean image, so a wrong one ruins its κ² — a
+        # playback session saved with BL0DU gave κ²_raw ≈ 2800 (2026-10-21).
+        self.black_level  = p.get("black_level",   self.black_level)
 
     def close(self) -> None:
         self.stop()
@@ -215,6 +223,8 @@ class FolderMockCamera(QThread):
             "width":        w,
             "height":       h,
             "bit_depth":    p.get("bit_depth", 10),
+            # What a raw frame is divided by to get DU (see _pixel_layout).
+            "scale":        p.get("scale", 64.0),
         }
 
     # ------------------------------------------------------------------
@@ -321,9 +331,46 @@ class FolderMockCamera(QThread):
     # Private
     # ------------------------------------------------------------------
 
-    def _parse_recording_params(self) -> dict:
-        """Read camera parameters from LocalStd7x7_corr.mat and the TIFF filename."""
+    # The settings in a recording folder's name, the convention of the MATLAB
+    # script (GetParamsFromFileName.m) and of the app's own saved frames
+    # (core/frame_writer.py): "expT5ms_Gain24dB_BL100DU_FR40Hz_005".
+    _NAME_TOKENS = {
+        "exposure_us": (r"(?:^|_)expT(\d+(?:\.\d+)?)ms(?:_|$)", 1000.0),   # ms → µs
+        "gain_db":     (r"(?:^|_)Gain(\d+(?:\.\d+)?)dB(?:_|$)", 1.0),
+        "frame_rate":  (r"(?:^|_)FR(\d+(?:\.\d+)?)Hz(?:_|$)", 1.0),
+        "black_level": (r"(?:^|_)BL(\d+(?:\.\d+)?)DU(?:_|$)", 1.0),
+    }
+
+    @staticmethod
+    def _pixel_layout(frame: np.ndarray) -> tuple[int, float]:
+        """(bit depth, scale) of a recording, from its first frame — the test
+        the MATLAB script makes (SCOSvsTime_WithNoiseSubtraction_Ver2.m:386).
+
+        Pylon Viewer stores 10-bit data left-justified in uint16 (every value
+        a multiple of 64), the app saves frames as the camera sent them
+        (scale 1). A frame that is a multiple of neither 64 nor 16 is taken as
+        Mono12 — the rig's format, and the only 16-bit one the MATLAB script
+        reads right; an 8-bit TIFF is Mono8.
+        """
+        if frame.dtype == np.uint8:
+            return 8, 1.0
+        if not np.any(frame % 64):
+            return 10, 64.0
+        if not np.any(frame % 16):
+            return 12, 16.0
+        return 12, 1.0
+
+    def _parse_recording_params(self, first_frame: np.ndarray | None = None) -> dict:
+        """Read camera parameters from LocalStd7x7_corr.mat, the folder name
+        and the TIFF file name; the bit depth and scale from the first frame."""
         params: dict = {}
+        for key, (pattern, factor) in self._NAME_TOKENS.items():
+            m = re.search(pattern, self._recording_dir.name)
+            if m:
+                params[key] = float(m.group(1)) * factor
+        if first_frame is not None:
+            params["bit_depth"], params["scale"] = self._pixel_layout(first_frame)
+            params["pixel_format"] = f"Mono{params['bit_depth']}"
 
         # Parse camera model and serial from the first TIFF filename.
         # Example: Basler_a2A1920-160umPRO__40513592__20241101_163604036_0000.tiff

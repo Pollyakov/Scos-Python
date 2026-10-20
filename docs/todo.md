@@ -263,7 +263,7 @@ Show the saved path in the status bar.
 
 **Decided 2026-10-20 (user):** the tag waits until **Vika has checked the math on saved
 frames**. If those are frames saved *by this app*, raw-frame saving (F1) must come first —
-the Save Frames box is disabled until F1.
+done 2026-10-21 (Done item 58); next its rig check (`rig_checklist.md` R8), then her check.
 
 After E1–E4 are done and all tests pass, create an annotated git tag:
 ```
@@ -296,7 +296,10 @@ with 4 options (least-disruptive first):
 
 ---
 
-#### B2 · Disk-space check
+#### ~~B2 · Disk-space check~~ — ✅ DONE 2026-10-21 for saved frames (see item 58 in Done table)
+
+*Done with F1:* `core/disk_space.py` — before Start SCOS with Save Frames ticked, free space ≥ estimate × 1.2 + 5 GB ("unlimited" = 4 h); a measurement stops cleanly below 2 GB, checked every 30 s. Without Save Frames there is no check (a session writes < 50 MB). The limits are the proposed ones, never confirmed by Vika (open question 14), kept as constants.
+
 
 Before starting a recording, call `shutil.disk_usage(output_folder)` and refuse to start
 if free space < some threshold (e.g. 5 GB). During a session, check every few minutes and
@@ -680,6 +683,12 @@ threads (`core/pipeline.py` `_emit_loop`, `run`) were also waiting at the time �
 in the crash. Next: in that test, disconnect the lambda and drain events after `stop()`
 (or connect a slot on an object the test owns), then run the suite ≥ 30 times.
 
+**2026-10-21, once more — output not kept:** one full fast run, before the Save Frames commit,
+ended `1 failed, 772 passed`; which test is not known (the output was not saved). The 7 runs
+after it all passed (5 by hand, 2 in the pre-commit hook). Two new timing-based tests in
+`tests/test_frame_writer.py` used a 20 ms sleep to let the writer thread take a frame; they now
+wait for it explicitly — a guess at the cause, not a proven one.
+
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
 teardown. Running with `-v` also shows which test had started last.
@@ -727,7 +736,11 @@ These are the next development phases after v0 is tagged.
 
 ---
 
-#### F1 · Save raw frames option
+#### ~~F1 · Save raw frames option~~ — ✅ DONE 2026-10-21 (see item 58 in Done table); rig check `rig_checklist.md` R8
+
+**2026-10-20: started — plan in [`Plan_Frame_Saving.md`](Plan_Frame_Saving.md)** (with B2 and
+F4; format measured: uncompressed TIFF; decisions 1–4 asked). Needed before Vika's check of
+the math on saved frames, which the v0 tag waits for.
 
 Add an option to save every raw camera frame to HDF5 during a session. One frame at 700×700
 uint16 ≈ 1 MB. At 40 Hz for 30 min ≈ 72 GB — so this requires disk-space check (B2) first.
@@ -796,7 +809,9 @@ Part of F3's design.
 
 ---
 
-#### F4 · HDF5 recording on its own thread *(was worklist task 14)*
+#### F4 · HDF5 recording on its own thread *(was worklist task 14)* — **frames part ✅ 2026-10-21** (item 58)
+
+*2026-10-21:* raw frames now have their own writer thread with a bounded queue (`core/frame_writer.py`, skip-and-count when full); the old `append_frame()` is gone. What is left: `recorder.append()` of the results rows on the GUI thread — harmless at the result rate.
 
 `recorder.append()` and the gzip-compressing `recorder.append_frame()` run synchronously on
 the GUI thread (`MainWindow._on_scos_result` / `_on_scos_frame`). Harmless at the result rate;
@@ -872,10 +887,10 @@ unchanged.
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20)
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
-  → B1 (overload dialog) → B2 (full disk monitor) → ~~B3~~ → B4 (camera reconnect)
+  → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4/D7/D9 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
-  → F1 (raw frames) → F2 (long sessions) → F3 (laser control) → F4 (recorder thread) → F5 (reopenable figure)
+  → ~~F1~~ (raw frames, 2026-10-21) → F2 (long sessions) → F3 (laser control) → F4 (results rows only) → F5 (reopenable figure)
   F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```
 
@@ -942,6 +957,7 @@ unchanged.
 | 55 | Rig-trip sheet for U6/U10/U11 + `tools/check_session.py` (2026-10-15) | The first rig session (2026-10-08) ran before the camera-side crop (U6), its record (U10) and the dark calibration at the maximum rate (U11) existed, so none of them has run on the real camera. [`rig_trip_U6_U10_U11.md`](rig_trip_U6_U10_U11.md) is a short sheet with just those checks in order: A before launching, B a cut session with 600 + 600 frames (U6 + U10 + U11 together; expected crop for the 2026-10-08 ROI computed with `core.crop.crop_for_circle`: 611 × 611 for camera steps of 1, 612 for 4, 616 for 8), C the same uncut, D the A/B accuracy test with the lens capped (U11 is not done until it passes), E optional (a 60 + 60 session for D10, leftovers R1f/R3d/R7). **`tools/check_session.py <session folder>`** reads the results file, `Calibration.h5` and the session's `app.log` and prints each value with a verdict: **OK / NOT OK only for hard rules** (time steps = 1000 / frame rate with no gap or bunching and the first step too; no lost/dropped frames; κ² > 0; one crop for results, dark and bright, arrays of its size; dark faster than at the set rate and the camera's rate above it; **exposure and gain in the "Frame-rate limit off" line = the session's**), **CHECK** where no hard rule exists (κ² mean, `mean_dark` — black level differs by camera, estimates, 60-frame tests, PC clock), a `Summary` line, exit 1 on any NOT OK. It only reads. Written because a Python one-liner with nested quotes broke when tried through a Windows shell. **Checked:** on the real 2026-10-08 rig session — time steps OK (50.01–50.02 ms), everything added later CHECK, the one NOT OK the deliberate laser-on test; that run found the accounting line "0 frame(s) lost" marked NOT OK, fixed by matching keys in order and case-sensitively. `tests/test_check_session.py` (14), nine deliberate mistakes in the rules each caught. Also: `rig_checklist.md` R3a no longer mentions the removed V key |
 | 56 | The camera's BlackLevel recorded in the session files (2026-10-19, `04186c5`) | Found on the rig 2026-10-19: `check_session.py` showed `mean_dark` 112.7 DU (0.46 on 2026-10-08). Read on the camera: `BlackLevel` = **100** — a fixed offset the camera adds to every pixel, set outside the app; it is stored in UserSet1, the set the camera loads at power-on (confirmed by unplugging and replugging, `396179f`). The offset cancels in κ² (the dark mean is subtracted), but it hid what `mean_dark` is meant to show: light leaking in during the dark calibration (the other 12.7 DU — a leakier test probe that day). Now `camera.py` reads `BlackLevel` back after every `_apply_params()` (never writes it; `None` if the camera has no such node — playback and the mock), and the app records it as `camera_black_level` in the results file's `metadata` and in `Calibration.h5`'s `dark` and `bright` attributes; `check_session.py` prints `mean_dark - black level` (CHECK — no hard rule: −1.07 DU at 2 ms exposure, +0.5 to +2.9 DU at 8 ms on 2026-10-19, so "near 0" means about ±1 DU plus any leak). Old sessions print the old row unchanged. Tests: `tests/test_camera.py` (read back through a read-only node, missing node → None), `tests/test_dark_max_rate.py` (dark → bright → results file, 100.0 and None), `tests/test_check_session.py` (row with and without a level); six deliberate mistakes each caught (one only after the test was tightened: "12.700 DU" is a substring of "112.700 DU"). Rig ✅: `camera_black_level = 100` in every session from 16:11 on. Also measured: the room's 100 Hz flicker raises the dark variance at the maximum rate (U11) more than at 20 Hz when light leaks in — negligible with the usual probe |
 | 57 | Saved duration and normalization take effect at launch (2026-10-19, `5d9767e`) | Found on the rig 2026-10-19: with "Measuring duration" saved as 1 min the run went on until Stop SCOS (138 s and 80 s), and a saved "Pulsation lower level" showed in the dropdown while the run was normalized by "Number of seconds" (both results files record that). Cause: `MainWindow.__init__` ran `_load_config()` before `_connect_signals()`, so the handlers that copy three widgets into the values the run uses never saw the loaded values: `_measurement_duration_s` stayed ∞, `_norm_type` "seconds" (and the seconds box visible), `_norm_seconds` 5. In the code since May 2026 (`09513cf`, `9baad98`); a value changed by hand during a run worked, which is why the real 2026-10-08 session is correct (its log shows both set in-session, the auto-stop fired, percentile5). Effect on data: only the rBFi normalization of sessions whose type came from the saved file; κ²_raw, κ²_corr and BFi unaffected. Fix: `_apply_loaded_settings()` right after `_load_config()` sets the three values from their widgets — not through `_on_duration_changed()`, which may ask "Short Recording Detected" at every launch. The camera settings, window size and frame counts were already read from their widgets when used; a loaded External Trigger tick still does not upload the Arduino sketch (not changed). Tests: `tests/test_settings_persistence.py` (2 new — the round-trip test checked the widgets only, so it passed throughout); removing any one of the three lines is caught. Rig ✅ 2026-10-19 20:01: "Measurement duration reached (1.0 min) — auto-stopping", normalized by percentile5, `normalization_type` "Pulsation lower level" |
+| 58 | Save Frames — raw frames for rerunning the algorithm (F1 with B2 and the frame part of F4, 2026-10-21) | Plan [`Plan_Frame_Saving.md`](Plan_Frame_Saving.md); decisions 1–4 as recommended (user, 2026-10-20). Format measured on the rig PC: uncompressed TIFF, 2.7 ms and 4.71 MB per full frame, sustained ≈ 960 MB/s ≈ 200 full frames/s (zlib 7× slower for half the size). `core/frame_writer.py` (own thread, 40-frame queue, skip and count, never waits; `Frames/<expT…_Gain…_FR…_BL…DU>` + `_dark` + `_bright` + `frame_times.csv`; file times = capture times, because the MATLAB script sorts by them; six-digit index; no timestamp in the names and a refusal when a path would pass Windows' 260 characters — a deep folder had lost every bright frame), `core/disk_space.py`, the pipeline's `frame_sink` (measurement frames from t = 0, on the camera thread), `MainWindow` (checkbox enabled, locked during a run, not remembered; free-space check before the folder is made; writer opened after the laser prompt; closed on every way out, before the `_cancelled` rename; counts in `metadata`; disk-full stop). Playback replays a saved session: settings and BL from the folder name, pixel scale from the frames (×64 / ×16 / ×1) instead of a fixed 64. **Found in her code:** BL in the folder name must be the real black level — `FitMeanIm` subtracts it, and a BL0DU playback save gave her κ²_raw ≈ 2800. Checks: `tests/test_frame_writer.py` (22), `test_disk_space.py` (11), `test_save_frames.py` (21), pipeline (+2), playback (+8), `test_compare_with_matlab.py` (4); 17 planted mistakes each caught; `tools/rehearsal.py --save-frames` (600 + 600, cut) passes — every timeVec point has its file, the saved pixels are the source frames; the saved session replays. Her script (baseFunc `main`) on a saved session: 1250/1250 frames, same order, raw κ² within 0.05 %, ⟨I⟩ 0.09 %; the app's rerun on the saved files bit-identical to the results file; with her G and spVar, corrected κ² within 0.10 % (weak there: 10-bit data read as 12-bit, G 4× too large). New `tools/compare_with_matlab.py`. Rig check: R8 |
 
 ---
 

@@ -163,6 +163,10 @@ class _Intake:
     # nothing to wait for / nothing to count (playback, tests).
     clock_settled: Callable[[], bool] | None = None
     frames_lost:   Callable[[], int]  | None = None
+    # Called on the camera thread with (frame, t_capture, t) for every frame
+    # kept for the measurement — the raw-frame save (FrameWriter.put, which
+    # never blocks). None = frames are not saved.
+    frame_sink:    Callable[[np.ndarray, float, float], object] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +254,9 @@ class RealtimePipeline(QThread):
     def enable_intake(self, mask: np.ndarray, *,
                       put_timeout_s: float = 1.5,
                       clock_settled: Callable[[], bool] | None = None,
-                      frames_lost: Callable[[], int] | None = None) -> None:
+                      frames_lost: Callable[[], int] | None = None,
+                      frame_sink: Callable[[np.ndarray, float, float], object] | None = None,
+                      ) -> None:
         """Start accepting frames from the camera thread (call at MEASURING_INIT).
 
         `mask` is the shrunk SCOS mask; it is captured into an immutable bundle
@@ -264,6 +270,10 @@ class RealtimePipeline(QThread):
         camera stamps would step where they meet. Once t=0 is latched it is
         never asked again. `frames_lost` is read at t=0, so frames lost while
         waiting are not charged to the measurement (`frames_lost_at_t0`).
+
+        `frame_sink` is handed every frame from t=0 on, with its capture time
+        and its timeVec value, just before the frame is queued — so the saved
+        frames are exactly the measurement's (docs/Plan_Frame_Saving.md).
 
         Caller contract: this mask must stay in step with the one handed to
         `processor.set_roi()` — the workers read the processor's ROI crops, not
@@ -279,7 +289,8 @@ class RealtimePipeline(QThread):
         self._overloaded = False
         self._intake = _Intake(mask=mask, put_timeout_s=put_timeout_s,
                                clock_settled=clock_settled,
-                               frames_lost=frames_lost)
+                               frames_lost=frames_lost,
+                               frame_sink=frame_sink)
 
     def disable_intake(self) -> None:
         """Stop accepting camera frames (call on Stop SCOS / FINISHED)."""
@@ -341,6 +352,13 @@ class RealtimePipeline(QThread):
                             "%d frame(s) captured during the check were not used",
                             self._skipped_before_t0)
         t = t_capture - self._t0_capture
+
+        if intake.frame_sink is not None:
+            try:
+                intake.frame_sink(frame, t_capture, t)
+            except Exception:
+                # Saving is never allowed to cost the measurement a frame.
+                logger.exception("Raw-frame save failed — measurement continues")
 
         self._input_q.put((frame, intake.mask, t),
                           block=True, timeout=intake.put_timeout_s)

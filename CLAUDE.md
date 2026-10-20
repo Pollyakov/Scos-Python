@@ -132,7 +132,7 @@ Known camera parameters:
 | Basler a2A1920-160umBAS (SN 40075248, "DAN01") — **the rig camera**, USB | 12 | 1216×1936 sensor (less after Cut Image); in the gain table at Mono12, 8 dB only. USB block IDs start at 0 (Done item 41). First rig session 2026-10-08 |
 
 - ROI mask: boolean ndarray, same shape as frame, generated from circle (cx, cy, r)
-- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBFi_resultsAndParameters.h5` (the protocol's name, `core.recorder.RESULTS_FILENAME`; sessions before 2026-10-11 have `rBfi_results.h5`) (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `camera_black_level` (the camera's `BlackLevel`, read back, never written; the rig camera reported 100 on 2026-10-19 (stored in UserSet1, its power-on set — confirmed by replug on 2026-10-19) — absent in playback), `time_source`, lost/dropped frame counts, `normalization_type`, and a `crop` subgroup — the camera's image area: `OffsetX`, `OffsetY`, `Width`, `Height`, `SensorWidth`, `SensorHeight`, todo U10), `Calibration.h5` (`dark` + `bright` groups, each with the same `crop` subgroup and `camera_black_level` attribute) and `rBfi_fig.png` (rBFi above ⟨I⟩ plus a parameters box, drawn from the results file by `core/results_figure.py`)
+- Session output (automatic, per Start SCOS) goes to `<Recording name>_<YYYYMMDD_HHMMSS>/` (`scos_<timestamp>/` if the name is left empty): `rBFi_resultsAndParameters.h5` (the protocol's name, `core.recorder.RESULTS_FILENAME`; sessions before 2026-10-11 have `rBfi_results.h5`) (`startTime`, `timeVec`, `rBFi`, `Intensity`, `Params`, plus `k2_raw`/`k2_corr`/`bfi` and a `metadata` group — camera SN, G source, `camera_black_level` (the camera's `BlackLevel`, read back, never written; the rig camera reported 100 on 2026-10-19 (stored in UserSet1, its power-on set — confirmed by replug on 2026-10-19); in playback the `BL…DU` of the recording's folder name, absent if it has none), `time_source`, lost/dropped frame counts, `normalization_type`, and a `crop` subgroup — the camera's image area: `OffsetX`, `OffsetY`, `Width`, `Height`, `SensorWidth`, `SensorHeight`, todo U10), `Calibration.h5` (`dark` + `bright` groups, each with the same `crop` subgroup and `camera_black_level` attribute) and `rBfi_fig.png` (rBFi above ⟨I⟩ plus a parameters box, drawn from the results file by `core/results_figure.py`); with **Save Frames** ticked also `Frames/` (below) and `metadata` `frames_folder` / `frames_saved_<phase>` / `frames_not_saved_<phase>`
 - Trigger mode "On" = hardware trigger on Line2; "Off" = internal frame rate
 - When changing pixel format or trigger mode, camera must stop and restart grabbing
 - Default camera params: Mono12, 8ms exposure, 20 Hz frame rate, gain 8 dB
@@ -234,6 +234,29 @@ Rules that keep it safe:
 - A new frame source must provide `set_max_frame_rate(enabled)`.
 - That the maximum rate gives the same dark calibration was **already checked by Vika** — no
   rig A/B test is needed (user, 2026-10-20). Rig timings 2026-10-19: 4.8 s cut, 11.9 s full.
+
+IMPORTANT: **Save Frames saves every frame the math used, in the layout Vika's MATLAB script
+reads unchanged** (`docs/Plan_Frame_Saving.md`, `core/frame_writer.py`). `<session>/Frames/`
+holds `expT8ms_Gain8dB_FR20Hz_BL100DU/` (measurement, from t = 0, handed over on the camera
+thread by the pipeline's `frame_sink`), `…_dark/` and `…_bright/` (exactly the frames the
+collectors took — never the skipped dark ones) and `frame_times.csv` (each file's capture
+time and `timeVec` value). One uncompressed 16-bit TIFF per frame, as the camera sent it,
+named `Basler_<model>__<SN>__<index>.tiff`. Rules found in her code that keep it right:
+- **`BL` in the folder name must be the real black level** — her `FitMeanIm` subtracts it
+  from the frames; with BL0 instead of BL100 her κ²_raw came out ≈ 2800 (2026-10-21).
+- Her script **sorts frames by file modification time**, so each file's time is set to its
+  capture time; the index has six digits so the alphabetical order is the same.
+- 16-bit TIFFs are read as Mono12 — Mono10 frames would get the wrong G (warned in `app.log`).
+- Windows' 260-character path limit: no timestamp in the file names, and `FrameWriter`
+  refuses (dialog "Cannot Save Frames") when even those paths would be too long.
+- The writer has its own thread and a 40-frame queue; a full queue skips and counts, never
+  waits. Start SCOS checks the free space first (`core/disk_space.py`: estimate × 1.2 +
+  5 GB; "unlimited" = 4 h) and a measurement stops cleanly below 2 GB (checked every 30 s).
+- Playback replays a saved session: settings from the folder name, the pixel scale from
+  the frames (`FolderMockCamera._pixel_layout`: ×64 Pylon 10-bit, ×16, or ×1 as saved).
+Checked 2026-10-21: `tools/rehearsal.py --save-frames`; her script on a saved session —
+same 1250 frames in the same order, raw κ² within 0.05 %; the app's own rerun bit-identical
+(`tools/compare_with_matlab.py`). Rig check: `rig_checklist.md` R8.
 
 IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
 part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder

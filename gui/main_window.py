@@ -4,6 +4,7 @@ Combines: live image, SCOS time-series plot, camera controls panel.
 """
 
 import datetime
+import functools
 import json
 import logging
 import os
@@ -34,6 +35,8 @@ from core.recorder  import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder
 from core.results_figure import save_results_figure
 from core.pipeline  import RealtimePipeline
 from core.crop      import Crop, crop_for_circle
+from core.frame_writer import FRAMES_DIRNAME, FrameWriter, frames_folder_name
+from core import disk_space
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 # Imported as a module, not by name, so tests and tools/rehearsal.py can
@@ -235,6 +238,16 @@ class MainWindow(QMainWindow):
         self._arduino_debounce.setSingleShot(True)
         self._arduino_debounce.setInterval(1000)  # 1 second
         self._arduino_debounce.timeout.connect(self._upload_arduino)
+        # Raw-frame saving (docs/Plan_Frame_Saving.md): this run's writer —
+        # None when Save Frames is off or no run is on — and a 1 s timer that
+        # reports frames that could not be saved and, every CHECK_INTERVAL_S
+        # of a measurement, the free disk space (_check_frame_saving).
+        self._frame_writer: FrameWriter | None = None
+        self._frames_not_saved_reported: int = 0
+        self._last_disk_check: float = 0.0
+        self._frame_save_timer = QTimer(self)
+        self._frame_save_timer.setInterval(1000)
+        self._frame_save_timer.timeout.connect(self._check_frame_saving)
 
         # Calibration state (dark and bright are mutually exclusive)
         self._dark_cal_collector:      DarkCalCollector   | None = None
@@ -446,18 +459,18 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.btn_start_scos)
 
-        # Disabled until F1 (todo.md): a ticked box writes ~4.7 MB per full
-        # 1216 x 1936 frame (~340 GB/hour at 20 Hz), synchronously on the GUI
-        # thread (F4), with no disk-space check in front of it (B2). Kept
-        # visible because the protocol lists it among the SCOS parameters
-        # (SCOS_protocol.md:21). It is the raw-frame control for F1; the old
-        # "Save Data..." button beside it was removed (todo U8).
+        # Saves every dark, bright and measurement frame as one TIFF per frame
+        # in the session's Frames folder, laid out for Vika's MATLAB script
+        # (docs/Plan_Frame_Saving.md). ~4.7 MB per full 1216 x 1936 frame,
+        # ~340 GB/hour at 20 Hz, so Start SCOS checks the free space first.
+        # Off at every launch — deliberately not a remembered setting: a box
+        # that fills a disk in an hour should never be on without being ticked.
         self.chk_save_frames = QCheckBox("Save Frames")
         self.chk_save_frames.setChecked(False)
-        self.chk_save_frames.setEnabled(False)
         self.chk_save_frames.setToolTip(
-            "Not available yet: saving raw frames needs a disk-space check\n"
-            "and a background writer first (todo.md F1)."
+            "Save every raw frame (dark, bright and measurement) as TIFF files\n"
+            "in the session's Frames folder. Full frame: ~340 GB per hour at\n"
+            "20 Hz — Start SCOS checks the free disk space first."
         )
         layout.addWidget(self.chk_save_frames)
 
@@ -1007,6 +1020,7 @@ class MainWindow(QMainWindow):
             self.cmb_norm_type,
             self.spn_norm_seconds,
             self.spn_workers,
+            self.chk_save_frames,
         ):
             widget.setEnabled(enabled)
 
@@ -1076,7 +1090,12 @@ class MainWindow(QMainWindow):
         group — it is renamed to `<name>_cancelled` instead (the user's choice,
         2026-10-07): nothing measured is deleted, and it cannot be mistaken for
         a finished session missing its results.
+
+        Saved calibration frames count as something in it: they are kept with
+        the partial calibration. The frame writer is closed first — Windows
+        cannot rename a folder with a file open in it.
         """
+        self._close_frame_writer()
         folder, self._session_folder = self._session_folder, None
         if folder is None or not folder.is_dir():
             return
@@ -1190,6 +1209,9 @@ class MainWindow(QMainWindow):
                 session_folder = self._session_folder   # kept for the closing message
                 self._finish_session()
             self._stop_recorder()
+            # Normally closed by _finish_session or _abandon_calibration; this
+            # catches any other way out, so no writer outlives its run.
+            self._close_frame_writer()
             if was_measuring:
                 closing = (
                     f"Session finished → {session_folder}"
@@ -1254,6 +1276,7 @@ class MainWindow(QMainWindow):
         self._finalize_normalization()
         self._write_rbfi()
         self._write_frame_accounting()
+        self._finish_frame_saving()
         self._write_start_time()
         self._save_plot_figure()
         # Released so the next run creates its own folder rather than writing
@@ -1515,6 +1538,35 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.exception("Could not write frame accounting to the results file")
 
+    def _finish_frame_saving(self) -> None:
+        """Close this run's frame writer — writing what is still queued — and
+        record in the results file how many frames were saved and how many
+        were not. Runs inside _finish_session(); a no-op without Save Frames."""
+        writer = self._frame_writer
+        if writer is None:
+            return
+        self._close_frame_writer()
+        totals = writer.totals()
+        saved = totals["saved"]
+        not_saved = {p: totals["skipped"][p] + totals["failed"][p] for p in saved}
+        logger.info("Frames saved → %s — dark %d, bright %d, measurement %d; "
+                    "not saved: %d", writer.frames_dir, saved["dark"],
+                    saved["bright"], saved["measurement"], sum(not_saved.values()))
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.set_metadata(
+                frames_folder                 = f"{FRAMES_DIRNAME}/{writer.folder_name}",
+                frames_saved_dark             = saved["dark"],
+                frames_saved_bright           = saved["bright"],
+                frames_saved_measurement      = saved["measurement"],
+                frames_not_saved_dark         = not_saved["dark"],
+                frames_not_saved_bright       = not_saved["bright"],
+                frames_not_saved_measurement  = not_saved["measurement"],
+            )
+        except Exception:
+            logger.exception("Could not write the saved-frame counts")
+
     def _write_rbfi(self) -> None:
         """Finalize the results file: rBFi plus the normalization fields.
 
@@ -1630,6 +1682,12 @@ class MainWindow(QMainWindow):
             self._output_root = Path(folder)
             self._last_output_root = self._output_root
 
+        # Saving every frame needs room for the whole run: refuse now, while
+        # the operator is still at the keyboard and nothing has started.
+        if self.chk_save_frames.isChecked() and not self._frames_fit_on_disk():
+            self._reset_start_button()
+            return
+
         session_folder = self._output_root / self._session_folder_name()
         try:
             session_folder.mkdir(parents=True, exist_ok=False)
@@ -1665,6 +1723,12 @@ class MainWindow(QMainWindow):
             self._discard_session_folder()
             return
 
+        # Opened only now, so a Cancel above leaves an empty folder (removed).
+        if self.chk_save_frames.isChecked() and not self._open_frame_writer():
+            self._reset_start_button()
+            self._discard_session_folder()
+            return
+
         # Step 3: disable external trigger without triggering Arduino upload
         self._dark_cal_trigger_was_on = self.chk_trigger.isChecked()
         self.camera.set_trigger(False, self.spn_trigger_delay.value())
@@ -1691,6 +1755,143 @@ class MainWindow(QMainWindow):
         self._dark_cal_collector = DarkCalCollector(n1, self.spn_window.value())
         self._calib_label.setText(f"Dark cal: 0 / {n1}")
         self._set_state(State.DARK_CAL)
+
+    # ------------------------------------------------------------------
+    # Raw-frame saving (docs/Plan_Frame_Saving.md)
+    # ------------------------------------------------------------------
+
+    def _frame_size(self) -> tuple[int, int] | None:
+        """(width, height) of the frames this run will get: the camera's
+        image area if it reports one (after Cut Image, the crop), else the
+        current frame's, else what the source says."""
+        if self._camera_crop is not None:
+            return self._camera_crop.width, self._camera_crop.height
+        if self._mask is not None:
+            h, w = self._mask.shape
+            return w, h
+        try:
+            info = self.camera.get_info()
+            w, h = int(info.get("width", 0)), int(info.get("height", 0))
+        except Exception:
+            return None
+        return (w, h) if w and h else None
+
+    def _frames_fit_on_disk(self) -> bool:
+        """The free-space check before a run that saves frames. Shows why
+        and returns False when the frames would not fit."""
+        size = self._frame_size()
+        if size is None:
+            logger.warning("Frame size unknown — free-space check skipped")
+            return True
+        bpp = 1 if self.cmb_format.currentText() == "Mono8" else 2
+        fps = float(self.spn_fps.value())
+        est = disk_space.estimate(*size, bpp, fps, self._measurement_duration_s,
+                                  self.spn_n1.value(), self.spn_n2.value())
+        try:
+            free = disk_space.free_bytes(self._output_root)
+        except OSError:
+            logger.exception("Could not read the free space of %s", self._output_root)
+            return True
+        gb = disk_space.GB
+        logger.info("Save Frames: %d frames of %dx%d need %.1f GB (%.1f GB with the "
+                    "margin); %.1f GB free", est.n_frames, *size,
+                    est.bytes_needed / gb, est.bytes_required_free / gb, free / gb)
+        if free >= est.bytes_required_free:
+            return True
+        unlimited = not np.isfinite(self._measurement_duration_s)
+        length = ("an unlimited measurement (counted as 4 h)" if unlimited
+                  else f"a {est.duration_s / 60:g}-min measurement")
+        fit = disk_space.minutes_that_fit(free, *size, bpp, fps)
+        QMessageBox.critical(
+            self, "Not Enough Disk Space",
+            f"Saving every frame needs about {est.bytes_needed / gb:.0f} GB "
+            f"(dark, bright and {length}), plus a safety margin.\n"
+            f"Only {free / gb:.0f} GB is free on {self._output_root.anchor or self._output_root}.\n\n"
+            f"With these settings about {fit:.0f} min of measurement fit.\n"
+            "Set a shorter Measuring duration, click Cut Image, or untick Save Frames.")
+        return False
+
+    def _open_frame_writer(self) -> bool:
+        """Create this run's Frames folder and its writer. False (with a
+        dialog) if the folder cannot be created."""
+        fmt = self.cmb_format.currentText()
+        if fmt == "Mono10":
+            logger.warning("Save Frames with Mono10: the MATLAB script reads every "
+                           "16-bit TIFF as Mono12 and would look up the wrong G")
+        name = frames_folder_name(float(self.spn_exposure.value()),
+                                  float(self.spn_gain.value()),
+                                  float(self.spn_fps.value()),
+                                  getattr(self.camera, "black_level", None))
+        frames_dir = self._session_folder / FRAMES_DIRNAME
+        try:
+            model = str(self.camera.get_info().get("model", "") or "")
+        except Exception:
+            model = ""
+        try:
+            self._frame_writer = FrameWriter(frames_dir, name, camera_model=model,
+                                             camera_sn=self._camera_serial())
+        except OSError as exc:
+            logger.exception("Could not create %s", frames_dir)
+            QMessageBox.critical(self, "Cannot Save Frames",
+                                 f"Could not create\n{frames_dir}\n\n{exc}")
+            return False
+        self._frames_not_saved_reported = 0
+        self._last_disk_check = time.monotonic()
+        self._frame_save_timer.start()
+        logger.info("Saving frames → %s", self._frame_writer.phase_dir("measurement"))
+        return True
+
+    def _save_frame(self, phase: str, frame: np.ndarray, t_capture: float) -> None:
+        """Hand a calibration frame to the writer (GUI thread). Never waits."""
+        if self._frame_writer is not None:
+            self._frame_writer.put(phase, frame, t_capture)
+
+    def _close_frame_writer(self) -> None:
+        """Write what is queued and close the writer. Safe to call when none."""
+        writer, self._frame_writer = self._frame_writer, None
+        self._frame_save_timer.stop()
+        if writer is None:
+            return
+        if not writer.close():
+            logger.error("Frame writer did not finish — some frames may be missing")
+        self._check_frames_not_saved(writer)
+
+    def _check_frames_not_saved(self, writer: FrameWriter) -> None:
+        totals = writer.totals()
+        n = sum(totals["skipped"].values()) + sum(totals["failed"].values())
+        if n > self._frames_not_saved_reported:
+            logger.warning("%d frame(s) not saved so far — the disk could not keep "
+                           "up, or a write failed (see above)", n)
+            self.status.showMessage(f"WARNING: {n} frame(s) could not be saved")
+            self._frames_not_saved_reported = n
+
+    def _check_frame_saving(self) -> None:
+        """Every second while frames are saved: report unsaved frames; every
+        CHECK_INTERVAL_S of a measurement, stop it cleanly when the disk is
+        nearly full — as if Stop SCOS were pressed, so rBFi and the figure are
+        still written."""
+        writer = self._frame_writer
+        if writer is None:
+            return
+        self._check_frames_not_saved(writer)
+        if self._state not in (State.MEASURING_INIT, State.MEASURING):
+            return
+        now = time.monotonic()
+        if now - self._last_disk_check < disk_space.CHECK_INTERVAL_S:
+            return
+        self._last_disk_check = now
+        try:
+            free = disk_space.free_bytes(writer.frames_dir)
+        except OSError:
+            logger.exception("Could not read the free disk space")
+            return
+        if free >= disk_space.STOP_BELOW_BYTES:
+            return
+        logger.error("Less than %.0f GB free (%.2f GB) — stopping the measurement",
+                     disk_space.STOP_BELOW_BYTES / disk_space.GB, free / disk_space.GB)
+        self.btn_start_scos.setChecked(False)   # triggers _toggle_scos(False)
+        self.status.showMessage(
+            "Measurement stopped: the disk is almost full — the session is saved")
 
     def _set_playback_source(self, source: str) -> None:
         """Ask a mock-folder camera to play its dark folder, or the recording.
@@ -1981,11 +2182,16 @@ class MainWindow(QMainWindow):
         calibrations the check may still be running (todo D10). Sources
         without the property (playback, test stubs) never wait."""
         settled = getattr(self.camera, "clock_settled", None)
+        # The writer itself, not self._frame_writer: the camera thread calls
+        # this, and must never find the attribute half-way to None.
+        writer = self._frame_writer
         self._scos_worker.enable_intake(
             scos_mask,
             clock_settled=(None if settled is None
                            else lambda: self.camera.clock_settled),
             frames_lost=self._camera_frames_lost,
+            frame_sink=(None if writer is None
+                        else functools.partial(writer.put, "measurement")),
         )
 
     def _on_duration_changed(self, minutes: float) -> None:
@@ -2440,6 +2646,8 @@ class MainWindow(QMainWindow):
             if self._dark_cal_collector is None:
                 return   # guard: frame arrived during state transition
             self._dark_cal_collector.add_frame(self._to_du(frame))
+            # Saved after the skip above: exactly the frames the calibration used.
+            self._save_frame("dark", frame, t_capture)
             if self._dark_t_first is None:
                 self._dark_t_first = t_capture
             self._dark_t_last = t_capture
@@ -2454,6 +2662,7 @@ class MainWindow(QMainWindow):
             if self._bright_cal_collector is None:
                 return   # guard: frame arrived during state transition
             self._bright_cal_collector.add_frame(self._to_du(frame))
+            self._save_frame("bright", frame, t_capture)
             n       = self._bright_cal_collector.n_collected
             n_total = self._bright_cal_collector.n_target
             self._calib_label.setText(f"Bright cal: {n} / {n_total}")
@@ -2461,16 +2670,9 @@ class MainWindow(QMainWindow):
                 self._finish_bright_cal()
             return
 
-        if self._state not in (State.MEASURING_INIT, State.MEASURING) or self._mask is None:
-            return
-
-        # NOTE: the frame is NOT submitted for processing here — the camera
-        # thread already did that via RealtimePipeline.on_frame().
-
-        # Save raw frame to HDF5 if requested. Still synchronous on the GUI
-        # thread (gzip and all) — moving it to its own thread is task 14.
-        if self._recorder is not None and self.chk_save_frames.isChecked():
-            self._recorder.append_frame(frame)
+        # Measurement frames are neither processed nor saved here: the camera
+        # thread does both in RealtimePipeline.on_frame(), from t=0 on, so the
+        # saved frames are exactly the measurement's (_enable_measurement_intake).
 
     # Grace period added to the normalization window before the all-negative
     # kappa^2 guard fires. Long enough that a slow first second cannot trip it,
@@ -2943,9 +3145,11 @@ class MainWindow(QMainWindow):
         self.btn_start_scos.setText("Waiting for calibration…")
         self._calib_label.setText("Calibrating…")
 
+        # 64 for Pylon Viewer's left-justified 10-bit TIFFs, 1 for frames this
+        # app saved (FolderMockCamera._pixel_layout).
         self._calib_thread = _CalibrationLoaderThread(
             self.processor, dark_dir, main_dir, smoothing,
-            64.0, self.spn_window.value(), self,
+            float(info.get("scale", 64.0)), self.spn_window.value(), self,
         )
         self._calib_thread.progress.connect(self._calib_label.setText)
         self._calib_thread.done.connect(self._on_calibration_done)
@@ -3037,6 +3241,10 @@ class MainWindow(QMainWindow):
         if self._recorder is not None:
             self._recorder.close()
             self._recorder = None
+        # Mid-calibration this happens in _discard_session_folder below, before
+        # its rename; here for any other way a writer could still be open.
+        if self._state not in (State.DARK_CAL, State.BRIGHT_CAL):
+            self._close_frame_writer()
         # Closed mid-calibration: the run never reached its measurement, so its
         # folder is handled like any other abandoned run's (todo K2).
         if self._state in (State.DARK_CAL, State.BRIGHT_CAL):

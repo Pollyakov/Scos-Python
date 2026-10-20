@@ -626,6 +626,33 @@ class TestCameraThreadIntake:
         assert pipeline.t0_capture == stamp
         assert before <= pipeline.t0_wall <= after
 
+    def test_frame_sink_gets_every_measured_frame_with_its_timevec(self):
+        """Raw-frame saving (docs/Plan_Frame_Saving.md): the sink sees exactly
+        the frames kept for the measurement — none before t=0 — each with its
+        capture time and the t it gets in timeVec."""
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+        seen = []
+        settled = [False]
+        pipeline.enable_intake(self._mask(), clock_settled=lambda: settled[0],
+                               frame_sink=lambda f, tc, t: seen.append((tc, t)))
+        base = time.monotonic()
+        pipeline.on_frame(self._frame(), base)            # clock check not over
+        settled[0] = True
+        for i in range(1, 4):
+            pipeline.on_frame(self._frame(), base + i * 0.05)
+        assert [tc for tc, _ in seen] == [base + i * 0.05 for i in range(1, 4)]
+        assert [t for _, t in seen] == pytest.approx([0.0, 0.05, 0.10], abs=1e-9)
+        assert pipeline.queue_depth == 3                  # and still processed
+
+    def test_a_failing_frame_sink_costs_the_measurement_nothing(self):
+        pipeline = RealtimePipeline(_MockProcessor(), n_workers=1)
+
+        def broken(*a):
+            raise OSError("disk gone")
+        pipeline.enable_intake(self._mask(), frame_sink=broken)
+        pipeline.on_frame(self._frame(), time.monotonic())
+        assert pipeline.queue_depth == 1
+
     def test_overload_detected_fires_once_per_episode(self):
         """The operator is warned exactly once on the way up past 80 % full."""
         processor = _BlockingProcessor()        # workers never complete a frame

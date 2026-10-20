@@ -317,3 +317,66 @@ class TestFolderCameraMaxFrameRate:
         cam.start_capture()
         cam.wait()
         assert stamps[-1] - stamps[0] >= 0.2
+
+
+# ---------------------------------------------------------------------------
+# Replaying frames this app saved (docs/Plan_Frame_Saving.md)
+# ---------------------------------------------------------------------------
+
+class TestSavedSessionReplay:
+    """A saved session has no LocalStd7x7_corr.mat: its settings come from the
+    folder name, as the MATLAB script reads them, and the pixel scale from the
+    frames themselves — playback used to assume Pylon's 10-bit ×64 always."""
+
+    def _folder(self, tmp_path, name, frame):
+        d = tmp_path / name
+        d.mkdir()
+        for i in range(2):
+            tifffile.imwrite(str(d / f"Basler_a2A1920-160umBAS__40075248__20261021_000000000_{i:06d}.tiff"),
+                             frame)
+        cam = FolderMockCamera(d)
+        cam.open()
+        return cam
+
+    def test_settings_from_the_folder_name(self, tmp_path):
+        cam = self._folder(tmp_path, "expT8ms_Gain8dB_FR20Hz_BL100DU",
+                           np.full((8, 8), 1234, np.uint16))
+        info = cam.get_info()
+        assert (info["exposure_us"], info["gain_db"], info["frame_rate"]) == (8000.0, 8.0, 20.0)
+        assert info["serial"] == "40075248"
+        # The MATLAB script subtracts the name's BL before fitting the mean
+        # image, so frames saved from this playback must carry it on.
+        assert cam.black_level == 100.0
+
+    def test_no_black_level_in_the_name(self, tmp_path):
+        cam = self._folder(tmp_path, "rec", np.full((8, 8), 1234, np.uint16))
+        assert cam.black_level is None
+
+    def test_decimal_settings(self, tmp_path):
+        cam = self._folder(tmp_path, "expT2.5ms_Gain7.25dB_FR40Hz_BL0DU",
+                           np.full((8, 8), 1234, np.uint16))
+        assert (cam.exposure_us, cam.gain_db, cam.frame_rate) == (2500.0, 7.25, 40.0)
+
+    def test_app_saved_mono12_is_not_divided(self, tmp_path):
+        cam = self._folder(tmp_path, "expT8ms_Gain8dB_FR20Hz_BL100DU",
+                           np.arange(64, dtype=np.uint16).reshape(8, 8) + 100)
+        info = cam.get_info()
+        assert (info["bit_depth"], info["scale"], info["pixel_format"]) == (12, 1.0, "Mono12")
+
+    def test_pylon_10_bit_is_divided_by_64(self, tmp_path):
+        cam = self._folder(tmp_path, "rec", (np.arange(64, dtype=np.uint16) * 64).reshape(8, 8))
+        assert (cam.get_info()["bit_depth"], cam.get_info()["scale"]) == (10, 64.0)
+
+    def test_left_justified_12_bit_is_divided_by_16(self, tmp_path):
+        cam = self._folder(tmp_path, "rec", (np.arange(64, dtype=np.uint16) * 16 + 16).reshape(8, 8))
+        assert (cam.get_info()["bit_depth"], cam.get_info()["scale"]) == (12, 16.0)
+
+    def test_mono8(self, tmp_path):
+        cam = self._folder(tmp_path, "rec", np.full((8, 8), 7, np.uint8))
+        assert (cam.get_info()["bit_depth"], cam.get_info()["scale"]) == (8, 1.0)
+
+    def test_dark_folder_found_next_to_it(self, tmp_path):
+        cam = self._folder(tmp_path, "expT8ms_Gain8dB_FR20Hz_BL100DU",
+                           np.full((8, 8), 1234, np.uint16))
+        (tmp_path / "expT8ms_Gain8dB_FR20Hz_BL100DU_dark").mkdir()
+        assert cam.get_dark_dir() == tmp_path / "expT8ms_Gain8dB_FR20Hz_BL100DU_dark"

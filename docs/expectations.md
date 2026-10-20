@@ -198,3 +198,40 @@ same place on the sensor in every file. To find it in a cut session's arrays (e.
 Both counts are from Start SCOS and should be **0**. If not, `timeVec` still has the true
 time of every frame that *was* processed, so the gaps are visible in the data rather than
 hidden.
+
+## 8. Saved frames — for rerunning your script (new, 2026-10-21)
+
+Tick **Save Frames** before Start SCOS and the session folder gets a `Frames` folder with
+every frame the app used, one uncompressed 16-bit TIFF each, exactly as the camera sent it:
+
+```
+Frames\expT8ms_Gain8dB_FR20Hz_BL100DU\          the measurement, from its first point on
+Frames\expT8ms_Gain8dB_FR20Hz_BL100DU_dark\     the 600 dark-calibration frames
+Frames\expT8ms_Gain8dB_FR20Hz_BL100DU_bright\   the 600 bright-calibration frames
+Frames\frame_times.csv                           each file's capture time and timeVec value
+```
+
+The names follow what `SCOSvsTime_WithNoiseSubtraction_Ver2.m` reads: the settings in the
+folder name (BL is the camera's real black level — your `FitMeanIm` subtracts it, so it must
+be right), the camera serial number in the file names (`Basler_<model>__<SN>__<index>.tiff`),
+and the dark folder next to the measurement one. Each file's modification time is its capture
+time, so your sort by date gives the capture order. Run it on the measurement folder; the ROI
+the app used is in `Calibration.h5`:
+
+```matlab
+mask = logical(h5read('<session>\Calibration.h5', '/dark/mask'))';   % transposed: HDF5 order
+[timeVec, raw, corr, I] = SCOSvsTime_WithNoiseSubtraction_Ver2( ...
+    '<session>\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU', [], 7, false, mask);
+```
+
+It needs `LoadG.m` and `ReadRecordVarAndMean.m` from baseFunc's `main` branch (the
+`vika_tmp` branch the SCOS repo points at is older and has neither).
+
+What to expect, from a rehearsal on the lab recording (2026-10-21): the same frames in the
+same order, raw κ² within 0.05 % per frame, ⟨I⟩ within 0.1 %. Corrected κ² will not be
+identical: your script takes spVar from the first 600 frames of the recording, the app from
+the bright-calibration frames. With your spVar and your G put into the app's calculation, the
+two agreed within 0.1 % on average — a weak test there, though: the lab recording is 10-bit,
+your script reads 16-bit TIFFs as 12-bit and so used a G about 4× too large, and corrected κ²
+came out negative in both. The rig's 12-bit frames do not have that problem. Space: a full frame is 4.7 MB (≈ 5.7 GB per minute at
+20 Hz), so the app checks the free disk space before it starts.

@@ -1110,6 +1110,11 @@ def rehearse(args, run: Run) -> Path | None:
 
         if args.cut:
             cut_image(w, args, run, pump)
+        if args.save_frames:
+            w.chk_save_frames.setChecked(True)
+            # An unlimited duration counts as 4 h in the free-space check and
+            # would be refused; one minute longer than this run never cuts it short.
+            w.spn_duration.setValue(np.ceil(args.measure_seconds / 60) + 1)
         scenario.before_start(w, cam, args)
 
         # startTime is written when the recorder opens, a few seconds after
@@ -1190,6 +1195,7 @@ def rehearse(args, run: Run) -> Path | None:
         scenario.extra_checks(w, run, folder, args)
         if args.cut:
             check_cut(w, cam, run, folder)
+        check_saved_frames(run, folder, w, cam, args)
     finally:
         w.close()
         app.processEvents()
@@ -1272,8 +1278,9 @@ def verify_outputs(run: Run, folder: Path | None, w, cam, args,
                      f"session folder exists ({folder})"):
         return
     names = {p.name for p in folder.iterdir()}
-    run.check(names == SESSION_FILES,
-              f"exactly {sorted(SESSION_FILES)} (found {sorted(names)})")
+    expected_files = SESSION_FILES | ({"Frames"} if args.save_frames else set())
+    run.check(names == expected_files,
+              f"exactly {sorted(expected_files)} (found {sorted(names)})")
     fig = folder / "rBfi_fig.png"
     if fig.exists():
         run.check(fig.stat().st_size > 5_000,
@@ -1446,6 +1453,85 @@ def verify_outputs(run: Run, folder: Path | None, w, cam, args,
                       f"(camera says {expected_src!r})")
 
 
+def check_saved_frames(run: Run, folder: Path | None, w, cam, args) -> None:
+    """--save-frames (docs/Plan_Frame_Saving.md): every frame the calibrations
+    used and every measured frame is on disk, unchanged, in the layout the
+    MATLAB script reads, and the results file counts them. Without the switch:
+    nothing was saved."""
+    import csv
+    import h5py
+    import hashlib
+    import numpy as np
+    import tifffile
+    from core.frame_writer import FRAME_TIMES_FILENAME, frames_folder_name
+
+    print("\nChecks — saved frames")
+    if folder is None:
+        return
+    frames = folder / "Frames"
+    if not args.save_frames:
+        run.check(not frames.exists(), "no Frames folder without Save Frames")
+        return
+    if not run.check(frames.is_dir(), f"Frames folder exists ({frames})"):
+        return
+    with h5py.File(folder / RESULTS_FILE, "r") as f:
+        t_res = f["timeVec"][:]
+        meta = dict(f["metadata"].attrs)
+        p = dict(f["Params"].attrs)
+    name = frames_folder_name(float(p["exposureTime"]), float(p["gain"]),
+                              float(p["frameRate"]), getattr(cam, "black_level", None))
+    run.check(meta.get("frames_folder") == f"Frames/{name}",
+              f"metadata.frames_folder = {meta.get('frames_folder')!r} "
+              f"(settings give Frames/{name})")
+    dirs = {"dark": frames / f"{name}_dark", "bright": frames / f"{name}_bright",
+            "measurement": frames / name}
+    files = {ph: sorted(d.glob("*.tiff")) if d.is_dir() else [] for ph, d in dirs.items()}
+    for ph, spin in (("dark", w.spn_n1), ("bright", w.spn_n2)):
+        run.check(len(files[ph]) == spin.value(),
+                  f"{ph}: {len(files[ph])} frames saved = the {spin.value()} the "
+                  f"calibration used")
+    for ph in ("dark", "bright", "measurement"):
+        run.check(meta.get(f"frames_saved_{ph}") == len(files[ph])
+                  and meta.get(f"frames_not_saved_{ph}") == 0,
+                  f"metadata: {meta.get(f'frames_saved_{ph}')} {ph} frames saved, "
+                  f"{meta.get(f'frames_not_saved_{ph}')} not saved "
+                  f"(files: {len(files[ph])})")
+    run.check(all(f.name.startswith(f"Basler_") and "__" in f.name
+                  for fs in files.values() for f in fs),
+              "file names follow Pylon Viewer's (model__SN__time_index)")
+
+    with open(frames / FRAME_TIMES_FILENAME, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    meas = [r for r in rows if r["phase"] == "measurement"]
+    run.check(len(rows) == sum(len(v) for v in files.values()),
+              f"{FRAME_TIMES_FILENAME}: one row per saved file ({len(rows)} rows)")
+    t_saved = np.array([float(r["timeVec_s"]) for r in meas])
+    in_saved = np.isin(np.round(t_res, 6), np.round(t_saved, 6))
+    run.check(len(t_res) > 0 and bool(in_saved.all()),
+              f"every timeVec point has its saved frame ({int(in_saved.sum())}/{len(t_res)})")
+    extra = len(meas) - len(t_res)
+    run.check(0 <= extra <= 20 + int(meta.get("frames_dropped_queue", 0)),
+              f"saved measurement frames without a result: {extra} (frames still "
+              f"queued at Stop SCOS; at most the 20-frame queue + dropped)")
+    mt = np.array([f.stat().st_mtime for f in files["measurement"]])
+    run.check(len(mt) > 1 and bool(np.all(np.diff(mt) > 0)),
+              "file times rise with the frame number (MATLAB sorts by them)")
+
+    # Unchanged pixels: the first saved dark frames are frames of the dark
+    # folder, cut to the camera's image area — compared by content hash.
+    crop = cam.applied_crop
+    def digest(a):
+        if crop is not None and a.shape != crop.shape:
+            a = a[crop.offset_y:crop.offset_y + crop.height,
+                  crop.offset_x:crop.offset_x + crop.width]
+        return hashlib.sha1(np.ascontiguousarray(a).tobytes()).hexdigest()
+    source = {digest(tifffile.imread(f)) for f in sorted(cam.get_dark_dir().glob("*.tif*"))}
+    sample = files["dark"][:5]
+    same = sum(digest(tifffile.imread(f)) in source for f in sample)
+    run.check(sample and same == len(sample),
+              f"saved dark frames are the source frames, unchanged ({same}/{len(sample)})")
+
+
 def check_dialogs(run: Run) -> None:
     print("\nChecks — dialogs (in the order they opened)")
     for kind, title in run.dialogs:
@@ -1487,6 +1573,9 @@ def main() -> int:
     ap.add_argument("--cut-radius", type=float, default=None,
                     help="with --cut: shrink the Mask.mat circle to this radius (px) "
                          "around the same centre first, e.g. 150")
+    ap.add_argument("--save-frames", action="store_true",
+                    help="tick Save Frames: every dark, bright and measurement frame is "
+                         "saved to <session>/Frames and checked (docs/Plan_Frame_Saving.md)")
     ap.add_argument("--timeout", type=float, default=1200.0,
                     help="watchdog: dump all stacks and exit after this many s (default 1200)")
     args = ap.parse_args()
@@ -1537,6 +1626,8 @@ def main() -> int:
         print(f"cut       : Cut Image before Start SCOS"
               + (f", circle radius {args.cut_radius:g} px" if args.cut_radius else
                  ", the recording's Mask.mat circle"))
+    if args.save_frames:
+        print("frames    : Save Frames ticked")
     print(f"recording : {args.recording}")
     print(f"output    : {out}")
     print(f"log       : {log_path}\n")

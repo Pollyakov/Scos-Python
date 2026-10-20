@@ -186,6 +186,20 @@ USB-limited) could not outrun this PC; one throttling warning, 0 lost. Two thing
 | ☐ R7e | R6d's command on this session's file | `frames_lost_camera` > 0. The large time steps are **whole multiples** of the frame period (a lost frame leaves a gap of its true size; frames are not bunched together) | Steps that are *not* multiples, or bunches of very short steps → copy the output. `check_session.py` compares with the **set** FPS: if it was above what the camera delivered, its time-step and dark-rate rows say NOT OK although the steps are fine — judge the steps against the camera's period (todo, Pending decisions) |
 | ☐ R7f | **Before closing the window:** set Processing workers (3), Exposure (8 ms) and FPS (20 Hz) back. Close, relaunch, check R2c | Defaults back | Otherwise the next session starts at the overload settings — the app remembers the last settings for the real camera |
 
+### R8 · Save Frames — a short session (written 2026-10-21, [`Plan_Frame_Saving.md`](Plan_Frame_Saving.md))
+
+Every frame of the run as a TIFF, for Vika to rerun her MATLAB script on. Sizes at Mono12:
+a full 1936 × 1216 frame is 4.7 MB (≈ 5.7 GB per minute at 20 Hz), a 672 × 667 cut 0.9 MB
+(≈ 1.1 GB per minute); the 600 + 600 calibration frames add 5.6 GB full, 1.1 GB cut. Measured
+on this PC: the disk writes ≈ 200 full frames per second, so nothing should be skipped.
+
+| | Do | Expect | If not |
+|---|---|---|---|
+| ☐ R8a | Cut Image, Dark/Bright **600**, **Measuring duration 1 min** (unlimited counts as 4 h and is refused on the full frame), tick **Save Frames**, Start SCOS | No "Not Enough Disk Space". `app.log`: "Save Frames: N frames of W×H need X GB (… with the margin); … GB free" and "Saving frames → …\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU" — the **BL100** is the camera's black level | "Not Enough Disk Space" → the numbers it shows; "Cannot Save Frames" (path too long) → choose an output folder nearer C:\ |
+| ☐ R8b | Let it run to the end; watch the status bar | **No** "frame(s) could not be saved" | Copy the line and the time |
+| ☐ R8c | In the session folder | `Frames\` with three folders and `frame_times.csv`; `…_dark` and `…_bright` hold **600** files each, the measurement folder ≈ 1200 (20 Hz × 60 s, plus the normalization seconds). `check_session.py` as usual; in the results file `metadata`: `frames_saved_*` = those counts, `frames_not_saved_*` = 0 | Copy the counts |
+| ☐ R8d | *(At home, or Vika.)* Her script on the measurement folder: `SCOSvsTime_WithNoiseSubtraction_Ver2('<…>\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU', [], 7, false, mask)` with `mask = logical(h5read('<session>\Calibration.h5','/dark/mask'))'` (transposed: h5read returns it the other way round); then `venv\Scripts\python.exe tools/compare_with_matlab.py "<session folder>"` | All frames matched, "the same" order; raw κ² within ≈ 0.5 %; corrected κ² close but not identical — her spVar comes from the first 600 measurement frames, the app's from the bright frames | Copy the whole output |
+
 ---
 
 ## What to bring back
@@ -194,4 +208,5 @@ USB-limited) could not outrun this PC; one throttling warning, 0 lost. Two thing
 - R1f's benchmark output;
 - the two calibration durations from R5g, and the two dark-calibration lines;
 - R6d's printout for the real session and R7e's for the overload one;
+- R8's session folder with its `Frames` (for Vika's check);
 - anything that didn't match, with the time it happened.

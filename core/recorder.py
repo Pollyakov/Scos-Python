@@ -230,24 +230,6 @@ class HDF5Recorder:
         self._buf_bfi.clear()
         self._buf_meani.clear()
 
-    def append_frame(self, frame: "np.ndarray") -> None:
-        """Save one raw camera frame. Creates 'frames' dataset on first call."""
-        import numpy as np
-        if "frames" not in self._f:
-            H, W = frame.shape
-            self._f.create_dataset(
-                "frames",
-                shape=(0, H, W), maxshape=(None, H, W),
-                chunks=(1, H, W), dtype=frame.dtype,
-                compression="gzip", compression_opts=1,
-            )
-        ds = self._f["frames"]
-        n = ds.shape[0]
-        ds.resize(n + 1, axis=0)
-        ds[n] = frame
-        if n % 10 == 9:
-            self._f.flush()
-
     def _write_start_time(self, when: datetime.datetime) -> None:
         # Fixed-length ASCII, not h5py's variable-length UTF-8 default —
         # MATLAB's h5read returns the latter as a cell array instead of a char
