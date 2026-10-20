@@ -170,13 +170,22 @@ The order is the protocol's (`SCOS_protocol.md:11-17`) and is asserted by a test
 Purpose: see the lost-frame counting work on the real camera (todo D5, step 3). It changes
 settings that the app **saves on close** — see R7f before closing the window.
 
+**Run on 2026-10-19 — result in todo D5:** the rig camera (76.5 fps at most on the full sensor,
+USB-limited) could not outrun this PC; one throttling warning, 0 lost. Two things learned:
+- **R1f's "Max sustainable" is for the benchmark's ROI** (r = 364). Processing time follows the
+  ROI's bounding box, not the frame: with the session's ROI (r = 243) one frame took 4.9 ms, not
+  12.3 — so compare against the ROI you actually use.
+- **With External Trigger off, the Arduino keeps flashing the laser** (8 ms every 50 ms), so only
+  ≈ 20 % of the frames are lit. Fine for this test, which is about frame counts, not κ²; never
+  measure with the trigger off (todo F3).
+
 | | Do | Expect | If not |
 |---|---|---|---|
 | ☐ R7a | External Trigger **off**. Set **Processing workers = 1**, **Exposure 2 ms**, and FPS to about **twice R1f's "Max sustainable"** (or the highest the camera accepts) | FPS label rises above "Max sustainable". The camera itself caps the rate (≈ 1 ÷ exposure, and the USB link), so if FPS won't go higher, use what you get | FPS stays at or below "Max sustainable" → this PC can't be overloaded this way; skip R7 and note it |
 | ☐ R7b | Start SCOS, go through the prompts. **Keep Dark/Bright Frames at 600** (the protocol's value). *With fewer, the calibrations can end inside the camera-clock check (5 s after a camera restart); since 2026-10-14 (todo D10) the measurement then waits for it — `app.log`: "Measurement starts after the camera-clock check — N frame(s) captured during the check were not used" — so the first point appears up to ≈ 5 s late; the data stay correct* | During the run: status bar **"SCOS overload — input queue N/20 full; camera capture is being throttled to keep up (at HH:MM:SS)"** | |
 | ☐ R7c | Keep it going ~30 s | **"Camera: N frame(s) lost — Pylon buffers full or transfer failed (M since Start Video)"**, at most once a second; the label reads **"Dropped: N + M lost at camera"**; the **GUI stays responsive** (the grab loop waits, the window doesn't freeze) | GUI freezes → note how long. No lost-frame warning although FPS shown < FPS set → copy both numbers |
 | ☐ R7d | Stop SCOS, copy `app.log` | — | |
-| ☐ R7e | R6d's command on this session's file | `frames_lost_camera` > 0. The large time steps are **whole multiples** of the frame period (a lost frame leaves a gap of its true size; frames are not bunched together) | Steps that are *not* multiples, or bunches of very short steps → copy the output |
+| ☐ R7e | R6d's command on this session's file | `frames_lost_camera` > 0. The large time steps are **whole multiples** of the frame period (a lost frame leaves a gap of its true size; frames are not bunched together) | Steps that are *not* multiples, or bunches of very short steps → copy the output. `check_session.py` compares with the **set** FPS: if it was above what the camera delivered, its time-step and dark-rate rows say NOT OK although the steps are fine — judge the steps against the camera's period (todo, Pending decisions) |
 | ☐ R7f | **Before closing the window:** set Processing workers (3), Exposure (8 ms) and FPS (20 Hz) back. Close, relaunch, check R2c | Defaults back | Otherwise the next session starts at the overload settings — the app remembers the last settings for the real camera |
 
 ---

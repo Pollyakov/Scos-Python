@@ -28,6 +28,10 @@ Settings persistence (todo.md B3): `MainWindow` saves settings on close, so the 
 the defaults via `SCOS_CONFIG_DIR`, in its own temp directory — never inside `tmp_path`,
 which tests use as a results folder and assert on. A test that exercises saving must use
 a camera stub with `persists_settings = True` (see `tests/test_settings_persistence.py`).
+**Assert the value the app uses, not only the widget:** until 2026-10-19 a saved duration and
+normalization type showed in their boxes but never reached `_measurement_duration_s` /
+`_norm_type`, and the round-trip test — which checked the widgets only — passed for five
+months (Done item 57).
 
 Widget sizes (todo U3/U4, `tests/test_window_fits_screen.py`): Qt does not recompute the sizes
 of a window that has never been shown, so after a `setText()` every `sizeHint()` /
