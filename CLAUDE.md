@@ -251,7 +251,10 @@ The full target measurement protocol (multi-phase calibration with dark + bright
 - Python 3.11+, type hints on public functions
 - PyQt6 signals/slots for thread communication — never access GUI from camera thread
 - NumPy vectorized operations preferred over Python loops for image processing
-- Use `np.float64` for all intermediate SCOS calculations to avoid precision loss
+- Use `np.float64` for all intermediate SCOS calculations to avoid precision loss — **one
+  measured exception:** `SCOSProcessor.process()` / `local_variance()` stay float32 (≈ 2×
+  faster; κ² differs from float64 by 5 × 10⁻⁸ relative on the lab recording; user's decision
+  2026-10-20, todo A4). Calibrations stay float64.
 
 ## Delegation Policy
 

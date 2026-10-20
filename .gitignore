@@ -32,3 +32,7 @@ docs/english_editing_log.md
 # committed defaults and is never written by the app.
 scos_config.local.json
 scos_config.local.json.tmp
+
+# A local list of recent commits (made 2026-10-20 on request) — regenerate with git log;
+# kept out of the repo because git itself already holds it.
+docs/commit_log.md

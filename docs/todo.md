@@ -1,6 +1,6 @@
 # SCOS — Implementation Backlog
 
-Last updated: 2026-10-11 — **this is now the only working task list.** It absorbed the open
+Last updated: 2026-10-20 — **this is now the only working task list.** It absorbed the open
 items of `docs/reviews/merged_worklist.md`, which is frozen as an archive of the review
 evidence and the reasoning behind each task (map at the bottom of this file).
 
@@ -50,7 +50,11 @@ evening.
 
 ---
 
-## ▶ Rig-session prep (before the first session — mostly done)
+## ✅ Rig-session prep (before the first session — closed 2026-10-20)
+
+*Closed 2026-10-20:* the real rig sessions of 2026-10-08 and 2026-10-19 took the place of
+what was left (3f, 4b); only **3d** stays open, and it is now about long recordings, not the
+rig day. The text below is kept as it was written before the first session.
 
 The first full session on the real rig is a couple of days away and the lab is not
 reachable before then. Everything here either prevents a failure on the day or tests, in
@@ -72,10 +76,10 @@ session, not before.**
 | 3d | Scenario: compressed long run | looped playback for minutes: recorder flushes, memory flat, plot responsive | 1 h + run | | ⏸ **Postponed until after the rig session** (user's decision 2026-10-07): the rig session and Vika's test will be short. Do it before any recording of more than a few minutes. The open risk it would measure: `gui/plot_widget.py` redraws **every** point once a second on the GUI thread, ≈ 216 000 points after 3 h at 20 Hz, at a cost nobody has measured |
 | 3e | Output verification | after every scenario: `rBFi` present, length = `timeVec`, all ten `Params`, figure, both `Calibration.h5` groups | 45 min | | ~15 min (2026-10-07 ≈ 16:11–16:26; approximate) | ✅ Done item 38 — the presence checks already existed since 3a; 3e added checks that the **numbers** are right (rBFi = bfi / constant, constant recomputed from the file, metadata, ROI, startTime, calibration images); 3 new mutations each caught |
 | 4a | Fix what turns up before 3f | K1–K3 plus anything 3b–3e find. Found while writing step 2 (`simulation_checklist.md`, "Known issues"): **K1** status-bar messages — session folder, the closing "Session finished … \| laser-off note" — are overwritten at once by the per-frame "Frame #…" text; **K2** Cancel at the bright prompt (and both calibration-error paths) leaves the parameters locked and a dark-only `Calibration.h5` on disk; **K3** Stop during `DARK_CAL` leaves playback on the dark folder (playback only). Found by 3b: **K4** the overload warning is overwritten the same way (≤ 2.5 s on screen) — fix with K1; `--scenario slowdown`'s K4 check is the acceptance test, and it watches `status.messageChanged` for the word "overload" — if the fix moves the warning to its own label, move the check with it, or it reports "(never shown)"; ~~**K5** closing the window while processing is far behind leaves the pipeline thread running past `closeEvent`'s 2 s (it drains a backlog nobody will use)~~ ✅ fixed 2026-10-07, Done item 35 | 2 h | | ✅ Done item 39 — K1–K4 fixed: the frame readout has its own status-bar field, so messages stay; every early exit from calibration goes through `_abandon_calibration()` (unlocks, playback back to the recording, a partial-calibration folder renamed `…_cancelled` by the user's choice); `slowdown` now passes every check, `normal` and `recovery` too; new `frame-text` mutation caught |
-| 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | |
-| 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | |
-| 5a | Real-rig checklist | first five minutes at the rig: **D5** ("Camera clock accepted" in `app.log`, `time_source = "camera"` in the results file, lost-frame counting and intake under a deliberate overload — new code since 2026-10-07), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | 📝 Written 2026-10-07 — [`rig_checklist.md`](rig_checklist.md). *2026-10-08: the "Flushing N" check (R5g) was replaced by calibration **timing** — the hand-run session showed N = 2 even with the dark collector 4× slower than the camera, because the real pop-up drains the backlog; N cannot reveal a slow PC.* Originally from reading the code (not run on the rig). Adds a **pre-trip blocker P1**: the rig camera's SN + Mono12 must be in `CamerasMeasuredGain.csv` — which camera is on the rig is not recorded anywhere in the repo. Also: `app.log` is overwritten at every launch (copy it), the benchmark needs `--fps 20`, and the overload test goes last because its settings are saved on close. **Used at the rig 2026-10-08** (first session, Vika as the subject, 1 min): P1 resolved — the rig camera is SN 40075248 (USB), in the gain table at Mono12/8 dB (G = 0.9564); Arduino on COM10 uploaded; dark cal 600 frames in 30.2 s (mean 0.46 DU — really dark), bright cal 600 in 30.1 s; "Flushing 2" / "3"; κ²_corr mean 0.0081, all 1300 > 0; rBFi shows a clear pulse at 1.53 Hz (≈ 92 bpm) plus 11 isolated one-frame spikes (unexplained, < 1 %); laser-off check tested by leaving the laser on — fired correctly (114.5 DU vs < 11.4). D5 steps 1–2 passed, step 3 (overload) and the benchmark not run. The user's fixes from it: U1–U11 above |
-| 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does; and (added 2026-10-07) what the results file now also records — `metadata` → `time_source` ("camera" = the camera's own exposure timestamps, "pc" = the PC clock), `frames_lost_camera`, `frames_dropped_queue` — and the "Dropped: N + M lost at camera" label | 45 min | | 📝 Drafted 2026-10-07 — [`expectations.md`](expectations.md). Re-check its pop-up and message wording after 3f/4b, then send |
+| 3f | **Hands-on GUI pass** (user) | follow [`simulation_checklist.md`](simulation_checklist.md) with real windows — the only test of the real modal-dialog path (nested event loop). Runs **after** 4a, on the code that goes to the rig | 1 h 15 m | | ✅ Closed 2026-10-20 — sections A–C done by hand on 2026-10-07 (folder `test run 1)/scos_20261007_173414`, files all correct); the rest dropped by the user on 2026-10-08 in favour of testing on the real rig, which happened 2026-10-08 and 2026-10-19 |
+| 4b | Fix what 3f turns up | then re-run the 3a harness to show nothing else broke | ~1 h | | ✅ Closed 2026-10-20 — 3f's part found only checklist corrections ("Flushing 2", not hundreds; the overload message 3×), made in `simulation_checklist.md`; what the rig sessions found became U1–U11 above, all done |
+| 5a | Real-rig checklist | first five minutes at the rig: **D5** ("Camera clock accepted" in `app.log`, `time_source = "camera"` in the results file, lost-frame counting and intake under a deliberate overload — new code since 2026-10-07), trigger-mode restart, Arduino, and `bench_processor.py --width 700 --height 700 --window 7 --bits 12` on the lab PC; **confirm Dark/Bright Frames read 600** on the rig PC — the committed default went from 60 (a 2026-09-26 test shortcut) back to the protocol's 600 on 2026-10-04, but a `scos_config.local.json` left on that PC would override it; **after the bright calibration, find "Flushing N frame(s) captured before the laser was switched back on" in `app.log`** — N in the tens means the lab PC keeps up with the dark collector and there is nothing to do; hundreds or thousands means it is slower than expected and **D8** moves up (in playback on the dev PC N was 1555, see D8) | 45 min | | ✅ Used at the rig 2026-10-08 and (with the short sheet [`rig_trip_U6_U10_U11.md`](rig_trip_U6_U10_U11.md)) 2026-10-19. Rows never done there: R1b (fast tests on the rig PC), R3d (Arduino re-upload after a change), R6a (a run of several minutes — the longest so far is 2.3 min, 2026-10-19 13:06). 📝 Written 2026-10-07 — [`rig_checklist.md`](rig_checklist.md). *2026-10-08: the "Flushing N" check (R5g) was replaced by calibration **timing** — the hand-run session showed N = 2 even with the dark collector 4× slower than the camera, because the real pop-up drains the backlog; N cannot reveal a slow PC.* Originally from reading the code (not run on the rig). Adds a **pre-trip blocker P1**: the rig camera's SN + Mono12 must be in `CamerasMeasuredGain.csv` — which camera is on the rig is not recorded anywhere in the repo. Also: `app.log` is overwritten at every launch (copy it), the benchmark needs `--fps 20`, and the overload test goes last because its settings are saved on close. **Used at the rig 2026-10-08** (first session, Vika as the subject, 1 min): P1 resolved — the rig camera is SN 40075248 (USB), in the gain table at Mono12/8 dB (G = 0.9564); Arduino on COM10 uploaded; dark cal 600 frames in 30.2 s (mean 0.46 DU — really dark), bright cal 600 in 30.1 s; "Flushing 2" / "3"; κ²_corr mean 0.0081, all 1300 > 0; rBFi shows a clear pulse at 1.53 Hz (≈ 92 bpm) plus 11 isolated one-frame spikes (unexplained, < 1 %); laser-off check tested by leaving the laser on — fired correctly (114.5 DU vs < 11.4). D5 steps 1–2 passed, step 3 (overload) and the benchmark not run. The user's fixes from it: U1–U11 above |
+| 5b | Vika's expectations sheet | "what you'll see and why it's normal": calibration looks frozen except the counter, `Discarding N buffered frames…`, the G warning, the laser-off window + 90 % check, what stopping early does; and (added 2026-10-07) what the results file now also records — `metadata` → `time_source` ("camera" = the camera's own exposure timestamps, "pc" = the PC clock), `frames_lost_camera`, `frames_dropped_queue` — and the "Dropped: N + M lost at camera" label | 45 min | | 📝 Drafted 2026-10-07 — [`expectations.md`](expectations.md), kept up to date since (U6/U10/U11 notes; the A/B promise removed 2026-10-20). **Not sent to Vika** — send it when she is to run the app herself |
 
 **Order changed 2026-10-05 (user's decision):** the hands-on pass 3f now comes after the automated scenarios and the K1–K3 fixes, so it tests the code that will actually go to the rig — fixing K1–K3 after it would change exactly the dialogs and status messages it checks. Remaining estimate ≈ 11 h 20 m, about 1 h 15 m of it hands-on. If time runs short, 3d goes first. **3d postponed 2026-10-07** (short recordings only at the rig), so the next step is 3e. **4c added 2026-10-07** (Vika's answer to open question 11) and placed before 3d, by the user's decision. **Actual** is filled in by `/wrap-up` (approximate, from session and commit times).
 
@@ -136,7 +140,7 @@ thread against a bounded *blocking* queue, with `overload_detected` at 80 % full
 
 ---
 
-#### A4 · float32 vs float64 in the corrected numerator *(was worklist task 22)*
+#### ~~A4 · float32 vs float64 in the corrected numerator~~ — ✅ DECIDED 2026-10-20: keep float32 *(was worklist task 22)*
 
 CLAUDE.md requires `np.float64` for all SCOS intermediates; `processor.py` computes the local
 variance and the corrected numerator `var_im − G·mean − spVar − dark_var − 1/12` in float32.
@@ -144,9 +148,17 @@ Review A is explicit that this is **not** a demonstrated accuracy bug — the of
 tests pass at 0.6–1.2 % — but it is a written rule the code breaks, and the subtraction of
 nearly equal numbers is exactly where float32 would hurt, at small κ² (high flow).
 
-**Done when:** a small-κ² test exists, the precision the MATLAB data supports is kept with the
-reasoning written down, and CLAUDE.md §Code Style either holds or records the measured
-exception. If that test fails, this jumps the queue.
+**Decision (user, 2026-10-20): keep float32** for the per-frame κ²; no question to Vika. The
+calibration (dark and bright) is already computed in float64; CLAUDE.md §Code Style records
+the exception. **Measured that day** (scratch script, not committed): a float64 copy of the
+same formula against `processor.py` on `expT5ms_Gain24dB_BL100DU_FR40Hz_005`, frames 1–100,
+600-frame dark calibration, `smoothingCoefficients.mat` spVar, `totMask` — κ²_raw and κ²_corr
+differ by 5 × 10⁻⁸ relative on average (at most 1.4 × 10⁻⁷); the error against MATLAB's
+`LocalStd7x7_corr.mat` is 1.055 % with either. float64 is ≈ 2× slower (whole 1216 × 1936
+frame on the dev PC: 72.6 vs 141.5 ms). MATLAB itself uses double throughout (frames read
+with `double()`, `SCOSvsTime_WithNoiseSubtraction_Ver2.m:380,407,409`, `baseFunc/ReadRecord.m:84`;
+no `single()` in the repo). κ²_corr there ≈ 0.008; at a smaller κ² the gap grows, from
+5 × 10⁻⁸. No small-κ² test was written — not asked for.
 
 ---
 
@@ -248,6 +260,10 @@ Show the saved path in the status bar.
 ---
 
 #### E5 · Git tag v0
+
+**Decided 2026-10-20 (user):** the tag waits until **Vika has checked the math on saved
+frames**. If those are frames saved *by this app*, raw-frame saving (F1) must come first —
+the Save Frames box is disabled until F1.
 
 After E1–E4 are done and all tests pass, create an annotated git tag:
 ```
@@ -500,6 +516,8 @@ guessed. A measurement starts only after both calibrations, so the check has lon
 `TestKsenia/rig_full_600/Overload1/Overload1_20261019_203127`):
 - Steps 1–2 ✅ again in every session that day — camera clock accepted after every grab
   restart, 0 lost, 0 dropped, time steps exactly one frame period.
+- Frame numbers ✅ — no "Camera reports no frame numbers" warning in any of the day's four
+  `app.log` files (checked 2026-10-20), so the USB-starts-at-0 fix (`dffa06d`) works on the camera.
 - **R1f benchmark** (`bench_processor.py --width 1936 --height 1216 --window 7 --bits 12
   --fps 20`, one worker): mean 12.3 ms (p99 16.9), "Max sustainable 81.6 Hz". Its ROI is a
   circle of r = 364 (30 % of the short side); **processing time scales with the ROI's
@@ -850,10 +868,10 @@ unchanged.
 
 ```
 ▶ fixes from the first rig session (above): U1 → U2 → U3 → U4 → U5 → U8 → U9 → U6 → U10 → D8 → U11   (all ✅; U6 and U11 checked on the rig 2026-10-19)
-▶ rig-session prep (above): 0 ✅ → 1a ✅ → 1b (B3) ✅ → 1c (Save Frames off) ✅ → 2 ✅ → 3a ✅ → 3b–3e ✅ (3d postponed) → 4a ✅ → 3f → 4b → 5a → 5b
+▶ rig-session prep (above): all ✅ or closed 2026-10-20, except 3d (long run — before the first long recording) and 5b (not sent)
   then, after a successful session:
-~~A1~~ → ~~A2~~ → ~~A3~~ → A4 (float64 test)
-  → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0)
+~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20)
+  → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
   → B1 (overload dialog) → B2 (full disk monitor) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4/D7/D9 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~

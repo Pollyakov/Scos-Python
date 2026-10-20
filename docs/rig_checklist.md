@@ -73,9 +73,10 @@ the way the checklist says · ➖ not done
 | R6e | ✅ | All three files. `Calibration.h5` is **24.4 MB** — the "≤ 10 MB" in R6e was for 700 × 700 frames; `rBfi_results.h5` 116 KB for 65 s; `rBfi_fig.png` |
 | R7 | ➖ | Deliberate overload not run (todo D5 step 3) |
 
-**Still to do on the rig:** R1b, R1f, R3d, a run of several minutes (R6a), the laser-off
-check with the laser really off (R6b), R7, and — with the current code — confirm the camera's
-frame numbers (`BlockID`) count 0, 1, 2, … without the false warning. **New since then:** the
+**Still to do on the rig:** R1b, R3d and a run of several minutes (R6a; the longest so far is
+2.3 min). *Done on 2026-10-19:* R1f, R6b (laser-off check passed with the laser really off),
+R7, and the camera's frame numbers — no "no frame numbers" warning in any of that day's four
+`app.log` files. **New since then:** the
 camera-side crop, R2g–R2h and R6f (todo U6, written 2026-10-11 — never run on the real camera;
 the pylon emulator and the playback rehearsal are all it has seen); the dark calibration at the
 camera's maximum frame rate, R5d/R5g/R5h (todo U11, written
