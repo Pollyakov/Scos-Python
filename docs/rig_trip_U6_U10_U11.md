@@ -7,7 +7,7 @@ session (2026-10-08)** and has never run on the real camera:
 |---|---|---|
 | **U6** | "Cut Image" makes the **camera itself** send only the ROI circle + 26 px on every side; both calibrations and the measurement use that crop | pylon emulator + playback rehearsals |
 | **U10** | The crop (`OffsetX`, `OffsetY`, `Width`, `Height`, sensor size) is saved in the results file and `Calibration.h5` | tests + rehearsals |
-| **U11** | The dark calibration runs at the camera's **maximum frame rate** (exposure and gain unchanged), then the set rate comes back | emulator + playback; **the accuracy proof (A/B) needs the real camera** |
+| **U11** | The dark calibration runs at the camera's **maximum frame rate** (exposure and gain unchanged), then the set rate comes back | emulator + playback; that the maximum rate gives the same dark calibration was already checked by Vika |
 | **D10** | After short calibrations the measurement waits for the camera-clock check, so `timeVec` uses one clock | unit tests only (playback has no camera clock) |
 
 Each step: **Do → Expect → If not**. The IDs in brackets (R2g…) are the matching rows of the
@@ -19,9 +19,9 @@ it is in the gain table, so no G check is needed this time.
 > **`app.log` is overwritten at every launch.** Copy it into the session folder before
 > closing the app — the checks below read it from there.
 
-**Time needed:** ≈ 1 h for parts A–D; part E is optional.
+**Time needed:** ≈ 1 h for parts A–C; part E is optional.
 
-**Bring:** the lens cap (part D), a subject (Vika or anyone, ≈ 10 min in place), this sheet.
+**Bring:** a subject (Vika or anyone, ≈ 10 min in place), this sheet.
 
 ---
 
@@ -41,8 +41,8 @@ it is in the gain table, so no G check is needed this time.
 | ☐ B1 | `venv\Scripts\python.exe main.py`, confirm the laser-safety warning, **Start Video** | PREVIEW, FPS ≈ 20 | |
 | ☐ B2 | Check the settings | Mono12, 8 ms, 8 dB, 20 Hz, Window 7, **Dark 600, Bright 600**. Recording name e.g. `rig_cut_600`, duration **3 min**, Norm. type as you prefer. External Trigger as usual (on, if the Arduino is used) | Set them by hand |
 | ☐ B3 | Wait 5 s; in `app.log` search **"Camera clock"** | `Camera clock accepted — 1000 MHz ticks agree …`. **No** "Camera reports no frame numbers" warning (fixed after the first session) | "not used" → copy the reason; the session is still valid |
-| ☐ B4 | Set the ROI (**Auto ROI** or **Draw ROI**) | ROI label `cx=… cy=… r=…` — **write it down** (needed in D2 and D3) | |
-| ☐ B5 | **U6** · Click **Cut Image** (R2g) | Only the area around the circle; the button reads **Full Image**; Info label **`Size : W×H of 1936×1216`**. For r ≈ 280: **611 × 611** if the camera allows steps of 1, **612 × 612** for steps of 4 (616 for 8). `app.log`: "Cut Image — asking the camera for …", then **"Camera image area: W × H at (x, y) of the 1936 × 1216 sensor"** — that one is what the camera really uses. ≈ 5 s later another "Camera clock accepted". **FPS stays ≈ 20** | "**Camera refused the image crop**" → copy the line; the rest of the sheet still works uncut (skip D3) |
+| ☐ B4 | Set the ROI (**Auto ROI** or **Draw ROI**) | ROI label `cx=… cy=… r=…` | |
+| ☐ B5 | **U6** · Click **Cut Image** (R2g) | Only the area around the circle; the button reads **Full Image**; Info label **`Size : W×H of 1936×1216`**. For r ≈ 280: **611 × 611** if the camera allows steps of 1, **612 × 612** for steps of 4 (616 for 8). `app.log`: "Cut Image — asking the camera for …", then **"Camera image area: W × H at (x, y) of the 1936 × 1216 sensor"** — that one is what the camera really uses. ≈ 5 s later another "Camera clock accepted". **FPS stays ≈ 20** | "**Camera refused the image crop**" → copy the line; the rest of the sheet still works uncut |
 | ☐ B6 | **Full Image**, then **Cut Image** again (R2h) | Full: `Size : 1936×1216`, ROI unlocked. Cut: the same crop as in B5 | |
 | ☐ B7 | **Start SCOS** → folder → "Please turn off the laser": laser **off**, OK | Dark calibration starts | |
 | ☐ B8 | **U11** · Watch the dark calibration (R5d) | ⟨I⟩ drops; **FPS jumps to ≈ 100–125** (the camera's maximum for 8 ms after the cut); "Dark cal: n / 600" finishes in **≈ 5–8 s** (it was 30 s before U11). These numbers are estimates — the real ones are what this trip measures | ⟨I⟩ does not drop → light on the sensor; Stop SCOS, start again. **"Frame Rate Not Restored"** window → stop, copy `app.log`, tell me |
@@ -83,10 +83,8 @@ What stays CHECK — compare by eye:
   frames, maybe another subject or ROI), but not 2× or ½×;
 - `mean_dark - black level` — what the dark calibration reads above the offset the camera adds to
   every pixel (`camera black level`, recorded since 2026-10-19; the rig camera reported **100**
-  on 2026-10-19 — stored in UserSet1, its power-on set: confirmed by replug on 2026-10-19). Expected near 0 with the usual probe (inferred from 2026-10-08, not
-  yet measured at black level 100) — "near" meaning about ±1 DU: the camera's real offset is not
-  exactly its BlackLevel (−1.07 DU at 2 ms exposure, +0.5 DU at 8 ms with a test probe, 2026-10-19); light leaking in during the dark calibration raises it (12.7 DU with a leakier test probe on 2026-10-19). No lens-capped value
-  measured yet. Sessions recorded before then show plain `mean_dark` — 0.46 DU on 2026-10-08,
+  on 2026-10-19 — stored in UserSet1, its power-on set: confirmed by replug on 2026-10-19). Expected near 0 when no light leaks in — "near" meaning about ±1 DU: the camera's real offset is not
+  exactly its BlackLevel (−1.07 DU at 2 ms exposure, +0.5 DU at 8 ms with a test probe, 2026-10-19); light leaking in during the dark calibration raises it (12.7 DU with a leakier test probe on 2026-10-19). Sessions recorded before then show plain `mean_dark` — 0.46 DU on 2026-10-08,
   when the black level was 0;
 - `image area (crop)` — = the "Camera image area" line of B5;
 - dark duration against the estimate: ≈ 5–8 s cut, ≈ 10–11 s full;
@@ -106,17 +104,6 @@ The same as B, but click **Full Image** before Start SCOS (B5 skipped), recordin
 | ☐ C1 | Dark calibration: FPS ≈ **60–76** (the USB link is the limit at the full size), **≈ 10–11 s**; "Dark calibration took …" says N frames skipped — **hundreds is normal** here (the PC cannot take every frame at that rate; the collector still gets 600) | **30 s or longer** → the maximum rate does not help on this PC; copy both log lines and tell me |
 | ☐ C2 | `check_session.py`: `Summary: … 0 NOT OK`; image area `1936 x 1216 at (0, 0) of the 1936 x 1216 sensor` | Any NOT OK → copy the output |
 
-## D · A/B accuracy test of U11 — lens capped, app closed (≈ 5 min)
-
-This is the proof that the maximum frame rate gives **the same dark calibration**. Until it
-passes, U11 is not done.
-
-| | Do | Expect | If not |
-|---|---|---|---|
-| ☐ D1 | Laser **off**, **lens cap on**. Close the app and Pylon Viewer (R6g) | — | |
-| ☐ D2 | `venv\Scripts\python.exe tools/dark_rate_ab.py --roi CX CY R --save "<session 1 folder>\ab_full.json"` — CX CY R from B4; add `--exposure-ms`, `--gain-db`, `--fps` only if they were not 8 / 8 / 20. Press Enter at its question (R6h) | Takes ≈ 30 + 10 + 30 s. Three lines `set A / B / C` — B's "camera delivered" clearly above A's and C's (≈ 60–76 vs 20). Last line **"PASS — the maximum rate gives the same dark calibration"** | **FAIL** → U11 must not be used: copy the whole output + `ab_full.json`, tell me and Vika. **INCONCLUSIVE** → the maximum was not faster; copy the output |
-| ☐ D3 | The same with the cut: add `--cut` and `--save "<session 1 folder>\ab_cut.json"` (R6i) | Same, **PASS**; B ≈ 100–125 fps | Same as D2 |
-
 ## E · Optional, if time is left
 
 | | Do | Expect | If not |
@@ -129,7 +116,7 @@ passes, U11 is not done.
 
 ## What to bring back
 
-- the session folders (each with its `app.log`), including `ab_full.json` and `ab_cut.json`;
-- the output of `check_session.py` for each session and of `dark_rate_ab.py` (D2, D3);
+- the session folders (each with its `app.log`);
+- the output of `check_session.py` for each session;
 - the numbers written down in B13 and C1 (dark time and fps, bright time);
 - anything that did not match, with the time it happened.

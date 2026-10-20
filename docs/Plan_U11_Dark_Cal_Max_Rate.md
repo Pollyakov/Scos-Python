@@ -2,7 +2,7 @@
 
 Written 2026-10-11. Task: `docs/todo.md`, row **U11** (Vika's request, 2026-10-08).
 Prerequisite **D8** (the faster dark-calibration collector) is done (todo Done item 51).
-Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–7 done 2026-10-11/12 (results at the end of section 6; todo Done item 52). **Open: the rig check, step 8** (`rig_checklist.md` R5d/R5g/R5h, R6g–R6i).**
+Status: **decisions D1–D3 decided 2026-10-11 (all as recommended: D1 = A, D2 = yes, D3 = no). Steps 1–7 done 2026-10-11/12 (results at the end of section 6; todo Done item 52). Rig check 2026-10-19: dark calibration 4.8 s cut, 11.9 s full, set rate restored every time. The A/B test (section 3, step 6) is **not needed** — Vika had already checked that the maximum rate gives the same dark calibration (user, 2026-10-20); `tools/dark_rate_ab.py` stays as an optional tool.**
 
 ---
 
@@ -238,7 +238,7 @@ together with `n_frames` always gives the rate the collector actually got.)*
 | 5 | **Rehearsal** (`tools/rehearsal.py`): checks — the source was at maximum during `DARK_CAL`, back to the set rate at `BRIGHT_CAL` and at `MEASURING`, the queue never above K + margin during `DARK_CAL`. Mutations in `tools/rehearsal_mutations.py`: no restore, no skip. Runs: `normal`, `--cut`, `slowdown` — one at a time. | 45 min |
 | 6 | **`tools/dark_rate_ab.py`** — the A/B tool of section 3 (20 Hz → max → 20 Hz, same session, ROI comparison, pass/fail printed). Tried on the pylon emulator so it runs on the rig the first time. | 45 min |
 | 7 | **Docs**: CLAUDE.md (new camera method in the frame-source list; the "unbounded during DARK_CAL" note → bounded by the skip), `rig_checklist.md` R5d/R5g (the rig checklist's dark-calibration steps: new durations, below) + a new rig step for the A/B tool, `simulation_checklist.md`, `todo.md` (U11 row, Done item), `expectations.md` (one line for Vika). | 45 min |
-| 8 | **Rig check (with you):** the A/B tool; a full session cut and uncut; read the dark duration and "N skipped" from `app.log`. | on the rig |
+| 8 | **Rig check (with you):** ~~the A/B tool~~ (not needed — already checked by Vika, 2026-10-20); a full session cut and uncut; read the dark duration and "N skipped" from `app.log`. | on the rig |
 
 Total before the rig: about 5–5.5 h.
 

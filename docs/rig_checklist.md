@@ -78,7 +78,7 @@ check with the laser really off (R6b), R7, and — with the current code — con
 frame numbers (`BlockID`) count 0, 1, 2, … without the false warning. **New since then:** the
 camera-side crop, R2g–R2h and R6f (todo U6, written 2026-10-11 — never run on the real camera;
 the pylon emulator and the playback rehearsal are all it has seen); the dark calibration at the
-camera's maximum frame rate, R5d/R5g/R5h and the A/B check R6g–R6i (todo U11, written
+camera's maximum frame rate, R5d/R5g/R5h (todo U11, written
 2026-10-12 — same: emulator and playback only). **For the next visit use the short sheet
 [`rig_trip_U6_U10_U11.md`](rig_trip_U6_U10_U11.md)** (2026-10-15): just these checks, in order,
 with `tools/check_session.py` printing each session's numbers.
@@ -161,9 +161,6 @@ The order is the protocol's (`SCOS_protocol.md:11-17`) and is asserted by a test
 | ☐ R6d | Check the results file — simplest with `venv\Scripts\python.exe tools/check_session.py "<session folder>"` (2026-10-15; prints these values with OK / NOT OK / CHECK), or with: `venv\Scripts\python.exe -c "import h5py,numpy as np,sys; f=h5py.File(sys.argv[1]); print(dict(f['metadata'].attrs)); t=f['timeVec'][()].ravel(); d=np.diff(t)*1000; print(t.size,'frames; dt ms median %.2f min %.2f max %.2f' % (np.median(d), d.min(), d.max()))" "<session folder>\rBFi_resultsAndParameters.h5"` | In `metadata`: **`time_source = camera`**, **`frames_lost_camera = 0`**, **`frames_dropped_queue = 0`** (both counted from Start SCOS), and `camera_sn` = your camera. Time steps: **median ≈ 50 ms**, min and max close to 50 ms | `time_source = pc` → R2d said why. Any lost/dropped > 0, or a max step of 100, 150 ms… → frames went missing; note the numbers |
 | ☐ R6e | Folder contents | `Calibration.h5` (≈ 25 MB at 1216 × 1936 — 24.4 MB on 2026-10-08; **much smaller when cut** — it scales with the crop's area, so ≈ 4 MB for a 611 × 611 crop, estimated from the area), `rBFi_resultsAndParameters.h5` (`rBfi_results.h5` before 2026-10-11; ≈ 3.5 MB per hour, an estimate not yet checked on a long run; 116 KB for 65 s on 2026-10-08), `rBfi_fig.png` | |
 | ☐ R6f | *(Only if R2g was used.)* In the results file, `metadata` → **`crop`** has `OffsetX`, `OffsetY`, `Width`, `Height` = the "Camera image area" line of R2g, and `SensorWidth` 1936, `SensorHeight` 1216 (todo U10); `rBfi_fig.png` shows the same under "Image area". Compare the session's **κ²_corr** with the uncut session of 2026-10-08 (mean 0.0081, same subject and settings) | Same range. The crop itself does not change κ² (`tests/test_crop_accuracy_offline.py`: identical over the same ROI), but two runs never measure the same frames — two uncut playback runs differed by 3 %. A different subject, probe placement or ROI changes it more | Far outside (e.g. 2× or ½×) → copy both numbers and the ROI of each session |
-| ☐ R6g | **Dark calibration A/B (todo U11) — after the session, app closed.** Laser **off**, lens capped (no light on the sensor). Close the app and Pylon Viewer | — | |
-| ☐ R6h | `venv\Scripts\python.exe tools/dark_rate_ab.py --save "<session folder>\ab_full.json"` — with the session's settings if they differ (`--exposure-ms`, `--gain-db`, `--fps`, `--roi CX CY R` from the ROI label). Takes ≈ 30 s + ≈ 10 s + 30 s | Three lines "set A / B / C"; B's "camera delivered" clearly above A's and C's (≈ 60–76 vs 20); 0 or few lost. Then **"PASS — the maximum rate gives the same dark calibration"**, exit code 0 | **FAIL** → U11 must not be used: copy the whole output and `ab_full.json`, tell me (and Vika). **INCONCLUSIVE** → the maximum was not faster; copy the output |
-| ☐ R6i | Once more, cut: add `--cut --roi CX CY R` (the session's ROI), `--save "<session folder>\ab_cut.json"` | Same: **PASS** | Same as R6h |
 
 ### R7 · Deliberate overload — **last, on a throwaway session**
 
@@ -195,6 +192,5 @@ USB-limited) could not outrun this PC; one throttling warning, 0 lost. Two thing
 - every `app.log` you copied (R6c, R7d);
 - R1f's benchmark output;
 - the two calibration durations from R5g, and the two dark-calibration lines;
-- R6h/R6i's output and `ab_full.json`, `ab_cut.json` (todo U11);
 - R6d's printout for the real session and R7e's for the overload one;
 - anything that didn't match, with the time it happened.

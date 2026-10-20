@@ -57,9 +57,6 @@ keyboard should be done before the room is dark:
   uses exactly 600.
 - `Calibration.h5`'s `dark` group now also records how it ran: `duration_s` (first to last
   frame used) and, when the camera reports one, `camera_frame_rate_hz`.
-- Before relying on it we check on the rig that it gives the same dark calibration: three
-  dark sets in one session, 20 Hz → maximum → 20 Hz (`tools/dark_rate_ab.py`); the maximum
-  must fall within the difference between the two 20 Hz sets.
 - If the external trigger was on, the app switches it off for this step and afterwards
   puts it back to what it was before (the protocol says "set it ON"; the app restores the
   operator's choice, which is ON in a triggered session).

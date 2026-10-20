@@ -232,8 +232,8 @@ Rules that keep it safe:
 - Playback's "maximum" is `core.crop.playback_max_rate()` (1 / exposure, capped at 360 MB/s).
   In playback it does not make the dark calibration faster — the GUI thread is the limit.
 - A new frame source must provide `set_max_frame_rate(enabled)`.
-- **Not yet proven on the rig:** `tools/dark_rate_ab.py` (20 Hz → maximum → 20 Hz in one
-  session, lens capped) must PASS before U11 counts as done (`rig_checklist.md` R6g–R6i).
+- That the maximum rate gives the same dark calibration was **already checked by Vika** — no
+  rig A/B test is needed (user, 2026-10-20). Rig timings 2026-10-19: 4.8 s cut, 11.9 s full.
 
 IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
 part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder
