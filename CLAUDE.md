@@ -259,6 +259,16 @@ same 1250 frames in the same order, raw κ² within 0.05 %; the app's own rerun 
 (`tools/compare_with_matlab.py`). Rig check: `rig_checklist.md` R8 — passed 2026-10-22; check any
 saved session with `tools/check_saved_frames.py "<session>"` before it goes to Vika.
 
+IMPORTANT: **External Trigger restored ticked at launch sends the Arduino program then**
+(`_upload_arduino_at_launch()`, real camera only — rig 2026-10-22: an old program gave 10 Hz
+while the file said 20 Hz). While a program is on its way (`_arduino_pending()`), Start Video
+runs the camera untriggered and Start SCOS is refused ("Arduino Not Ready"). Separately,
+`_check_frame_timing()` compares the median capture interval over 3 s with the Frame Rate
+field (5 %) and opens a non-modal "Frame Rate Mismatch" window — once per cause, never over a
+modal dialog; not in DARK_CAL, playback, or while a program is pending; it starts over (ignoring frames captured before then + 1 s) on
+every state change and anything that changes the camera's pace. Anything new that restarts
+the camera or changes its rate must call `_reset_frame_timing()`. Todo Done item 60.
+
 IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
 part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder
 (created there and then, named from the **Recording name** field plus a timestamp), and

@@ -3,6 +3,7 @@ Main application window.
 Combines: live image, SCOS time-series plot, camera controls panel.
 """
 
+import collections
 import datetime
 import functools
 import json
@@ -176,6 +177,17 @@ class MainWindow(QMainWindow):
         self._camera_crop:    Crop | None = None
         self._frames_wrong_size: int = 0
 
+        # Frame-timing check (_check_frame_timing): capture times of the last
+        # few seconds of frames; frames captured before _rate_ignore_before
+        # are left out (see _reset_frame_timing); whether the mismatch warning
+        # / the "timing OK" log line have been given since the last reset; the
+        # warning window, kept so a repeat updates it instead of stacking.
+        self._rate_times:          collections.deque[float] = collections.deque()
+        self._rate_ignore_before:  float = time.monotonic() + self._RATE_SETTLE_S
+        self._rate_warned:         bool  = False
+        self._rate_ok_logged:      bool  = False
+        self._rate_box:            QMessageBox | None = None
+
         # Session state machine
         self._state:           State       = State.IDLE
         self._bfi_norm:        float | None = None              # mean BFI over baseline window
@@ -278,6 +290,7 @@ class MainWindow(QMainWindow):
         self._load_config()
         self._apply_loaded_settings()
         self._connect_signals()
+        self._upload_arduino_at_launch()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -659,8 +672,8 @@ class MainWindow(QMainWindow):
         stopped the run, and a saved "Pulsation lower level" showed in the
         dropdown while the run normalized by "Number of seconds". The camera
         settings, window size and frame counts are read from their widgets
-        when they are used. (A loaded External Trigger tick does not upload
-        the Arduino sketch either; not changed here.)
+        when they are used. A loaded External Trigger tick is handled by
+        _upload_arduino_at_launch(), after the signals are connected.
 
         Set directly, not through _on_duration_changed(): that one may open
         the "Short Recording Detected" question at every launch.
@@ -695,6 +708,18 @@ class MainWindow(QMainWindow):
         # session, and carrying it into the next launch would mislabel the next.
         return cfg
 
+    def _is_playback(self) -> bool:
+        """True for the playback sources: --mock-h5, --mock-folder, --mock-tiff."""
+        cam = self.camera
+        return (self._h5_replay is not None
+                or hasattr(cam, "get_calibration_mat")      # --mock-folder
+                or getattr(cam, "is_synthetic", False))     # --mock-tiff
+
+    def _has_real_camera(self) -> bool:
+        """True for the real camera — see CameraThread.persists_settings."""
+        return (not self._is_playback()
+                and getattr(self.camera, "persists_settings", False))
+
     def _save_config(self) -> bool:
         """Write the operator's settings to the local override file.
 
@@ -703,11 +728,7 @@ class MainWindow(QMainWindow):
         mid-write can never leave a half-written file that breaks the next
         launch. Keys this version does not know about are preserved.
         """
-        cam = self.camera
-        is_playback = (self._h5_replay is not None
-                       or hasattr(cam, "get_calibration_mat")      # --mock-folder
-                       or getattr(cam, "is_synthetic", False))     # --mock-tiff
-        if is_playback or not getattr(cam, "persists_settings", False):
+        if not self._has_real_camera():
             return False
         path = self._config_dir() / self.LOCAL_CONFIG_FILENAME
         cfg = self._read_json(path)
@@ -750,6 +771,7 @@ class MainWindow(QMainWindow):
     def _set_state(self, new_state: State) -> None:
         logger.info("State: %s → %s", self._state.name, new_state.name)
         self._state = new_state
+        self._reset_frame_timing(rearm=False)
         color = self._STATE_COLORS.get(new_state, "#888888")
         self._state_label.setStyleSheet(
             f"font-size: 15px; font-weight: bold; color: {color}; padding: 2px;"
@@ -807,10 +829,20 @@ class MainWindow(QMainWindow):
         self.spn_gain.valueChanged.connect(self.camera.set_gain)
         self.spn_fps.valueChanged.connect(self.camera.set_frame_rate)
         self.spn_fps.valueChanged.connect(self._schedule_arduino_reupload)
+        # The trigger stays off while the Arduino program is still on its way
+        # (see _arduino_pending).
         self.spn_trigger_delay.valueChanged.connect(
-            lambda v: self.camera.set_trigger(self.chk_trigger.isChecked(), v))
+            lambda v: self.camera.set_trigger(
+                self.chk_trigger.isChecked() and not self._arduino_pending(), v))
         self.chk_trigger.toggled.connect(self._on_trigger_toggled)
         self.cmb_format.currentTextChanged.connect(self.camera.set_pixel_format)
+        # Each of these changes the frame timing or restarts the camera: the
+        # frame-timing check starts over (Cut/Full Image, state changes and
+        # the Arduino's answer reset it where they happen).
+        for changed in (self.spn_exposure.valueChanged, self.spn_fps.valueChanged,
+                        self.spn_trigger_delay.valueChanged, self.chk_trigger.toggled,
+                        self.cmb_format.currentTextChanged):
+            changed.connect(self._reset_frame_timing)
 
         # ROI
         self.image_widget.roi_changed.connect(self._on_roi_changed)
@@ -878,7 +910,15 @@ class MainWindow(QMainWindow):
                 self.camera.exposure_us   = self.spn_exposure.value() * 1000
                 self.camera.gain_db       = self.spn_gain.value()
                 self.camera.frame_rate    = self.spn_fps.value()
-                self.camera.trigger_mode  = "On" if self.chk_trigger.isChecked() else "Off"
+                # With the Arduino program still on its way the camera runs on
+                # its own clock: a triggered camera would get no pulses while
+                # the Arduino restarts, and give up after 10 s. _on_arduino_done
+                # switches the trigger on once the program is running.
+                trigger_on = self.chk_trigger.isChecked() and not self._arduino_pending()
+                if self.chk_trigger.isChecked() and not trigger_on:
+                    logger.info("Start Video with the trigger off until the "
+                                "Arduino program is sent")
+                self.camera.trigger_mode  = "On" if trigger_on else "Off"
                 self.camera.trigger_delay = self.spn_trigger_delay.value()
                 logger.info(
                     "Start Video — format=%s  exposure=%.1f ms  gain=%.1f dB  "
@@ -1120,6 +1160,19 @@ class MainWindow(QMainWindow):
 
     def _toggle_scos(self, checked: bool):
         if checked:
+            # The Arduino program is still being sent: when it arrives,
+            # _on_arduino_done restarts the camera with the trigger on — in the
+            # middle of the dark calibration, which runs with the trigger off.
+            if self._arduino_pending():
+                logger.info("Start SCOS refused — the Arduino program is still "
+                            "being sent")
+                QMessageBox.information(
+                    self, "Arduino Not Ready",
+                    "The Arduino program is still being sent (about 10 seconds).\n\n"
+                    "Click Start SCOS again when the status bar says "
+                    "\"Arduino: trigger pulses active\".")
+                self._reset_start_button()
+                return
             logger.info(
                 "Start SCOS — window=%d  gain=%.1f dB  format=%s  fps=%.1f Hz",
                 self.spn_window.value(), self.spn_gain.value(),
@@ -2232,6 +2285,26 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("SCOS — Speckle Contrast Optical Spectroscopy")
             self.camera.set_trigger(False, self.spn_trigger_delay.value())
 
+    def _upload_arduino_at_launch(self) -> None:
+        """External Trigger was ticked when the app was last closed: send the
+        program again now. Otherwise the Arduino runs whatever program was
+        last put on it — on the rig on 2026-10-22 someone else's: frames every
+        100 ms while the results file said 20 Hz. Real camera only: playback
+        has no Arduino. If it fails, _on_arduino_done unticks the box and says
+        so, as it does for a tick by hand."""
+        if not self.chk_trigger.isChecked() or not self._has_real_camera():
+            return
+        logger.info("External Trigger was on when the app was last closed — "
+                    "sending the Arduino program again")
+        self._upload_arduino()
+
+    def _arduino_pending(self) -> bool:
+        """True while an Arduino program is being sent, or is about to be (the
+        1 s wait after an exposure or frame-rate change)."""
+        return (self._arduino_debounce.isActive()
+                or (self._arduino_thread is not None
+                    and self._arduino_thread.isRunning()))
+
     def _schedule_arduino_reupload(self):
         """Re-upload Arduino sketch if external trigger is active (debounced)."""
         if self.chk_trigger.isChecked():
@@ -2258,11 +2331,18 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Arduino: connecting…")
 
     def _on_arduino_done(self, ok: bool, msg: str):
+        self._reset_frame_timing()      # the pace changes to the Arduino's
         if ok:
             logger.info("Arduino upload succeeded: %s", msg)
         else:
             logger.error("Arduino upload failed: %s", msg)
         self.chk_trigger.setEnabled(True)
+        if ok and not self.chk_trigger.isChecked():
+            # Unticked while the program was on its way (a refused Start SCOS
+            # or Stop Video unlocks the box): the trigger stays off.
+            logger.info("Arduino program sent, but External Trigger was "
+                        "unticked meanwhile — the trigger stays off")
+            return
         if ok:
             exp = self.spn_exposure.value()
             fps = self.spn_fps.value()
@@ -2574,6 +2654,8 @@ class MainWindow(QMainWindow):
                         "the camera's image area changed", self._frames_wrong_size)
             self._frames_wrong_size = 0
 
+        self._check_frame_timing(t_capture)
+
         # End-of-session laser-off check (E3): grab the first frame that
         # survives the stale-frame and size guards above, i.e. the first one
         # genuinely captured after the operator confirmed the laser was
@@ -2865,6 +2947,131 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"{msg} (at {time.strftime('%H:%M:%S')})")
 
     # ------------------------------------------------------------------
+    # Frame timing vs the set frame rate (rig finding 2026-10-22)
+    # ------------------------------------------------------------------
+
+    # Seconds of capture times the check judges at once; the median time
+    # between frames in it is the camera's real period, unmoved by a lost
+    # frame or a clock jitter here and there.
+    _RATE_CHECK_SPAN_S = 3.0
+    # How far the measured rate may be from the set one. The Arduino times
+    # its pulses in whole milliseconds, which moves the real rate by up to
+    # 4.8 % below 118 Hz (20 Hz: 0 %); every mismatch seen or expected —
+    # a stale Arduino program (100 ms instead of 50), an exposure too long
+    # for the rate, a rate the camera cannot reach — is far larger.
+    _RATE_TOLERANCE = 0.05
+    # After a reset, frames captured up to this long after it are left out:
+    # the camera may be restarting, and older frames still wait in Qt's queue.
+    _RATE_SETTLE_S = 1.0
+
+    def _reset_frame_timing(self, *_args, rearm: bool = True) -> None:
+        """Start the frame-timing check over — after anything that changes the
+        camera's pace or restarts it. Frames captured before now + a second
+        are ignored: capture times are on the monotonic scale, so this holds
+        whichever clock stamped them and however many are still queued.
+
+        rearm=False (state changes): a wrong rate that lasts through a run is
+        warned about once, not again in every phase — a settings change, the
+        Arduino's answer, Cut/Full Image or a recovered rate re-arm it."""
+        self._rate_times.clear()
+        self._rate_ignore_before = time.monotonic() + self._RATE_SETTLE_S
+        if rearm:
+            self._rate_warned = False
+        self._rate_ok_logged = False
+
+    def _check_frame_timing(self, t_capture: float) -> None:
+        """Warn when frames arrive at another rate than the Frame Rate field —
+        the value the results file and the frames folder name record. Causes:
+        a stale Arduino program, a loose trigger wire, an exposure too long
+        for the rate (the camera skips pulses — invisible to the lost-frame
+        count, a skipped pulse never becomes a frame), or a rate the camera
+        cannot reach. Not during the dark calibration (maximum rate on
+        purpose), in playback (the PC sets the pace) or while the Arduino
+        program is on its way."""
+        if (self._state in (State.IDLE, State.DARK_CAL) or self._is_playback()
+                or self._arduino_pending() or t_capture < self._rate_ignore_before):
+            return
+        times = self._rate_times
+        if times and t_capture <= times[-1]:
+            return
+        times.append(t_capture)
+        while len(times) > 2 and t_capture - times[1] >= self._RATE_CHECK_SPAN_S:
+            times.popleft()
+        if t_capture - times[0] < self._RATE_CHECK_SPAN_S:
+            return
+        set_hz = float(self.spn_fps.value())
+        measured_hz = 1.0 / float(np.median(np.diff(np.asarray(times))))
+        if abs(measured_hz / set_hz - 1.0) <= self._RATE_TOLERANCE:
+            if self._rate_warned:
+                logger.info("Frame timing back to the set rate: %.2f Hz measured, "
+                            "%g Hz set", measured_hz, set_hz)
+            elif not self._rate_ok_logged:
+                logger.info("Frame timing OK: %.2f Hz measured, %g Hz set",
+                            measured_hz, set_hz)
+            self._rate_warned = False
+            self._rate_ok_logged = True
+            return
+        # Not while a modal dialog is up (laser prompts, the red laser
+        # window): the warning would sit over it. It comes with the next
+        # frame after the dialog closes.
+        if self._rate_warned or QApplication.activeModalWidget() is not None:
+            return
+        self._rate_warned = True
+        self._warn_frame_timing(measured_hz, set_hz)
+
+    def _warn_frame_timing(self, measured_hz: float, set_hz: float) -> None:
+        # Fewer frames than set has more causes than more frames: lost frames,
+        # a long exposure or a loose wire can only slow the pace down.
+        slower = measured_hz < set_hz
+        if self.chk_trigger.isChecked():
+            lines = ["External Trigger is on, so the Arduino sets the pace. Likely causes:",
+                     "→ the Arduino runs an old program — untick and tick External "
+                     "Trigger to send it again;"]
+            if slower:
+                lines += ["→ the exposure is too long for this frame rate — the "
+                          "camera then skips pulses;",
+                          "→ the trigger wire (Arduino Pin 7 → Basler Line2) is loose;"]
+        elif slower:
+            lines = ["The camera cannot keep this rate. Likely causes:",
+                     "→ the exposure is too long for this frame rate;",
+                     "→ the image is too large for the USB link at this rate — "
+                     "lower the frame rate or use Cut Image;"]
+        else:
+            lines = ["The camera runs faster than set: its frame-rate limit is "
+                     "off — stop and start the video again."]
+        if slower:
+            lines.append("→ frames are lost between the camera and the PC — then "
+                         "the status bar also shows \"Camera: N frame(s) lost\". "
+                         "Without that message, the missing frames were never taken.")
+        causes = "\n".join(lines)
+        during_run = self._state in self._RUN_STATES
+        msg = (f"Frames arrive at {measured_hz:.1f} Hz (one every "
+               f"{1000.0 / measured_hz:.0f} ms), but Frame Rate is set to "
+               f"{set_hz:g} Hz — the results would record {set_hz:g} Hz.\n\n"
+               f"{causes}")
+        if during_run:
+            msg += "\n\nThe run goes on. Stop SCOS if the rate matters for it."
+        logger.warning("Frame timing: %.2f Hz measured, %g Hz set (state %s)",
+                       measured_hz, set_hz, self._state.name)
+        self.status.showMessage(
+            f"Frame timing: {measured_hz:.1f} Hz measured, {set_hz:g} Hz set "
+            f"(at {time.strftime('%H:%M:%S')})")
+        self._show_frame_timing_window(msg)
+
+    def _show_frame_timing_window(self, msg: str) -> None:
+        """Non-modal, so the run and the frames keep going behind it; one
+        window, updated, however often the warning comes back."""
+        box = self._rate_box
+        if box is None:
+            box = QMessageBox(QMessageBox.Icon.Warning, "Frame Rate Mismatch", "",
+                              QMessageBox.StandardButton.Ok, self)
+            box.setWindowModality(Qt.WindowModality.NonModal)
+            self._rate_box = box
+        box.setText(msg)
+        box.show()
+        box.raise_()
+
+    # ------------------------------------------------------------------
     # G[DU/e] resolution — supervisor's rule, 2026-09-22
     # ------------------------------------------------------------------
 
@@ -3032,6 +3239,7 @@ class MainWindow(QMainWindow):
         crop follow), and the Size label."""
         self._camera_crop = crop
         self._frames_wrong_size = 0
+        self._reset_frame_timing()      # the camera restarted for the crop
         self.image_widget.set_camera_crop(crop)
         if crop.is_full_sensor:
             self.lbl_size.setText(f"Size : {crop.width}×{crop.height}")

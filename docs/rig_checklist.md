@@ -212,6 +212,17 @@ recomputed from the saved files = the results file exactly (now `tools/check_sav
 rig. R8d (Vika's script) open — message sent with the path. Light weak that day: ⟨I⟩ ≈ 33 DU
 (≈ 114 on 2026-10-08, same probe and settings).
 
+### R9 · Arduino program at launch + frame-timing warning (written 2026-10-25, todo Done item 60)
+
+Needs the Arduino plugged in. A few minutes, no subject, laser off.
+
+| | Do | Expect | If not |
+|---|---|---|---|
+| ☐ R9a | Tick **External Trigger**, wait for "trigger pulses active", close the app, launch it again | Right after the window opens: "Arduino: connecting…", then within ≈ 10–20 s (compile + upload) "Arduino: trigger pulses active". `app.log`: "External Trigger was on when the app was last closed — sending the Arduino program again" | "Arduino Upload" pop-up → copy its message (the box unticks itself) |
+| ☐ R9b | Relaunch once more and click **Start Video** at once, then **Start SCOS** before the upload ends | Video runs (on the camera's own timing); `app.log` "Start Video with the trigger off until the Arduino program is sent". Start SCOS → "Arduino Not Ready", nothing starts. When the upload ends: "Trigger mode → On" in `app.log`, FPS ≈ 20 | Copy the log lines and the time |
+| ☐ R9c | Preview with the trigger on, 20 Hz, for 10 s | No "Frame Rate Mismatch" window; `app.log` "Frame timing OK: 20.0x Hz measured, 20 Hz set" | Copy the window's text |
+| ☐ R9d | Untick External Trigger; set **Exposure 60 ms** (FPS stays 20); wait 10 s; then Exposure back to **8 ms** | "Frame Rate Mismatch" within ≈ 5 s: frames at ≈ 16 Hz (the camera cannot take 20 frames of 60 ms per second), causes for the trigger off. After 8 ms: `app.log` "Frame timing back to the set rate" | No window → copy `app.log` from the change on |
+
 ---
 
 ## What to bring back
