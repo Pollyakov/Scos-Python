@@ -195,10 +195,22 @@ on this PC: the disk writes ≈ 200 full frames per second, so nothing should be
 
 | | Do | Expect | If not |
 |---|---|---|---|
-| ☐ R8a | Cut Image, Dark/Bright **600**, **Measuring duration 1 min** (unlimited counts as 4 h and is refused on the full frame), tick **Save Frames**, Start SCOS | No "Not Enough Disk Space". `app.log`: "Save Frames: N frames of W×H need X GB (… with the margin); … GB free" and "Saving frames → …\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU" — the **BL100** is the camera's black level | "Not Enough Disk Space" → the numbers it shows; "Cannot Save Frames" (path too long) → choose an output folder nearer C:\ |
-| ☐ R8b | Let it run to the end; watch the status bar | **No** "frame(s) could not be saved" | Copy the line and the time |
-| ☐ R8c | In the session folder | `Frames\` with three folders and `frame_times.csv`; `…_dark` and `…_bright` hold **600** files each, the measurement folder ≈ 1200 (20 Hz × 60 s, plus the normalization seconds). `check_session.py` as usual; in the results file `metadata`: `frames_saved_*` = those counts, `frames_not_saved_*` = 0 | Copy the counts |
+| ✅ R8a | Cut Image, Dark/Bright **600**, **Measuring duration 1 min** (unlimited counts as 4 h and is refused on the full frame), tick **Save Frames**, Start SCOS | No "Not Enough Disk Space". `app.log`: "Save Frames: N frames of W×H need X GB (… with the margin); … GB free" and "Saving frames → …\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU" — the **BL100** is the camera's black level | "Not Enough Disk Space" → the numbers it shows; "Cannot Save Frames" (path too long) → choose an output folder nearer C:\ |
+| ✅ R8b | Let it run to the end; watch the status bar | **No** "frame(s) could not be saved" | Copy the line and the time |
+| ✅ R8c | In the session folder | `Frames\` with three folders and `frame_times.csv`; `…_dark` and `…_bright` hold **600** files each, the measurement folder ≈ 1200 (20 Hz × 60 s, plus the normalization seconds). `check_session.py` as usual; in the results file `metadata`: `frames_saved_*` = those counts, `frames_not_saved_*` = 0. Then `venv\Scripts\python.exe tools/check_saved_frames.py "<session folder>"` (≈ 1 min): 0 NOT OK | Copy the counts / the whole output |
 | ☐ R8d | *(At home, or Vika.)* Her script on the measurement folder: `SCOSvsTime_WithNoiseSubtraction_Ver2('<…>\Frames\expT8ms_Gain8dB_FR20Hz_BL100DU', [], 7, false, mask)` with `mask = logical(h5read('<session>\Calibration.h5','/dark/mask'))'` (transposed: h5read returns it the other way round); then `venv\Scripts\python.exe tools/compare_with_matlab.py "<session folder>"` | All frames matched, "the same" order; raw κ² within ≈ 0.5 %; corrected κ² close but not identical — her spVar comes from the first 600 measurement frames, the app's from the bright frames | Copy the whole output |
+
+**Rig, 2026-10-22 — R8a–c passed** (camera a2A1920-160umPRO, SN 40513592; session
+`TestKsenia\scos_20261022_165057`, cut 500 × 495, 1 min, 1.2 GB): "Save Frames: 2400 frames of
+500x495 need 1.2 GB (6.4 GB with the margin); 173.5 GB free"; saved dark 600, bright 600,
+measurement 1301, not saved 0 (the dark ones at 124 fps); `check_session.py` 0 NOT OK, time steps
+50.01 ms, κ²_corr ≤ 0: 0 of 1300. Files: uint16, uncompressed, 12-bit values unshifted, longest
+path 173 characters; all 1300 `timeVec` points have their file; file times rise in every folder;
+dark/bright means rebuilt from the saved files = `Calibration.h5` (≤ 6 × 10⁻⁶ DU); the app's κ²
+recomputed from the saved files = the results file exactly (now `tools/check_saved_frames.py`: 20 OK,
+0 NOT OK, 77 s). Full-frame Save Frames not run on the
+rig. R8d (Vika's script) open — message sent with the path. Light weak that day: ⟨I⟩ ≈ 33 DU
+(≈ 114 on 2026-10-08, same probe and settings).
 
 ---
 

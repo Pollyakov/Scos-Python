@@ -93,7 +93,7 @@ ties every file to its time, so the files can be matched to `timeVec` one to one
 | 4 | Rehearsal with frames on: file counts = calibration frames and `timeVec`; then replay the saved session with `--mock-folder` | 45 min — ✅ `tools/rehearsal.py --save-frames` (600 + 600, cut, 40 s: all checks pass). **Found:** the replay ran with default settings and a fixed ×64 scale — playback now reads expT/Gain/FR/BL from the folder name and the scale from the frames. **Found:** Windows' 260-character path limit cost a session every bright frame — names shortened, too-long paths refused |
 | 5 | **MATLAB check here:** run her script on a saved session, compare κ² with the app's results file | 45 min — ✅ (below) |
 | 6 | Docs (CLAUDE.md, rig checklist, todo) | 30 min — ✅ CLAUDE.md note, `rig_checklist.md` R8, `expectations.md` §8, todo Done item 58 |
-| 7 | On the rig: one short session with frames on (cut and full) | on the rig |
+| 7 | On the rig: one short session with frames on (cut and full) | on the rig — ✅ cut, 2026-10-22 (`rig_checklist.md` R8, session `scos_20261022_165057`: 600 + 600 + 1301 saved, 0 skipped; rerun on the files = results file exactly). Full frame not run on the rig |
 
 Total ≈ 5.5 h of work before the rig.
 

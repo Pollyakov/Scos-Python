@@ -152,6 +152,13 @@ plan decision D3)*. Message, ready to send:
 calibration groups (cut rehearsal, crop 354 × 354 at (1039, 508)), 2026-10-11 — that is where
 the `int64` rounding was found.
 
+**20. What ⟨I⟩ do you expect on the rig?** *(raised 2026-10-22; included in the Save Frames
+message with session `scos_20261022_165057`.)* With the same probe and settings (8 ms, 8 dB,
+Arduino flash 8 ms), ⟨I⟩ in the ROI was ≈ 114 DU on 2026-10-08 and ≈ 22–33 DU on 2026-10-22 (camera
+SN 40513592 instead of 40075248 — same sensor, G 0.931 vs 0.956). At 33 DU shot noise (G/⟨I⟩ ≈ 0.028)
+is most of raw κ² (0.033), so corrected κ² (0.0017) is a small remainder, sensitive to small errors
+in G or the noise terms. Is ≈ 30 DU acceptable, or should the laser power / fiber be checked?
+
 ---
 
 ## Notes on where these came from

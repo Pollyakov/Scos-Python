@@ -256,7 +256,8 @@ named `Basler_<model>__<SN>__<index>.tiff`. Rules found in her code that keep it
   the frames (`FolderMockCamera._pixel_layout`: ×64 Pylon 10-bit, ×16, or ×1 as saved).
 Checked 2026-10-21: `tools/rehearsal.py --save-frames`; her script on a saved session —
 same 1250 frames in the same order, raw κ² within 0.05 %; the app's own rerun bit-identical
-(`tools/compare_with_matlab.py`). Rig check: `rig_checklist.md` R8.
+(`tools/compare_with_matlab.py`). Rig check: `rig_checklist.md` R8 — passed 2026-10-22; check any
+saved session with `tools/check_saved_frames.py "<session>"` before it goes to Vika.
 
 IMPORTANT: the opening dialogs follow `docs/SCOS_protocol.md:11-17` and their order is
 part of the protocol, not a UI preference: G[DU/e] from the table, then the output folder
