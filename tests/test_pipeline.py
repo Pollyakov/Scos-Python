@@ -935,3 +935,53 @@ class TestDropOldestQueueClear:
         q.clear()
         assert done.wait(1.0)
         assert q.dropped_count == 0
+
+
+# ---------------------------------------------------------------------------
+# max_frames_held — the frames saved at Stop SCOS that can have no result
+# (the --save-frames rehearsal, 2026-10-27: 26 with 3 workers, not ≤ 20)
+# ---------------------------------------------------------------------------
+
+class TestMaxFramesHeld:
+
+    @pytest.mark.parametrize("n_workers", [1, 3])
+    def test_a_stalled_pipeline_holds_exactly_max_frames_held(self, n_workers):
+        # Workers stalled: the camera thread keeps handing frames to frame_sink
+        # until the queue is full and it blocks in put(). Every frame sunk up to
+        # then is saved without a result yet - the most that can be.
+        proc = _BlockingProcessor()
+        pipeline = RealtimePipeline(proc, n_workers=n_workers)
+        sunk = []
+        pipeline.start()
+        pipeline.enable_intake(np.ones((8, 8), bool), put_timeout_s=30.0,
+                               frame_sink=lambda f, tc, t: sunk.append(t))
+        frame = np.zeros((8, 8), dtype=np.uint16)
+
+        def camera():
+            for i in range(pipeline.max_frames_held + 10):
+                if not pipeline.intake_enabled:
+                    return
+                pipeline.on_frame(frame, float(i))
+
+        cam = threading.Thread(target=camera, daemon=True)
+        cam.start()
+        try:
+            deadline = time.monotonic() + 10.0
+            n = -1
+            while time.monotonic() < deadline:     # wait until the count stops
+                time.sleep(0.2)
+                if len(sunk) == n:
+                    break
+                n = len(sunk)
+            assert len(sunk) == pipeline.max_frames_held == 20 + 2 * n_workers + 2
+        finally:
+            pipeline.disable_intake()
+            proc.release()
+            cam.join(10)
+            pipeline.stop()
+            assert pipeline.wait(10000)
+
+    def test_worst_case_is_the_most_workers_allowed(self):
+        from core.pipeline import MAX_WORKERS, WORST_CASE_FRAMES_HELD
+        assert WORST_CASE_FRAMES_HELD == RealtimePipeline(
+            _MockProcessor(), n_workers=MAX_WORKERS).max_frames_held

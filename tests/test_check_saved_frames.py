@@ -33,10 +33,11 @@ def _circle():
     return (xx - 22) ** 2 + (yy - 20) ** 2 <= 15 ** 2
 
 
-def _session(folder, *, black_level=100.0, name=NAME, not_saved=0):
+def _session(folder, *, black_level=100.0, name=NAME, not_saved=0,
+             no_result=(N_MEAS - 1,), dropped=0):
     """A finished Save Frames session: N_CAL dark + N_CAL bright frames, N_MEAS
-    measurement frames of which the last one has no result (still queued at
-    Stop SCOS)."""
+    measurement frames; the ones in `no_result` get no result (by default the
+    last one, still queued at Stop SCOS)."""
     rng = np.random.default_rng(7)
     frame = lambda level: rng.integers(level - 60, level + 60, SHAPE).astype(np.uint16)
     writer = FrameWriter(folder / FRAMES_DIRNAME, name, MODEL, SN)
@@ -71,9 +72,11 @@ def _session(folder, *, black_level=100.0, name=NAME, not_saved=0):
     proc.bright_var = sp_var.astype(np.float32).astype(np.float64)
     proc.set_roi(shrink_mask_for_window(mask, WINDOW))
     meta = {"camera_sn": SN, "camera_black_level": black_level,
-            "gain_du_per_e": proc.resolve_gain(), "frames_dropped_queue": 0}
+            "gain_du_per_e": proc.resolve_gain(), "frames_dropped_queue": dropped}
     rec = HDF5Recorder(folder / RESULTS_FILENAME, meta, dict(PARAMS))
-    for i, a in enumerate(meas[:-1]):
+    for i, a in enumerate(meas):
+        if i in no_result:
+            continue
         raw, corr, mean_i = proc.process(a, None)
         rec.append(0.05 * i, raw, corr, mean_i)
     rec.set_metadata(frames_folder=f"{FRAMES_DIRNAME}/{name}",
@@ -107,7 +110,8 @@ def test_good_session_passes_every_check(tmp_path, capsys):
     assert "[NOT OK]" not in out and "[CHECK " not in out
     for label in ("black level in name", "dark files", "measurement files",
                   "dark = calibration", "measurement format", "measurement file times",
-                  "frame_times rows", "timeVec with a frame", "frames without result",
+                  "frame_times rows", "timeVec with a frame",
+                  "frames without result, mid-run", "frames without result, at end",
                   "dark mean", "bright mean", "k2 recomputed"):
         assert _verdict(out, label) == "OK", label
     assert f"{N_MEAS - 1} frames; raw 0.0e+00, corrected 0.0e+00" in out
@@ -175,6 +179,33 @@ def test_skipped_frames_reported(tmp_path, capsys):
     assert _verdict(out, "measurement not saved") == "NOT OK"
 
 
+def test_result_missing_mid_run(tmp_path, capsys):
+    # A frame in the middle with no result and nothing dropped: the saved
+    # files no longer line up with the results one for one.
+    _session(tmp_path, no_result=(3, N_MEAS - 1))
+    code, out = _run(tmp_path, capsys)
+    assert code == 1
+    assert _verdict(out, "frames without result, mid-run") == "NOT OK"
+    assert _verdict(out, "frames without result, at end") == "OK"
+
+
+def test_result_missing_mid_run_when_dropped(tmp_path, capsys):
+    # The same gap is expected when the queue dropped a frame.
+    _session(tmp_path, no_result=(3, N_MEAS - 1), dropped=1)
+    code, out = _run(tmp_path, capsys)
+    assert _verdict(out, "frames without result, mid-run") == "OK", out
+
+
+def test_long_tail_without_result(tmp_path, capsys):
+    # A pipeline full at Stop SCOS (rehearsal 2026-10-27: 26 with 3 workers)
+    # leaves many trailing frames without a result — fine, not a gap.
+    _session(tmp_path, no_result=tuple(range(4, N_MEAS)))
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert _verdict(out, "frames without result, mid-run") == "OK"
+    assert _verdict(out, "frames without result, at end") == "OK"
+
+
 def test_compressed_file(tmp_path, capsys):
     _session(tmp_path)
     path = _files(tmp_path)[0]
@@ -191,3 +222,11 @@ def test_not_a_frames_session(tmp_path, capsys):
     code, out = _run(tmp_path, capsys)
     assert code == 2
     assert "Not a session folder with saved frames" in out
+
+
+def test_tail_limit_covers_a_full_pipeline():
+    # The test sessions are too short to fill the pipeline, so the limit is
+    # checked against it directly: the most workers, + 1 for the auto-stop.
+    from core.pipeline import MAX_WORKERS, RealtimePipeline
+    full = RealtimePipeline(None, n_workers=MAX_WORKERS).max_frames_held
+    assert check_saved_frames.TAIL_LIMIT == full + 1 == 39

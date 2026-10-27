@@ -40,6 +40,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Frames waiting for a worker; a full queue blocks the camera thread.
+INPUT_QUEUE_SIZE = 20
+# The "Processing workers" spinbox's maximum. WORST_CASE_FRAMES_HELD follows it.
+MAX_WORKERS = 8
+
+
+def _frames_held(queue_size: int, max_inflight: int) -> int:
+    """Most frames the pipeline can hold without a result yet: the queue, the
+    frames handed to the workers, one the dispatcher has taken off the queue
+    while it waits for a worker slot, and one the camera thread has already
+    given to frame_sink while it waits for room in the queue."""
+    return queue_size + max_inflight + 2
+
+
+# For a session read back from disk, where the worker count is not recorded.
+WORST_CASE_FRAMES_HELD = _frames_held(INPUT_QUEUE_SIZE, 2 * MAX_WORKERS)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -216,14 +233,15 @@ class RealtimePipeline(QThread):
         super().__init__(parent)
         self._processor = processor
         self._n_workers = n_workers
-        self._input_q   = _DropOldestQueue(maxsize=20)
+        self._input_q   = _DropOldestQueue(maxsize=INPUT_QUEUE_SIZE)
         self._inflight  : collections.deque = collections.deque()
         self._inf_cond  = threading.Condition()
         # Caps frames submitted-but-not-yet-collected. Default: enough for every
         # worker to have one task running plus one queued, so a worker never sits
         # idle waiting for the dispatcher — without letting the backlog grow
         # unbounded the way the bare ThreadPoolExecutor queue would.
-        self._inflight_sem = threading.Semaphore(max_inflight or 2 * n_workers)
+        self._max_inflight = max_inflight or 2 * n_workers
+        self._inflight_sem = threading.Semaphore(self._max_inflight)
         self._error_count = 0   # frames whose processing raised — see _emit_loop
         self._discarding  = False   # stop(discard_queued=True) was called
 
@@ -392,6 +410,13 @@ class RealtimePipeline(QThread):
     @property
     def queue_maxsize(self) -> int:
         return self._input_q.maxsize
+
+    @property
+    def max_frames_held(self) -> int:
+        """Most frames that can be inside the pipeline at once (see
+        _frames_held). At Stop SCOS up to this many saved frames have no result
+        yet; MainWindow drops results that arrive after FINISHED."""
+        return _frames_held(self._input_q.maxsize, self._max_inflight)
 
     def stop(self, *, discard_queued: bool = False) -> None:
         """Signal the pipeline to exit. Call before wait().

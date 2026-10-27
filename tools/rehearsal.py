@@ -1537,10 +1537,25 @@ def check_saved_frames(run: Run, folder: Path | None, w, cam, args) -> None:
     in_saved = np.isin(np.round(t_res, 6), np.round(t_saved, 6))
     run.check(len(t_res) > 0 and bool(in_saved.all()),
               f"every timeVec point has its saved frame ({int(in_saved.sum())}/{len(t_res)})")
-    extra = len(meas) - len(t_res)
-    run.check(0 <= extra <= 20 + int(meta.get("frames_dropped_queue", 0)),
-              f"saved measurement frames without a result: {extra} (frames still "
-              f"queued at Stop SCOS; at most the 20-frame queue + dropped)")
+    # A saved frame without a result is either one dropped from the full queue
+    # (anywhere in the run) or one still inside the pipeline at Stop SCOS (only
+    # at the end: its result arrives after FINISHED and is not used). On the
+    # rig the "Measurement Ended" prompt lets most of the tail finish; here it
+    # is answered at once, so the tail can be the whole pipeline.
+    has_result = np.isin(np.round(t_saved, 6), np.round(t_res, 6))
+    last = int(np.flatnonzero(has_result)[-1]) if has_result.any() else -1
+    middle = int((~has_result[:last + 1]).sum())
+    tail = len(meas) - (last + 1)
+    dropped = int(meta.get("frames_dropped_queue", 0))
+    run.check(middle <= dropped,
+              f"saved measurement frames without a result in the middle of the "
+              f"run: {middle} (at most the {dropped} dropped from the queue)")
+    # + 1: the result that triggers the auto-stop is not used either, and a
+    # result already sent to the GUI thread can arrive just after FINISHED.
+    held = w._scos_worker.max_frames_held + 1
+    run.check(tail <= held,
+              f"saved measurement frames without a result at the end: {tail} "
+              f"(still in the pipeline at Stop SCOS; at most {held})")
     mt = np.array([f.stat().st_mtime for f in files["measurement"]])
     run.check(len(mt) > 1 and bool(np.all(np.diff(mt) > 0)),
               "file times rise with the frame number (MATLAB sorts by them)")

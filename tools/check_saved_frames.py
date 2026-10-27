@@ -41,14 +41,17 @@ import tifffile
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.frame_writer import FRAME_TIMES_FILENAME, MAX_PATH_CHARS
+from core.pipeline import WORST_CASE_FRAMES_HELD
 from core.recorder import CALIBRATION_FILENAME, RESULTS_FILENAME
 from folder_camera import FolderMockCamera
 from processor import SCOSProcessor, shrink_mask_for_window
 from tools.check_session import CHECK, INFO, NOT_OK, OK, Report
 
 PHASES = ("dark", "bright", "measurement")
-# Frames still in the pipeline's queue at Stop SCOS are saved but get no result.
-PIPELINE_QUEUE = 20
+# Frames still in the pipeline at Stop SCOS are saved but get no result. The
+# worker count is not in the session folder, so the most it allows; + 1 for the
+# result that triggers the auto-stop or arrives just after FINISHED.
+TAIL_LIMIT = WORST_CASE_FRAMES_HELD + 1
 # Calibration.h5 stores the averages as float32: ≈ 1e-5 DU at the rig's levels.
 CAL_TOLERANCE_DU = 1e-3
 # The rerun is the same code on the same frames; anything above rounding is a
@@ -159,15 +162,22 @@ def frame_times(rep: Report, folder: Path, res: dict, files: dict) -> list[dict]
     index = {round(float(t), 6): i for i, t in enumerate(t_res)}
     meas = [r for r in rows if r["phase"] == "measurement"]
     # A row counts only if its file is really there.
-    matched = [(r, index[round(float(r["timeVec_s"]), 6)]) for r in meas
-               if r["timeVec_s"] and round(float(r["timeVec_s"]), 6) in index
-               and (folder / "Frames" / r["file"]).exists()]
+    has = [bool(r["timeVec_s"]) and round(float(r["timeVec_s"]), 6) in index
+           and (folder / "Frames" / r["file"]).exists() for r in meas]
+    matched = [(r, index[round(float(r["timeVec_s"]), 6)])
+               for r, h in zip(meas, has) if h]
     rep.row(OK if len(matched) == len(t_res) else NOT_OK, "timeVec with a frame",
             f"{len(matched)} / {len(t_res)}")
-    extra = len(meas) - len(matched)
-    allowed = PIPELINE_QUEUE + int(res["meta"].get("frames_dropped_queue", 0))
-    rep.row(OK if 0 <= extra <= allowed else CHECK, "frames without result", extra,
-            f"still queued at Stop SCOS: up to {allowed}")
+    # A frame without a result is one dropped from the full queue (anywhere in
+    # the run) or one still in the pipeline at Stop SCOS (only at the end).
+    last = max((i for i, h in enumerate(has) if h), default=-1)
+    middle = has[:last + 1].count(False)
+    tail = len(meas) - (last + 1)
+    dropped = int(res["meta"].get("frames_dropped_queue", 0))
+    rep.row(OK if middle <= dropped else NOT_OK, "frames without result, mid-run",
+            middle, f"dropped from the queue: {dropped}")
+    rep.row(OK if tail <= TAIL_LIMIT else CHECK, "frames without result, at end", tail,
+            f"still in the pipeline at Stop SCOS: up to {TAIL_LIMIT}")
     return [{"file": r["file"], "i": i} for r, i in matched]
 
 

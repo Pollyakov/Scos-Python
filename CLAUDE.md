@@ -263,6 +263,11 @@ named `Basler_<model>__<SN>__<index>.tiff`. Rules found in her code that keep it
 - 16-bit TIFFs are read as Mono12 — Mono10 frames would get the wrong G (warned in `app.log`).
 - Windows' 260-character path limit: no timestamp in the file names, and `FrameWriter`
   refuses (dialog "Cannot Save Frames") when even those paths would be too long.
+- The frames still inside the pipeline at Stop SCOS are saved but get no result (their
+  results arrive after FINISHED). On the rig the laser-off prompt lets them finish (tail 1 on
+  2026-10-22); headless the tail can be the whole pipeline, `max_frames_held` (20 + 2 ×
+  workers + 2). The checks allow that, at the end only; a gap mid-run must be a dropped frame
+  (todo Done item 62).
 - The writer has its own thread and a 40-frame queue; a full queue skips and counts, never
   waits. Start SCOS checks the free space first (`core/disk_space.py`: estimate × 1.2 +
   5 GB; "unlimited" = 4 h) and a measurement stops cleanly below 2 GB (checked every 30 s).

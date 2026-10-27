@@ -34,7 +34,7 @@ from core.session   import (BrightCalCollector, DarkCalCollector, State,
 from core.recorder  import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder,
                             write_calibration)
 from core.results_figure import save_results_figure
-from core.pipeline  import RealtimePipeline
+from core.pipeline  import MAX_WORKERS, RealtimePipeline
 from core.crop      import Crop, crop_for_circle
 from core.frame_writer import FRAMES_DIRNAME, FrameWriter, frames_folder_name
 from core import dark_light, disk_space
@@ -442,7 +442,7 @@ class MainWindow(QMainWindow):
             scos_grid, 2, 0, "Window Size:", 3, 51, 7, step=2
         )
         self.spn_workers = self._grid_int_spin(
-            scos_grid, 2, 1, "Processing workers:", 1, 8, 3, step=1
+            scos_grid, 2, 1, "Processing workers:", 1, MAX_WORKERS, 3, step=1
         )
         self.spn_duration = self._grid_spin(
             scos_grid, 3, 0, "Measuring duration (min):", 0.0, 240.0, 0.0, 1, step=1.0

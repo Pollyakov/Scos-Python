@@ -136,6 +136,17 @@ class TestMarginCoversEveryWindow:
             f"Window Size goes up to {largest}, which needs a "
             f"{largest // 2 + 1} px margin; CROP_MARGIN_PX is {CROP_MARGIN_PX}")
 
+    def test_worker_maximum_is_the_one_the_frame_checks_allow_for(self):
+        # Same pattern, for tools/check_saved_frames.py: a session folder does
+        # not record the worker count, so it allows for the most the spinbox
+        # gives (core.pipeline.WORST_CASE_FRAMES_HELD).
+        from core.pipeline import MAX_WORKERS
+        w = MainWindow(camera=_StubCamera())
+        try:
+            assert w.spn_workers.maximum() == MAX_WORKERS
+        finally:
+            w.close()
+
 
 class TestCircleMask:
 
