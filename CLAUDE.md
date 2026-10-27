@@ -235,6 +235,20 @@ Rules that keep it safe:
 - That the maximum rate gives the same dark calibration was **already checked by Vika** — no
   rig A/B test is needed (user, 2026-10-20). Rig timings 2026-10-19: 4.8 s cut, 11.9 s full.
 
+IMPORTANT: **the dark calibration stops the run when the camera is not dark** (rig
+2026-10-22: OK clicked with the laser on; user's decision 2026-10-26, todo Done item 61,
+`core/dark_light.py`). Light = ROI mean in DU minus the camera's `black_level` (none →
+skipped, recorded in `Calibration.h5` `dark/light_check`, never guessed). Limit: a 90 % drop
+from the live picture's ⟨I⟩ (last 2 s of PREVIEW, read **before** the laser prompt opens —
+the prompt keeps delivering frames), at least 2 DU; no reference → 5 DU. Each of the first
+dark frames is judged **on its own** (the Arduino keeps flashing the laser while the camera
+runs untriggered, so only some frames are lit), frames captured before OK are ignored, and the
+finished `dark_mean` is checked before anything is written. Failure: `_abandon_calibration()`
+first, then the red "Dark Calibration Stopped — Light on the Camera" window. A leaky probe's
+room light (12.7 DU on 2026-10-19) stops it too — kept as a stop until Vika answers whether a
+leak should stop or only warn (`docs/open_questions.md` 21, sent 2026-10-27). Rig check:
+`rig_checklist.md` R10.
+
 IMPORTANT: **Save Frames saves every frame the math used, in the layout Vika's MATLAB script
 reads unchanged** (`docs/Plan_Frame_Saving.md`, `core/frame_writer.py`). `<session>/Frames/`
 holds `expT8ms_Gain8dB_FR20Hz_BL100DU/` (measurement, from t = 0, handed over on the camera

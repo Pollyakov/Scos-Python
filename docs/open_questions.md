@@ -22,6 +22,9 @@ to send. One answer changed code that already existed: **11**. Stopping before t
 normalization window ends used to write no `rBFi`; it now normalizes on whatever data
 exists (todo rig-prep row 4c, implemented the same day).
 
+**Status 2026-10-27: question 21 sent** (light leaking through the probe during the dark
+calibration — stop or warn); it is in section G until she answers.
+
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
 internal engineering decision, not a scientific or spec one.
 
@@ -158,6 +161,30 @@ Arduino flash 8 ms), ⟨I⟩ in the ROI was ≈ 114 DU on 2026-10-08 and ≈ 22�
 SN 40513592 instead of 40075248 — same sensor, G 0.931 vs 0.956). At 33 DU shot noise (G/⟨I⟩ ≈ 0.028)
 is most of raw κ² (0.033), so corrected κ² (0.0017) is a small remainder, sensitive to small errors
 in G or the noise terms. Is ≈ 30 DU acceptable, or should the laser power / fiber be checked?
+
+---
+
+## G. Sent 2026-10-27 — awaiting her answer
+
+**21. Light leaking through the probe during the dark calibration — stop the run, or only
+warn?** *(raised 2026-10-26 with the laser-off check before the dark calibration, todo Done
+item 61.) **Sent 2026-10-27.*** Message as sent:
+
+> The app now checks that the camera is dark during the dark calibration (after "Please turn off
+> the laser"), and stops the run if it is not: the laser left on (rig, 22 Oct) is caught.
+> The check measures "light on the camera", so it also stops the run when room light leaks
+> through the probe — e.g. the leakier test probe on 19 Oct gave 12.7 DU above the black level
+> (a good probe in the dark: ≈ 0.5 DU). A perfectly steady leak would be subtracted correctly
+> (it is in both the dark frames and the measurement), but (1) room-light flicker adds
+> frame-to-frame variance to `var_dark` that is not in the within-frame variance — worse at
+> the maximum frame rate the dark calibration now uses; we estimated κ²_corr ≈ 1–3.5 % low on
+> 19 Oct — and (2) a leak that changes during the session (probe shifts, a light switched on)
+> changes ⟨I⟩, which can look like a change in blood flow. Should a leaking probe **stop** the
+> run (as now), or should the app only **warn** and record it? The current limits: the light
+> must fall by 90 % from the live picture before the prompt, never less than 2 DU above the black
+> level; if the live picture was already dark, 5 DU.
+
+*Until she answers, a leaking probe stops the run (user's decision, 2026-10-27).*
 
 ---
 

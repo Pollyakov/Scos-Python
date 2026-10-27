@@ -79,6 +79,11 @@ U11 — the dark calibration at the frame source's maximum rate:
            grows while the slowed GUI thread falls behind → "Qt's queue stayed
            short during the dark calibration"
 
+The dark calibration's light check (rig 2026-10-22, core/dark_light.py):
+  laser-on     playback never switches to the _dark folder — the laser left on
+           at the dark prompt → "rehearsal did not complete: the dark
+           calibration's light check stopped the run"
+
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
 rehearsal. tests/test_pipeline.py checks the hysteresis band directly.
@@ -99,7 +104,8 @@ MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "frame-text": "slowdown",
              "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal",
              "crop-xy": "normal",
-             "dark-no-restore": "normal", "dark-no-skip": "slowdown"}
+             "dark-no-restore": "normal", "dark-no-skip": "slowdown",
+             "laser-on": "normal"}
 # These test the crop, so they always run with --cut.
 NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright", "crop-xy"}
 
@@ -215,6 +221,14 @@ def apply(mutation: str) -> None:
             a["OffsetX"], a["OffsetY"] = a["OffsetY"], a["OffsetX"]
             return a
         R.crop_attrs = crop_attrs
+
+    elif mutation == "laser-on":
+        from folder_camera import FolderMockCamera
+        original = FolderMockCamera.set_playback_source
+
+        def set_playback_source(self, source):
+            return original(self, "main")
+        FolderMockCamera.set_playback_source = set_playback_source
 
     elif mutation == "dark-no-restore":
         from gui.main_window import MainWindow

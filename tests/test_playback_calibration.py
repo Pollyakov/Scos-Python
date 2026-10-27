@@ -241,6 +241,10 @@ class TestMainWindowDrivesTheSwitch:
         cam = FolderMockCamera(recording)
         cam.open()
         w = MainWindow(camera=cam)
+        # The pixel scale the app's playback auto-load sets: without it a dark
+        # frame reads 6400 DU against the folder's BL100, and the dark
+        # calibration's light check rightly stops the run.
+        w.processor.scale = float(1 << SHIFT)
         yield w
         w.close()
 

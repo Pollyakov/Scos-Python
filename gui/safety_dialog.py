@@ -1,6 +1,7 @@
 """
 Laser-safety windows: the warning at startup (todo U1), the "laser may still
-be on" warning after a failed laser-off check (U2), and the probe-removal
+be on" warning after a failed laser-off check (U2), the "camera is not dark"
+window that stops a dark calibration with light in it, and the probe-removal
 instructions shown once a measurement is saved (U2, the user's idea) — or
 once a run is stopped during the bright calibration, with the laser on.
 
@@ -208,6 +209,42 @@ def ask_continue_with_laser_on(parent: QWidget | None, measured: float,
     dialog = LaserStillOnDialog(measured, expected, parent)
     dialog.exec()
     return dialog.result() == QDialog.DialogCode.Accepted
+
+
+DARK_NOT_DARK_TITLE = "Dark Calibration Stopped — Light on the Camera"
+
+
+class DarkNotDarkDialog(_SafetyWindow):
+    """Red: the dark calibration saw light and the run was stopped (rig
+    2026-10-22; the user chose stop, not "continue anyway", 2026-10-26 — a
+    dark calibration with light in it makes every κ² of the session wrong).
+    One button: OK."""
+
+    def __init__(self, measured: float, limit: float,
+                 parent: QWidget | None = None):
+        text = _html(
+            "THE CAMERA IS NOT DARK",
+            ["Switch the laser off — check that the <b>red indicator light</b> "
+             "on the laser is <b>not lit</b>.",
+             "Check that the probe sits tight and no room light gets in.",
+             "Then click <b>Start SCOS</b> again."],
+            intro=("The dark calibration needs the laser off and no light "
+                   "reaching the camera. The laser is probably still on, or "
+                   "light is getting in: the image is "
+                   f"<b>{measured:.1f} DU</b> above the camera's black level, "
+                   f"allowed <b>&lt; {limit:.1f} DU</b>.<br>"
+                   "The run was stopped. Nothing was measured."),
+            heading_color=_THEMES["danger"]["heading"],
+        )
+        super().__init__(DARK_NOT_DARK_TITLE, text,
+                         QStyle.StandardPixmap.SP_MessageBoxWarning, "danger", parent)
+        self.ok_button = self._add_button("OK", accepts=True)
+        self._make_default(self.ok_button)
+
+
+def show_dark_not_dark(parent: QWidget | None, measured: float, limit: float) -> None:
+    """Show the red "camera is not dark" window and wait."""
+    DarkNotDarkDialog(measured, limit, parent).exec()
 
 
 # ---------------------------------------------------------------------------

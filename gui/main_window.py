@@ -37,7 +37,7 @@ from core.results_figure import save_results_figure
 from core.pipeline  import RealtimePipeline
 from core.crop      import Crop, crop_for_circle
 from core.frame_writer import FRAMES_DIRNAME, FrameWriter, frames_folder_name
-from core import disk_space
+from core import dark_light, disk_space
 from gui.image_widget import ImageWidget
 from gui.plot_widget  import PlotWidget
 # Imported as a module, not by name, so tests and tools/rehearsal.py can
@@ -227,6 +227,19 @@ class MainWindow(QMainWindow):
         self._dark_backlog_floor:   int | None   = None
         # Set when set_max_frame_rate(False) raised — see _set_dark_max_rate.
         self._frame_rate_restore_failed: bool    = False
+        # Is the camera dark for the dark calibration (core/dark_light.py)?
+        # (capture time, ⟨I⟩) of the live picture in PREVIEW, trailing
+        # _DARK_LIGHT_REF_S: the reference, read before the laser prompt opens.
+        self._preview_light: list[tuple[float, float]] = []
+        self._dark_light_black: float | None = None    # None = check skipped
+        self._dark_light_ref:   float | None = None    # live picture above it
+        self._dark_light_limit: float        = dark_light.FIXED_LIMIT_DU
+        self._dark_light_basis: str          = "fixed"
+        self._dark_light_watching: bool      = False   # first frames still checked
+        self._dark_light_after: float        = float("inf")
+        self._dark_light_t0:    float | None = None
+        self._dark_light_n:     int          = 0
+        self._dark_light_max:   float | None = None
         self._invalid_k2_reported: bool = False
         # Trailing (t, mean_i) from every result, for the end-of-session
         # laser-off check (E3). todo.md claims the last mean_i is "already
@@ -1760,7 +1773,10 @@ class MainWindow(QMainWindow):
         logger.info("Session folder created: %s", session_folder)
         self.status.showMessage(f"Session folder: {session_folder}")
 
-        # Step 2: ask user to turn off the laser
+        # Step 2: ask user to turn off the laser. The light check's reference
+        # is read first: this prompt keeps delivering frames, and they turn
+        # dark as soon as the laser goes off.
+        self._prepare_dark_light_check()
         reply = QMessageBox.question(
             self,
             "Calibration — Step 1 of 2: Dark Frames",
@@ -1790,6 +1806,9 @@ class MainWindow(QMainWindow):
         # switches folders instead (todo D6). Nothing to do for a real camera.
         self._set_playback_source("dark")
         self._flush_stale_frames("the laser was switched off")
+        # The flush goes by count; this goes by capture time, so a lit frame
+        # captured before OK can never be taken for the laser still being on.
+        self._dark_light_after = time.monotonic() + self._DARK_LIGHT_SETTLE_S
 
         # Step 4: the camera at its maximum frame rate. Dark frames depend on
         # exposure, gain, pixel format and image area, not on the spacing
@@ -2018,6 +2037,11 @@ class MainWindow(QMainWindow):
             self._abandon_calibration("Dark cal failed")
             QMessageBox.critical(self, "Dark Calibration Error", str(exc))
             return
+        # Before anything is stored or written: a laser switched on part-way
+        # through, or light steady enough to pass the first frames.
+        light_attrs = self._check_dark_mean_light(dark_mean)
+        if light_attrs is None:
+            return   # light on the camera — the run was stopped
 
         n_collected = self._dark_cal_collector.n_collected
         logger.info("Dark calibration complete — %d frames collected", n_collected)
@@ -2025,6 +2049,7 @@ class MainWindow(QMainWindow):
                       "window_size": self._dark_cal_collector.window_size}
         dark_attrs.update(self._dark_rate_record())
         dark_attrs.update(self._black_level_record())
+        dark_attrs.update(light_attrs)
         # Store in processor and rebuild float32 crops used in process()
         self.processor.dark_mean = dark_mean
         self.processor.dark_var  = dark_var
@@ -2071,6 +2096,124 @@ class MainWindow(QMainWindow):
         self._dark_cal_collector = None
         # Automatically move to bright calibration
         self._start_bright_cal()
+
+    # ------------------------------------------------------------------
+    # Is the camera dark for the dark calibration? (core/dark_light.py)
+    # ------------------------------------------------------------------
+    # Rig, 2026-10-22: OK clicked at the laser prompt with the laser on, and
+    # nothing noticed. With the trigger off the camera runs at its maximum
+    # rate while the Arduino keeps flashing the laser, so only some dark
+    # frames are lit — each of the first frames is judged on its own (the
+    # brightest counts), not their average. The finished dark_mean is checked
+    # as well, for a laser switched on part-way through. Either failure stops
+    # the run (the user's choice, 2026-10-26).
+    _DARK_LIGHT_REF_S        = 2.0   # live picture averaged before the prompt
+    _DARK_LIGHT_SETTLE_S     = 0.2   # frames captured before OK + this are ignored
+    _DARK_LIGHT_WATCH_S      = 1.0   # first dark frames checked one by one…
+    _DARK_LIGHT_WATCH_FRAMES = 10    # …at least this many
+
+    def _note_preview_light(self, t_capture: float, mean_i: float) -> None:
+        """Keep the live picture's ⟨I⟩ (DU, black level included) over the
+        last _DARK_LIGHT_REF_S — the reference for the dark calibration."""
+        light = self._preview_light
+        light.append((t_capture, mean_i))
+        cutoff = t_capture - self._DARK_LIGHT_REF_S
+        while light and light[0][0] < cutoff:
+            light.pop(0)
+
+    def _prepare_dark_light_check(self) -> None:
+        """Set the light check up for this dark calibration — before the
+        laser prompt, while the live picture still shows the laser light."""
+        self._dark_light_watching = False
+        self._dark_light_after = float("inf")
+        self._dark_light_t0 = None
+        self._dark_light_n = 0
+        self._dark_light_max = None
+        self._dark_light_ref = None
+        black = getattr(self.camera, "black_level", None)
+        self._dark_light_black = None if black is None else float(black)
+        if self._dark_light_black is None:
+            # Without the camera's offset there is no zero to measure light
+            # from (playback of a folder without BL…DU in its name; --mock-tiff).
+            logger.info("Dark calibration light check skipped — the camera "
+                        "reports no black level")
+            return
+        light = self._preview_light
+        # A reference older than its own window is not "just before the
+        # prompt" (capture times are on the monotonic scale).
+        if light and time.monotonic() - light[-1][0] <= self._DARK_LIGHT_REF_S:
+            self._dark_light_ref = (float(np.mean([v for _, v in light]))
+                                    - self._dark_light_black)
+        self._dark_light_limit, self._dark_light_basis = \
+            dark_light.light_limit(self._dark_light_ref)
+        self._dark_light_watching = True
+        ref = ("none" if self._dark_light_ref is None
+               else f"{self._dark_light_ref:.1f} DU")
+        logger.info("Dark calibration light check: live picture %s above the "
+                    "black level %.1f DU → limit %.1f DU (%s)", ref,
+                    self._dark_light_black, self._dark_light_limit,
+                    self._dark_light_basis)
+
+    def _watch_dark_light(self, du: np.ndarray, t_capture: float) -> bool:
+        """Judge one of the first dark frames. False = it was lit, and the
+        run has been stopped."""
+        light = dark_light.roi_light(du, self._mask, self._dark_light_black)
+        if self._dark_light_t0 is None:
+            self._dark_light_t0 = t_capture
+        self._dark_light_n += 1
+        if self._dark_light_max is None or light > self._dark_light_max:
+            self._dark_light_max = light
+        if light >= self._dark_light_limit:
+            self._stop_dark_cal_for_light(light, "a dark frame")
+            return False
+        if (self._dark_light_n >= self._DARK_LIGHT_WATCH_FRAMES
+                and t_capture - self._dark_light_t0 >= self._DARK_LIGHT_WATCH_S):
+            self._dark_light_watching = False
+            logger.info("Dark calibration light check: first %d frames dark — "
+                        "at most %.2f DU above the black level (limit %.1f DU)",
+                        self._dark_light_n, self._dark_light_max,
+                        self._dark_light_limit)
+        return True
+
+    def _check_dark_mean_light(self, dark_mean: np.ndarray) -> dict | None:
+        """Judge the finished dark calibration. Returns what Calibration.h5
+        keeps of the check, or None when it failed and the run was stopped."""
+        if self._dark_light_black is None:
+            return {"light_check": "skipped - no black level"}
+        mask = self._mask if (self._mask is not None
+                              and self._mask.shape == dark_mean.shape) else \
+            np.ones(dark_mean.shape, dtype=bool)
+        light = dark_light.roi_light(dark_mean, mask, self._dark_light_black)
+        if light >= self._dark_light_limit:
+            self._stop_dark_cal_for_light(light, "the dark calibration's mean")
+            return None
+        logger.info("Dark calibration light check passed — mean %.2f DU above "
+                    "the black level (limit %.1f DU, %s)", light,
+                    self._dark_light_limit, self._dark_light_basis)
+        attrs = {"light_check": "passed",
+                 "light_check_limit_du": self._dark_light_limit,
+                 "light_check_basis": self._dark_light_basis,
+                 "light_check_mean_du": light}
+        if self._dark_light_ref is not None:
+            attrs["light_check_reference_du"] = self._dark_light_ref
+        if self._dark_light_max is not None:
+            attrs["light_check_first_frames_max_du"] = self._dark_light_max
+        return attrs
+
+    def _stop_dark_cal_for_light(self, measured: float, what: str) -> None:
+        """Light on the camera during the dark calibration: stop the run.
+        Undo first, window second — see _abandon_calibration."""
+        logger.warning("Dark calibration STOPPED — %s is %.1f DU above the black "
+                       "level, limit %.1f DU (%s): laser on or light reaching "
+                       "the camera", what, measured, self._dark_light_limit,
+                       self._dark_light_basis)
+        self._dark_light_watching = False
+        self._abandon_calibration("Dark cal stopped — light on the camera")
+        try:
+            safety_dialog.show_dark_not_dark(self, measured, self._dark_light_limit)
+        except Exception:
+            # Called from a frame slot: an exception escaping it aborts the app.
+            logger.exception("The 'camera is not dark' window could not be shown")
 
     def _black_level_record(self) -> dict:
         """`camera_black_level` for the session's files: the offset the camera
@@ -2670,6 +2813,7 @@ class MainWindow(QMainWindow):
         # size, and an ROI circle's mask was rebuilt for it at Cut/Full Image.)
         if self._mask is None or self._mask.shape != frame.shape:
             self._mask = np.ones(frame.shape, dtype=bool)
+            self._preview_light.clear()     # measured over another area
             self.processor.set_roi(self._mask)
             h, w = frame.shape
             if self._camera_crop is None:
@@ -2719,6 +2863,8 @@ class MainWindow(QMainWindow):
             self.lbl_p5.setText(    f"p5   : {p5:.1f} DU")
             self.lbl_p95.setText(   f"p95  : {p95:.1f} DU")
             self._last_stats_time = now
+            if self._state == State.PREVIEW:
+                self._note_preview_light(t_capture, mean_i)
 
         # Calibration intercepts — after FPS/stats (so labels stay live) and
         # before the rate-limiter (every frame must be counted).
@@ -2727,7 +2873,11 @@ class MainWindow(QMainWindow):
         if self._state == State.DARK_CAL:
             if self._dark_cal_collector is None:
                 return   # guard: frame arrived during state transition
-            self._dark_cal_collector.add_frame(self._to_du(frame))
+            du = self._to_du(frame)
+            if self._dark_light_watching and t_capture >= self._dark_light_after:
+                if not self._watch_dark_light(du, t_capture):
+                    return   # light on the camera — the run was stopped
+            self._dark_cal_collector.add_frame(du)
             # Saved after the skip above: exactly the frames the calibration used.
             self._save_frame("dark", frame, t_capture)
             if self._dark_t_first is None:
@@ -3164,6 +3314,7 @@ class MainWindow(QMainWindow):
 
     def _on_roi_changed(self, mask: np.ndarray, circ: dict):
         self._mask = mask
+        self._preview_light.clear()     # measured over the old ROI
         self._roi_circ = circ
         self.processor.window_size = self.spn_window.value()
         self.processor.set_roi(mask)

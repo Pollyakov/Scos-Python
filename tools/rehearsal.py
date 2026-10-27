@@ -87,6 +87,12 @@ SESSION_FILES    = {"Calibration.h5", RESULTS_FILE, "rBfi_fig.png"}
 # How long preview keeps playing after Stop SCOS before Stop Video, so the K1
 # check sees displayed frames arrive after the closing message.
 CLOSING_HOLD_S   = 3.0
+# How long the live picture plays over the final ROI before Start SCOS, as an
+# operator looks at it first. The dark calibration's light check takes its
+# reference from the last 2 s of it (MainWindow._DARK_LIGHT_REF_S); the load
+# places the ROI circle the moment Start SCOS is enabled, and a new ROI drops
+# the reference measured over the old one.
+PREVIEW_HOLD_S   = 2.0
 
 # Dialog titles, as MainWindow spells them.
 T_GAIN_WARNING = "Estimated G[DU/e]"
@@ -98,6 +104,7 @@ T_LASER_ON     = "Laser May Still Be On"            # red window, U2
 T_PROBE_OK     = "Laser Is Off — Remove the Probe"  # after the save, U2
 T_PROBE_SKIP   = "Laser-Off Check Could Not Run"
 T_PROBE_FAILED = "Do Not Remove the Probe Yet"
+T_NOT_DARK     = "Dark Calibration Stopped — Light on the Camera"   # red, stops the run
 
 # The protocol's order (docs/SCOS_protocol.md:11-17; CLAUDE.md "opening
 # dialogs"). The G warning is optional — it appears only when the session's
@@ -175,6 +182,9 @@ def install_dialog_stubs(run: Run, output_root: Path) -> None:
         ("dialog",      T_PROBE_OK):      True,
         ("dialog",      T_PROBE_SKIP):    True,
         ("dialog",      T_PROBE_FAILED):  True,
+        # Only after a failed light check, which has already stopped the run;
+        # its one button is OK. A clean rehearsal never sees it.
+        ("dialog",      T_NOT_DARK):      True,
     }
     refuse = {"question": B.Cancel}   # unknown question → back out, never proceed
 
@@ -1116,14 +1126,21 @@ def rehearse(args, run: Run) -> Path | None:
             # would be refused; one minute longer than this run never cuts it short.
             w.spn_duration.setValue(np.ceil(args.measure_seconds / 60) + 1)
         scenario.before_start(w, cam, args)
+        t_look = time.monotonic()
+        pump(lambda: time.monotonic() - t_look >= PREVIEW_HOLD_S,
+             PREVIEW_HOLD_S + 10, f"{PREVIEW_HOLD_S:.0f} s of preview before Start SCOS")
 
         # startTime is written when the recorder opens, a few seconds after
         # this; it must fall between here and the checks.
         wall_start = datetime.datetime.now().replace(microsecond=0)
         print("Start SCOS")
         w.btn_start_scos.setChecked(True)
-        pump(lambda: w._state is not State.DARK_CAL and w._state is not State.PREVIEW,
-             cal_timeout, "dark calibration finished")
+        stopped_for_light = lambda: ("dialog", T_NOT_DARK) in run.dialogs
+        pump(lambda: (w._state is not State.DARK_CAL and w._state is not State.PREVIEW)
+             or stopped_for_light(), cal_timeout, "dark calibration over")
+        if stopped_for_light():
+            raise RuntimeError("the dark calibration's light check stopped the run — "
+                               "light on the camera (the numbers are in the log)")
         pump(lambda: w._state in (State.MEASURING_INIT, State.MEASURING),
              cal_timeout, "bright calibration finished")
         pump(lambda: w._state is State.MEASURING,
@@ -1261,6 +1278,17 @@ def check_dark_rate(run: Run, cam, folder: Path | None) -> None:
               f"maximum for this image = {want:.1f})")
     run.check("Dark calibration took" in _log_text(),
               "app.log has the dark calibration's rate summary")
+    # The light check: the recording's folder name gives BL100DU, the live
+    # picture before the prompt is the lit recording and the dark calibration
+    # plays the _dark folder — so it runs against the live picture and passes.
+    run.check(attrs.get("light_check") == "passed"
+              and attrs.get("light_check_basis") == "live picture",
+              f"the dark calibration's light check passed against the live picture "
+              f"(light_check = {attrs.get('light_check')}, basis = "
+              f"{attrs.get('light_check_basis')}, reference "
+              f"{attrs.get('light_check_reference_du')} DU, dark mean "
+              f"{attrs.get('light_check_mean_du')} DU, limit "
+              f"{attrs.get('light_check_limit_du')} DU)")
 
 
 def verify_outputs(run: Run, folder: Path | None, w, cam, args,
