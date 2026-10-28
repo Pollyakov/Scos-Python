@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QGroupBox, QLabel, QLineEdit, QDoubleSpinBox, QSpinBox,
     QPushButton, QCheckBox, QComboBox, QSplitter, QGridLayout, QScrollArea,
-    QStatusBar, QFileDialog, QMessageBox
+    QStatusBar, QFileDialog, QMessageBox, QFrame
 )
 from PyQt6.QtCore import Qt, QEvent, QEventLoop, QSize, QTimer, QThread, pyqtSignal
 import scipy.io
@@ -491,14 +491,30 @@ class MainWindow(QMainWindow):
         # ~340 GB/hour at 20 Hz, so Start SCOS checks the free space first.
         # Off at every launch — deliberately not a remembered setting: a box
         # that fills a disk in an hour should never be on without being ticked.
+        # Bigger, inside a coloured border, and "Frames will be saved" shows
+        # while it is ticked: a plain checkbox was missed in two rig sessions
+        # running (todo U12, 2026-10-22).
+        self.save_frames_strip = QFrame()
+        self.save_frames_strip.setObjectName("saveFramesStrip")
+        self.save_frames_strip.setStyleSheet(
+            "QFrame#saveFramesStrip { border:2px solid #d39e00; border-radius:4px; }")
+        strip_layout = QHBoxLayout(self.save_frames_strip)
+        strip_layout.setContentsMargins(8, 4, 8, 4)
         self.chk_save_frames = QCheckBox("Save Frames")
+        self.chk_save_frames.setStyleSheet("font-size:14px;")
         self.chk_save_frames.setChecked(False)
         self.chk_save_frames.setToolTip(
             "Save every raw frame (dark, bright and measurement) as TIFF files\n"
             "in the session's Frames folder. Full frame: ~340 GB per hour at\n"
             "20 Hz — Start SCOS checks the free disk space first."
         )
-        layout.addWidget(self.chk_save_frames)
+        self.lbl_save_frames = QLabel("Frames will be saved")
+        self.lbl_save_frames.setStyleSheet("font-size:11px; font-style:italic;")
+        self.lbl_save_frames.setVisible(False)
+        self.chk_save_frames.toggled.connect(self.lbl_save_frames.setVisible)
+        strip_layout.addWidget(self.chk_save_frames)
+        strip_layout.addWidget(self.lbl_save_frames, 1)
+        layout.addWidget(self.save_frames_strip)
 
         # --- Status indicator ---
         status_group = QGroupBox("Status")

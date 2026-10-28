@@ -157,6 +157,34 @@ class TestCheckbox:
                        for k in win._current_settings())
 
 
+class TestEasyToSee:
+    """todo U12 — the operator forgot the tick in two rig sessions running
+    (2026-10-22): a bigger "Save Frames" box inside a coloured border, and
+    "Frames will be saved" next to it while it is ticked (user, 2026-10-28)."""
+
+    def test_unticked_at_launch_shows_only_the_box(self, cam, dialogs):
+        w = MainWindow(camera=cam)
+        try:
+            assert w.chk_save_frames.text() == "Save Frames"
+            assert "font-size:14px" in w.chk_save_frames.styleSheet()   # was the default size
+            assert "border:2px solid" in w.save_frames_strip.styleSheet()
+            assert w.lbl_save_frames.isHidden()
+            assert w.btn_start_scos.text() == "Start SCOS"
+        finally:
+            w.close()
+
+    def test_ticking_shows_frames_will_be_saved(self, cam, dialogs):
+        w = MainWindow(camera=cam)
+        try:
+            w.chk_save_frames.setChecked(True)
+            assert not w.lbl_save_frames.isHidden()
+            assert w.lbl_save_frames.text() == "Frames will be saved"
+            w.chk_save_frames.setChecked(False)
+            assert w.lbl_save_frames.isHidden()
+        finally:
+            w.close()
+
+
 class TestCalibrationFrames:
     def test_dark_and_bright_frames_saved_in_their_folders(self, win, cam, monkeypatch):
         monkeypatch.setattr(win, "_enable_measurement_intake", lambda mask: None)
