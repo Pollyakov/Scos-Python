@@ -1,7 +1,8 @@
 """
 Laser-safety windows: the warning at startup (todo U1), the "laser may still
 be on" warning after a failed laser-off check (U2), the "camera is not dark"
-window that stops a dark calibration with light in it, and the probe-removal
+window that stops a dark calibration with light in it, the amber "light leak"
+window that lets the operator go on with a steady leak, and the probe-removal
 instructions shown once a measurement is saved (U2, the user's idea) — or
 once a run is stopped during the bright calibration, with the laser on.
 
@@ -245,6 +246,48 @@ class DarkNotDarkDialog(_SafetyWindow):
 def show_dark_not_dark(parent: QWidget | None, measured: float, limit: float) -> None:
     """Show the red "camera is not dark" window and wait."""
     DarkNotDarkDialog(measured, limit, parent).exec()
+
+
+DARK_LEAK_TITLE = "Light Leak During the Dark Calibration"
+LEAK_CONTINUE_TEXT = "Continue"
+LEAK_STOP_TEXT = "Stop"
+
+
+class DarkLeakDialog(_SafetyWindow):
+    """Amber: steady light reached the camera during the dark calibration
+    (Vika, 2026-10-28 — a steady leak leaves the measurement valid, the
+    operator decides). accept() = "Continue"; "Stop", Enter, Escape and the X
+    all stop the run."""
+
+    def __init__(self, measured: float, limit: float,
+                 parent: QWidget | None = None):
+        text = _html(
+            "Some light reaches the camera",
+            ["<b>Stop</b> — seat the probe tighter or dim the room light, then "
+             "click <b>Start SCOS</b> again.",
+             "<b>Continue</b> — measure with this leak. It is recorded in the "
+             "session's files."],
+            intro=("The laser is off, but steady light reached the camera "
+                   "during the dark calibration: the image is "
+                   f"<b>{measured:.1f} DU</b> above the camera's black level, "
+                   f"a sealed probe gives <b>&lt; {limit:.1f} DU</b>.<br>"
+                   "The light does not flicker, so the measurement stays "
+                   "valid, but it is not perfect."),
+            heading_color=_THEMES["caution"]["heading"],
+        )
+        super().__init__(DARK_LEAK_TITLE, text,
+                         QStyle.StandardPixmap.SP_MessageBoxWarning, "caution", parent)
+        self.continue_button = self._add_button(LEAK_CONTINUE_TEXT, accepts=True)
+        self.stop_button = self._add_button(LEAK_STOP_TEXT, accepts=False)
+        self._make_default(self.stop_button)
+
+
+def ask_continue_with_leak(parent: QWidget | None, measured: float,
+                           limit: float) -> bool:
+    """True = "Continue"; False = stop the run."""
+    dialog = DarkLeakDialog(measured, limit, parent)
+    dialog.exec()
+    return dialog.result() == QDialog.DialogCode.Accepted
 
 
 # ---------------------------------------------------------------------------

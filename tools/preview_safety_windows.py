@@ -10,7 +10,8 @@ their text or layout and click through them:
 (From Claude Code's `!` prompt: `! venv/Scripts/python.exe tools/preview_safety_windows.py`.)
 
 Order: the startup warning, the red "laser may still be on" window (with the
-numbers from the first rig session, 114.5 vs 11.4 DU), then the four
+numbers from the first rig session, 114.5 vs 11.4 DU), the amber light-leak
+window (a steady 10 DU leak against a 3.3 DU limit), then the four
 probe-removal windows — passed, skipped, failed, cancelled. Each answer is
 printed. Nothing is measured or saved.
 """
@@ -49,6 +50,8 @@ def main() -> None:
     print("laser still on:",
           "Continue anyway" if s.ask_continue_with_laser_on(None, 114.5, 11.4)
           else "Check again")
+    print("light leak:",
+          "Continue" if s.ask_continue_with_leak(None, 10.0, 3.3) else "Stop")
     for outcome in (s.PROBE_PASSED, s.PROBE_SKIPPED, s.PROBE_FAILED, s.PROBE_CANCELLED):
         print("probe window:", outcome)
         s.show_probe_removal(None, outcome)

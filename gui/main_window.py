@@ -235,11 +235,19 @@ class MainWindow(QMainWindow):
         self._dark_light_ref:   float | None = None    # live picture above it
         self._dark_light_limit: float        = dark_light.FIXED_LIMIT_DU
         self._dark_light_basis: str          = "fixed"
+        self._dark_light_ceiling: float | None = None  # at or above = the laser
         self._dark_light_watching: bool      = False   # first frames still checked
         self._dark_light_after: float        = float("inf")
         self._dark_light_t0:    float | None = None
         self._dark_light_n:     int          = 0
         self._dark_light_max:   float | None = None
+        # Every collected dark frame's ROI light — the flicker of a leak.
+        self._dark_frame_light = dark_light.FrameLight()
+        # True while the light-leak window is open: frames that arrive behind
+        # it must not reach the finished collector (or _finish_dark_cal again).
+        self._dark_light_deciding: bool = False
+        # What Calibration.h5 keeps of the check, for the results file too.
+        self._dark_light_record: dict = {}
         self._invalid_k2_reported: bool = False
         # Trailing (t, mean_i) from every result, for the end-of-session
         # laser-off check (E3). todo.md claims the last mean_i is "already
@@ -1393,6 +1401,10 @@ class MainWindow(QMainWindow):
             "gain_du_per_e":  float(self.processor.gain_du_per_e or 0.0),
             "gain_source":    str(self.processor.gain_source or ""),
             **self._black_level_record(),
+            # The dark calibration's light check, as Calibration.h5 keeps it —
+            # here too, so a leak the operator continued with is in the file
+            # Vika opens (2026-10-28).
+            **{f"dark_{k}": v for k, v in self._dark_light_record.items()},
         }
         # Params: exactly the fields the supervisor listed (2026-09-23), named
         # as she named them. satCapacity is deliberately absent. The three
@@ -2054,10 +2066,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Dark Calibration Error", str(exc))
             return
         # Before anything is stored or written: a laser switched on part-way
-        # through, or light steady enough to pass the first frames.
-        light_attrs = self._check_dark_mean_light(dark_mean)
+        # through, or a leak — which may ask the operator.
+        light_attrs = self._check_dark_mean_light(dark_mean, dark_var)
         if light_attrs is None:
             return   # light on the camera — the run was stopped
+        self._dark_light_record = light_attrs
 
         n_collected = self._dark_cal_collector.n_collected
         logger.info("Dark calibration complete — %d frames collected", n_collected)
@@ -2120,9 +2133,12 @@ class MainWindow(QMainWindow):
     # nothing noticed. With the trigger off the camera runs at its maximum
     # rate while the Arduino keeps flashing the laser, so only some dark
     # frames are lit — each of the first frames is judged on its own (the
-    # brightest counts), not their average. The finished dark_mean is checked
-    # as well, for a laser switched on part-way through. Either failure stops
-    # the run (the user's choice, 2026-10-26).
+    # brightest counts), not their average; one at the laser's level stops
+    # the run at once. The finished dark_mean is checked as well, for a laser
+    # switched on part-way through and for a leak: the laser or a flickering
+    # leak stops the run (the user's choice, 2026-10-26), a steady leak asks
+    # the operator (Vika, 2026-10-28) — core/dark_light.py says how they are
+    # told apart.
     _DARK_LIGHT_REF_S        = 2.0   # live picture averaged before the prompt
     _DARK_LIGHT_SETTLE_S     = 0.2   # frames captured before OK + this are ignored
     _DARK_LIGHT_WATCH_S      = 1.0   # first dark frames checked one by one…
@@ -2146,6 +2162,10 @@ class MainWindow(QMainWindow):
         self._dark_light_n = 0
         self._dark_light_max = None
         self._dark_light_ref = None
+        self._dark_light_ceiling = None
+        self._dark_frame_light = dark_light.FrameLight()
+        self._dark_light_deciding = False
+        self._dark_light_record = {}
         black = getattr(self.camera, "black_level", None)
         self._dark_light_black = None if black is None else float(black)
         if self._dark_light_black is None:
@@ -2162,67 +2182,145 @@ class MainWindow(QMainWindow):
                                     - self._dark_light_black)
         self._dark_light_limit, self._dark_light_basis = \
             dark_light.light_limit(self._dark_light_ref)
+        self._dark_light_ceiling = dark_light.laser_ceiling(self._dark_light_ref)
         self._dark_light_watching = True
         ref = ("none" if self._dark_light_ref is None
                else f"{self._dark_light_ref:.1f} DU")
+        ceiling = ("none" if self._dark_light_ceiling is None
+                   else f"{self._dark_light_ceiling:.1f} DU")
         logger.info("Dark calibration light check: live picture %s above the "
-                    "black level %.1f DU → limit %.1f DU (%s)", ref,
-                    self._dark_light_black, self._dark_light_limit,
-                    self._dark_light_basis)
+                    "black level %.1f DU → limit %.1f DU (%s), laser at %s",
+                    ref, self._dark_light_black, self._dark_light_limit,
+                    self._dark_light_basis, ceiling)
 
-    def _watch_dark_light(self, du: np.ndarray, t_capture: float) -> bool:
-        """Judge one of the first dark frames. False = it was lit, and the
-        run has been stopped."""
-        light = dark_light.roi_light(du, self._mask, self._dark_light_black)
+    def _dark_frame_mask(self, shape: tuple) -> np.ndarray | None:
+        """The ROI mask for a dark frame of this shape; None = the whole frame."""
+        mask = self._mask
+        return mask if mask is not None and mask.shape == shape else None
+
+    def _watch_dark_light(self, light: float, t_capture: float) -> bool:
+        """Judge one of the first dark frames. False = it was lit at the
+        laser's level (or, with no live picture to compare to, above the
+        limit), and the run has been stopped. A frame between the limit and
+        the laser is left to the finished calibration: a steady leak gets
+        the operator's decision there, not a stop here."""
         if self._dark_light_t0 is None:
             self._dark_light_t0 = t_capture
         self._dark_light_n += 1
         if self._dark_light_max is None or light > self._dark_light_max:
             self._dark_light_max = light
-        if light >= self._dark_light_limit:
+        stop_at = (self._dark_light_limit if self._dark_light_ceiling is None
+                   else self._dark_light_ceiling)
+        if light >= stop_at:
             self._stop_dark_cal_for_light(light, "a dark frame")
             return False
         if (self._dark_light_n >= self._DARK_LIGHT_WATCH_FRAMES
                 and t_capture - self._dark_light_t0 >= self._DARK_LIGHT_WATCH_S):
             self._dark_light_watching = False
-            logger.info("Dark calibration light check: first %d frames dark — "
+            word = ("dark" if self._dark_light_max < self._dark_light_limit
+                    else "under the laser's level")
+            logger.info("Dark calibration light check: first %d frames %s — "
                         "at most %.2f DU above the black level (limit %.1f DU)",
-                        self._dark_light_n, self._dark_light_max,
+                        self._dark_light_n, word, self._dark_light_max,
                         self._dark_light_limit)
         return True
 
-    def _check_dark_mean_light(self, dark_mean: np.ndarray) -> dict | None:
+    def _check_dark_mean_light(self, dark_mean: np.ndarray,
+                               dark_var: np.ndarray) -> dict | None:
         """Judge the finished dark calibration. Returns what Calibration.h5
-        keeps of the check, or None when it failed and the run was stopped."""
+        keeps of the check, or None when the run was stopped — the laser, a
+        flickering leak, or a steady leak the operator chose to stop for."""
         if self._dark_light_black is None:
             return {"light_check": "skipped - no black level"}
-        mask = self._mask if (self._mask is not None
-                              and self._mask.shape == dark_mean.shape) else \
-            np.ones(dark_mean.shape, dtype=bool)
+        mask = self._dark_frame_mask(dark_mean.shape)
+        if mask is None:
+            mask = np.ones(dark_mean.shape, dtype=bool)
         light = dark_light.roi_light(dark_mean, mask, self._dark_light_black)
-        if light >= self._dark_light_limit:
-            self._stop_dark_cal_for_light(light, "the dark calibration's mean")
-            return None
-        logger.info("Dark calibration light check passed — mean %.2f DU above "
-                    "the black level (limit %.1f DU, %s)", light,
-                    self._dark_light_limit, self._dark_light_basis)
+        frames = self._dark_frame_light
+        sf2 = k2 = None
+        if self._dark_light_ref is not None and frames.n >= 2:
+            pixel_var = float(np.mean(dark_var, where=mask, dtype=np.float64))
+            # The measurement's ⟨I⟩ once the dark mean — leak included — is
+            # taken off; the laser ceiling keeps it above half the reference.
+            signal = self._dark_light_ref - light
+            if signal > 0:
+                sf2, k2 = dark_light.flicker_effect(
+                    frames.var, pixel_var, int(mask.sum()), signal)
+        verdict = dark_light.judge(light, self._dark_light_limit,
+                                   self._dark_light_ceiling, k2)
         attrs = {"light_check": "passed",
                  "light_check_limit_du": self._dark_light_limit,
                  "light_check_basis": self._dark_light_basis,
                  "light_check_mean_du": light}
         if self._dark_light_ref is not None:
             attrs["light_check_reference_du"] = self._dark_light_ref
+        if self._dark_light_ceiling is not None:
+            attrs["light_check_laser_du"] = self._dark_light_ceiling
         if self._dark_light_max is not None:
             attrs["light_check_first_frames_max_du"] = self._dark_light_max
-        return attrs
+        if frames.n >= 2:
+            attrs["light_check_frame_std_du"] = float(np.sqrt(frames.var))
+        if k2 is not None:
+            attrs["light_check_flicker_var_du2"] = sf2
+            attrs["light_check_flicker_k2"] = k2
+            attrs["light_check_flicker_limit_k2"] = dark_light.FLICKER_LIMIT_K2
+        flicker = ("" if k2 is None else
+                   f", flicker would move κ² by {k2:.1e} (limit "
+                   f"{dark_light.FLICKER_LIMIT_K2:.0e})")
 
-    def _stop_dark_cal_for_light(self, measured: float, what: str) -> None:
+        if verdict == dark_light.DARK:
+            logger.info("Dark calibration light check passed — mean %.2f DU above "
+                        "the black level (limit %.1f DU, %s)", light,
+                        self._dark_light_limit, self._dark_light_basis)
+            return attrs
+        if verdict == dark_light.STEADY_LEAK:
+            logger.warning("Dark calibration: steady light leak — mean %.2f DU "
+                           "above the black level (limit %.1f DU, laser at %.1f "
+                           "DU)%s; asking the operator", light,
+                           self._dark_light_limit, self._dark_light_ceiling, flicker)
+            # The window runs a nested event loop: frames keep arriving, still
+            # in DARK_CAL with a finished collector. _on_scos_frame drops them
+            # while this is set.
+            self._dark_light_deciding = True
+            try:
+                go_on = safety_dialog.ask_continue_with_leak(
+                    self, light, self._dark_light_limit)
+            except Exception:
+                logger.exception("The light-leak window could not be shown")
+                go_on = False      # unanswered = the safe answer
+            finally:
+                self._dark_light_deciding = False
+            if self._state is not State.DARK_CAL or self._dark_cal_collector is None:
+                # Stopped while the window was open — a camera error presses
+                # Stop Video, which abandons the calibration. Nothing to go on with.
+                logger.warning("Dark calibration: the run was stopped while the "
+                               "light-leak window was open")
+                return None
+            if go_on:
+                logger.warning("Dark calibration: the operator chose Continue "
+                               "with the light leak")
+                attrs["light_check"] = "steady leak - operator continued"
+                return attrs
+            logger.warning("Dark calibration stopped by the operator — light leak")
+            self._dark_light_watching = False
+            self._abandon_calibration("Dark cal stopped — light leak")
+            return None
+        reason = {dark_light.LASER: "at the laser's level",
+                  dark_light.FLICKER: "flickering light",
+                  dark_light.NO_REFERENCE: "no live picture to tell a leak from "
+                                           "the laser"}[verdict]
+        self._stop_dark_cal_for_light(light, "the dark calibration's mean",
+                                      reason + flicker)
+        return None
+
+    def _stop_dark_cal_for_light(self, measured: float, what: str,
+                                 reason: str = "laser on or light reaching "
+                                               "the camera") -> None:
         """Light on the camera during the dark calibration: stop the run.
         Undo first, window second — see _abandon_calibration."""
         logger.warning("Dark calibration STOPPED — %s is %.1f DU above the black "
-                       "level, limit %.1f DU (%s): laser on or light reaching "
-                       "the camera", what, measured, self._dark_light_limit,
-                       self._dark_light_basis)
+                       "level, limit %.1f DU (%s): %s", what, measured,
+                       self._dark_light_limit, self._dark_light_basis, reason)
         self._dark_light_watching = False
         self._abandon_calibration("Dark cal stopped — light on the camera")
         try:
@@ -2887,12 +2985,18 @@ class MainWindow(QMainWindow):
         # Progress is shown on the calibration label rather than the status
         # bar, where any other message would replace it.
         if self._state == State.DARK_CAL:
-            if self._dark_cal_collector is None:
-                return   # guard: frame arrived during state transition
+            if self._dark_cal_collector is None or self._dark_light_deciding:
+                return   # guard: state transition, or behind the light-leak window
             du = self._to_du(frame)
-            if self._dark_light_watching and t_capture >= self._dark_light_after:
-                if not self._watch_dark_light(du, t_capture):
-                    return   # light on the camera — the run was stopped
+            if self._dark_light_black is not None:
+                light = dark_light.roi_light(du, self._dark_frame_mask(du.shape),
+                                             self._dark_light_black)
+                if self._dark_light_watching and t_capture >= self._dark_light_after:
+                    if not self._watch_dark_light(light, t_capture):
+                        return   # the laser on the camera — the run was stopped
+                # Every frame the collector takes: the flicker of a leak is
+                # judged over exactly the frames dark_var is made of.
+                self._dark_frame_light.add(light)
             self._dark_cal_collector.add_frame(du)
             # Saved after the skip above: exactly the frames the calibration used.
             self._save_frame("dark", frame, t_capture)

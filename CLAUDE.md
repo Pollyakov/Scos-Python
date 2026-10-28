@@ -244,10 +244,17 @@ the prompt keeps delivering frames), at least 2 DU; no reference → 5 DU. Each 
 dark frames is judged **on its own** (the Arduino keeps flashing the laser while the camera
 runs untriggered, so only some frames are lit), frames captured before OK are ignored, and the
 finished `dark_mean` is checked before anything is written. Failure: `_abandon_calibration()`
-first, then the red "Dark Calibration Stopped — Light on the Camera" window. A leaky probe's
-room light (12.7 DU on 2026-10-19) stops it too — kept as a stop until Vika answers whether a
-leak should stop or only warn (`docs/open_questions.md` 21, sent 2026-10-27). Rig check:
-`rig_checklist.md` R10.
+first, then the red "Dark Calibration Stopped — Light on the Camera" window.
+**Light above the limit is a stop only for the laser or a flickering leak** (Vika's answer to
+`docs/open_questions.md` 21, 2026-10-28; `docs/Plan_Q21_Steady_Leak.md`): the laser = light at
+≥ 50 % of the live picture (a first frame that high stops at once); flicker = the per-frame ROI
+light's variance, less pixel noise, would move κ²_corr by > 1 × 10⁻⁵ (σ_f² / (reference − light)²).
+A **steady leak** opens the amber "Light Leak During the Dark Calibration" window — **Stop** is the
+default; Continue writes `light_check = "steady leak - operator continued"` into `Calibration.h5`
+and (as `dark_light_check…`) the results file's `metadata`. No live picture → still a stop.
+Room light flickers with the mains, so a leak around the probe will usually stop the run (the
+2026-10-19 leak would have). Frames arriving behind the amber window are dropped
+(`_dark_light_deciding`). Rig check: `rig_checklist.md` R10.
 
 IMPORTANT: **Save Frames saves every frame the math used, in the layout Vika's MATLAB script
 reads unchanged** (`docs/Plan_Frame_Saving.md`, `core/frame_writer.py`). `<session>/Frames/`

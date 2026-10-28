@@ -23,7 +23,8 @@ normalization window ends used to write no `rBFi`; it now normalizes on whatever
 exists (todo rig-prep row 4c, implemented the same day).
 
 **Status 2026-10-27: question 21 sent** (light leaking through the probe during the dark
-calibration — stop or warn); it is in section G until she answers.
+calibration — stop or warn). **Answered 2026-10-28:** a flickering leak stops the run, a steady
+leak only warns and the operator decides — see "Answered" at the bottom. Built the same day.
 
 Worklist Q7 (the `_DropOldestQueue` sentinel eviction) is deliberately excluded — it is an
 internal engineering decision, not a scientific or spec one.
@@ -164,7 +165,26 @@ in G or the noise terms. Is ≈ 30 DU acceptable, or should the laser power / fi
 
 ---
 
-## G. Sent 2026-10-27 — awaiting her answer
+## G. Sent 2026-10-27 — answered 2026-10-28 (see "Answered")
+
+*(Question 21 moved to "Answered" on 2026-10-28.)*
+
+---
+
+## Notes on where these came from
+
+Questions **1, 2, 3 and 8 are new** — they are not in either review or the merged worklist.
+They surfaced on 2026-09-07 from a close re-reading of `docs/session_tab`, which specifies
+`Params ( struct )` and `startTime` without giving a format, and describes the intensity
+check as being over "the picture" while the code computes `mean_i` over the ROI. These are
+exactly the mismatches that make a file fail to load as expected on the MATLAB side.
+
+Questions 4, 5, 6, 7 and 12 are worklist Q2, Q4, Q3, Q5 and Q6 respectively.
+Questions 13, 14 and 15 come from `Implementation_Plan.md` §9.
+
+## Answered
+
+### Light leaking through the probe — answered 2026-10-28
 
 **21. Light leaking through the probe during the dark calibration — stop the run, or only
 warn?** *(raised 2026-10-26 with the laser-off check before the dark calibration, todo Done
@@ -184,22 +204,29 @@ item 61.) **Sent 2026-10-27.*** Message as sent:
 > must fall by 90 % from the live picture before the prompt, never less than 2 DU above the black
 > level; if the live picture was already dark, 5 DU.
 
-*Until she answers, a leaking probe stops the run (user's decision, 2026-10-27).*
+*Until she answered, a leaking probe stopped the run (user's decision, 2026-10-27).*
 
----
+**Her answer (2026-10-28), verbatim:**
 
-## Notes on where these came from
+> You are right,
+> If the leak is flicking during the dark calibration - it is very bad and the measurements
+> should stop.
+> If the leak is steady, it's not perfect, but the measurement is still valid, so in this case
+> I would like only to have a warning for the user, for him to decide if to continue or to stop.
+> Thank you for this important remark.
+> We will work on better probes.
 
-Questions **1, 2, 3 and 8 are new** — they are not in either review or the merged worklist.
-They surfaced on 2026-09-07 from a close re-reading of `docs/session_tab`, which specifies
-`Params ( struct )` and `startTime` without giving a format, and describes the intensity
-check as being over "the picture" while the code computes `mean_i` over the ROI. These are
-exactly the mismatches that make a file fail to load as expected on the MATLAB side.
-
-Questions 4, 5, 6, 7 and 12 are worklist Q2, Q4, Q3, Q5 and Q6 respectively.
-Questions 13, 14 and 15 come from `Implementation_Plan.md` §9.
-
-## Answered
+**What it means:** a *flickering* leak stops the run, as now. A *steady* leak gives a warning,
+and the operator chooses Continue or Stop. Her answer is about leaks: a laser left on is still
+a stop. **Why:** a steady leak is in the dark frames and in the measurement alike, so
+subtracting the dark mean removes it. Flicker adds frame-to-frame variance to `var_dark` that
+the measurement frames do not share, which pushes κ²_corr too low.
+**Code today:** `core/dark_light.py`; `MainWindow._watch_dark_light()` (first dark frames)
+and `_check_dark_mean_light()` (finished dark mean) both stop on any light above the limit.
+**Built 2026-10-28** (todo Done item 64, `docs/Plan_Q21_Steady_Leak.md`): the laser = light
+at ≥ 50 % of the live picture → stop; flicker that would move κ²_corr by more than 1 × 10⁻⁵ →
+stop; otherwise the amber window, Stop the default. The limit is the strict one, the user's
+choice — Vika may want to say how large an error from a leak she accepts.
 
 ### End of session, normalization and files — answered 2026-10-07
 

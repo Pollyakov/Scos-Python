@@ -83,6 +83,12 @@ The dark calibration's light check (rig 2026-10-22, core/dark_light.py):
   laser-on     playback never switches to the _dark folder — the laser left on
            at the dark prompt → "rehearsal did not complete: the dark
            calibration's light check stopped the run"
+  leak-flicker  the dark frames get a leak of 4 and 8 DU in turn — between
+           the light limit and the laser's level, but flickering (Vika,
+           2026-10-28: that stops the run) → "rehearsal did not complete: the
+           dark calibration's light check stopped the run"
+  leak-stops   (leak) a steady leak stops the run as before 2026-10-28,
+           instead of asking the operator → "rehearsal did not complete"
 
 Not here: the 50 % re-arm *threshold*. While slowed, a blocking put() keeps the
 queue at 19-20 of 20, so a wrong low mark (0.8, 0.75) never shows in a
@@ -105,7 +111,7 @@ MUTATIONS = {"latch": "slowdown", "arrival": "slowdown", "uncount": "slowdown",
              "cut-offset": "normal", "cut-skip": "normal", "cut-stale-bright": "normal",
              "crop-xy": "normal",
              "dark-no-restore": "normal", "dark-no-skip": "slowdown",
-             "laser-on": "normal"}
+             "laser-on": "normal", "leak-flicker": "normal", "leak-stops": "leak"}
 # These test the crop, so they always run with --cut.
 NEEDS_CUT = {"cut-offset", "cut-skip", "cut-stale-bright", "crop-xy"}
 
@@ -229,6 +235,20 @@ def apply(mutation: str) -> None:
         def set_playback_source(self, source):
             return original(self, "main")
         FolderMockCamera.set_playback_source = set_playback_source
+
+    elif mutation == "leak-flicker":
+        from rehearsal import install_dark_leak
+        install_dark_leak(lambda i: 4.0 if i % 2 else 8.0)
+
+    elif mutation == "leak-stops":
+        from core import dark_light
+        original = dark_light.judge
+
+        def judge(*a, **k):
+            verdict = original(*a, **k)
+            return (dark_light.NO_REFERENCE if verdict == dark_light.STEADY_LEAK
+                    else verdict)
+        dark_light.judge = judge
 
     elif mutation == "dark-no-restore":
         from gui.main_window import MainWindow

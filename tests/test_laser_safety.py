@@ -37,6 +37,7 @@ from gui.safety_dialog import (  # noqa: E402
     CONFIRM_TEXT, EXIT_TEXT, LaserSafetyDialog, confirm_laser_safety,
     LaserStillOnDialog, ProbeRemovalDialog, ask_continue_with_laser_on,
     show_probe_removal, PROBE_PASSED, PROBE_SKIPPED, PROBE_FAILED, PROBE_CANCELLED,
+    DarkLeakDialog, ask_continue_with_leak,
 )
 
 _MAIN = Path(__file__).resolve().parent.parent / "main.py"
@@ -189,6 +190,46 @@ class TestLaserStillOn:
 
 
 # ---------------------------------------------------------------------------
+# The amber light-leak window — a steady leak, the operator decides (Vika,
+# 2026-10-28)
+# ---------------------------------------------------------------------------
+
+class TestDarkLeak:
+    def test_title_and_numbers(self):
+        d = DarkLeakDialog(10.0, 3.3)
+        text = d.text_label.text()
+        assert d.windowTitle() == "Light Leak During the Dark Calibration"
+        assert "10.0 DU" in text, "the measured light is quoted"
+        assert "3.3 DU" in text, "and what a sealed probe gives"
+        assert "does not flicker" in text
+
+    def test_it_is_amber_not_red(self):
+        style = DarkLeakDialog(10.0, 3.3).styleSheet()
+        assert "#e0a020" in style
+        assert "#7a1010" not in style
+
+    def test_continue_is_the_only_way_on(self, monkeypatch):
+        _answer_with(monkeypatch, lambda d: d.continue_button.click())
+        assert ask_continue_with_leak(None, 10.0, 3.3) is True
+
+    @pytest.mark.parametrize("answer", [
+        lambda d: d.stop_button.click(),
+        lambda d: QTest.keyClick(d, Qt.Key.Key_Escape),
+        lambda d: d.close(),
+        lambda d: None,
+    ], ids=["stop", "escape", "title-bar-x", "no-answer"])
+    def test_everything_else_stops(self, monkeypatch, answer):
+        _answer_with(monkeypatch, answer)
+        assert ask_continue_with_leak(None, 10.0, 3.3) is False
+
+    def test_enter_means_stop(self):
+        d = DarkLeakDialog(10.0, 3.3)
+        assert d.stop_button.isDefault()
+        assert not d.continue_button.isDefault()
+        assert not d.continue_button.autoDefault()
+
+
+# ---------------------------------------------------------------------------
 # After the save — the probe-removal window
 # ---------------------------------------------------------------------------
 
@@ -250,11 +291,12 @@ class TestProbeRemoval:
 @pytest.mark.parametrize("make", [
     lambda: LaserSafetyDialog(),
     lambda: LaserStillOnDialog(114.5, 11.4),
+    lambda: DarkLeakDialog(10.0, 3.3),
     lambda: ProbeRemovalDialog(PROBE_PASSED),
     lambda: ProbeRemovalDialog(PROBE_SKIPPED),
     lambda: ProbeRemovalDialog(PROBE_FAILED),
     lambda: ProbeRemovalDialog(PROBE_CANCELLED),
-], ids=["startup", "still-on", "probe-passed", "probe-skipped", "probe-failed",
+], ids=["startup", "still-on", "light-leak", "probe-passed", "probe-skipped", "probe-failed",
         "probe-cancelled"])
 def test_every_window_is_roomy_and_fits_the_rig_screen(make):
     d = make()

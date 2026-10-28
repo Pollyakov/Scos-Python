@@ -15,6 +15,7 @@ Usage:
     venv\\Scripts\\python.exe tools/rehearsal.py --scenario recovery --cal-frames 60
     venv\\Scripts\\python.exe tools/rehearsal.py --cut                   # camera-side crop
     venv\\Scripts\\python.exe tools/rehearsal.py --cut --cut-radius 150 --cal-frames 60
+    venv\\Scripts\\python.exe tools/rehearsal.py --scenario leak --cal-frames 60
 
 What it can NOT test: the real modal dialogs. Every QMessageBox / QFileDialog
 call, and every hand-built QDialog's exec() (the laser-safety windows,
@@ -32,8 +33,9 @@ unstubbed "Measurement Ended" prompt:
     after --timeout seconds, whatever it is stuck on.
 
 Scenarios (--scenario) are sets of hooks around the same session; see
-SCENARIOS at the bottom: `normal` (3a), `slowdown` (3b, see Slowdown) and
-`recovery` (3c, see Recovery). Every scenario ends with the same file checks,
+SCENARIOS at the bottom: `normal` (3a), `slowdown` (3b, see Slowdown),
+`recovery` (3c, see Recovery) and `leak` (steady light through the probe
+during the dark calibration, see Leak). Every scenario ends with the same file checks,
 verify_outputs (3e). (3d, the compressed long run, is postponed.)
 
 --cut (todo U6, plan step 6) works with any scenario: before Start SCOS it
@@ -105,6 +107,7 @@ T_PROBE_OK     = "Laser Is Off — Remove the Probe"  # after the save, U2
 T_PROBE_SKIP   = "Laser-Off Check Could Not Run"
 T_PROBE_FAILED = "Do Not Remove the Probe Yet"
 T_NOT_DARK     = "Dark Calibration Stopped — Light on the Camera"   # red, stops the run
+T_LEAK         = "Light Leak During the Dark Calibration"   # amber, operator decides
 
 # The protocol's order (docs/SCOS_protocol.md:11-17; CLAUDE.md "opening
 # dialogs"). The G warning is optional — it appears only when the session's
@@ -185,6 +188,10 @@ def install_dialog_stubs(run: Run, output_root: Path) -> None:
         # Only after a failed light check, which has already stopped the run;
         # its one button is OK. A clean rehearsal never sees it.
         ("dialog",      T_NOT_DARK):      True,
+        # Only in --scenario leak: a steady leak, and the operator goes on
+        # (accept = "Continue"). Should a clean run ever see it, its light
+        # check records the leak and check_dark_rate fails on that.
+        ("dialog",      T_LEAK):          True,
     }
     refuse = {"question": B.Cancel}   # unknown question → back out, never proceed
 
@@ -254,11 +261,15 @@ class Scenario:
         press Stop SCOS.
     extra_checks(w, run, folder, args) — scenario-specific assertions, after
         the common ones.
+    light_check — what Calibration.h5's dark/light_check must say.
+    dialogs — the windows in the order they must open.
     """
     description:    str
     before_start:   Callable = _noop
     during_measure: Callable | None = None
     extra_checks:   Callable = _noop
+    light_check:    str = "passed"
+    dialogs:        list = field(default_factory=lambda: list(EXPECTED_DIALOGS))
 
 
 def _private_bytes() -> int | None:
@@ -834,8 +845,73 @@ class Recovery(Slowdown):
                       f"{np.median(mb):.0f}, min {min(mb):.0f}, max {max(mb):.0f} MB")
 
 
+def install_dark_leak(leak_du: Callable[[int], float]) -> None:
+    """Light through a leaky probe, added to every frame the playback reads
+    from a `_dark` folder: dark frame number i (from 0) gets leak_du(i) DU
+    more, in the frame's own units (×64 for Pylon's 10-bit TIFFs). Decided by
+    the file, not by the playback source, so no frame at the switch can miss
+    it. Saved dark frames then differ from the folder's (check_saved_frames)."""
+    import numpy as np
+    import folder_camera
+    from folder_camera import FolderMockCamera
+    real = folder_camera.tifffile
+    count = [0]
+
+    class _Leaky:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        @staticmethod
+        def imread(path, *a, **k):
+            img = real.imread(path, *a, **k)
+            if not Path(path).parent.name.endswith("_dark"):
+                return img
+            _, scale = FolderMockCamera._pixel_layout(img)
+            add = int(round(leak_du(count[0]) * scale))
+            count[0] += 1
+            return np.minimum(img.astype(np.uint32) + add, 65535).astype(img.dtype)
+
+    folder_camera.tifffile = _Leaky()
+
+
+class Leak:
+    """Steady light through the probe during the dark calibration (Vika,
+    2026-10-28, open question 21): the amber window opens, the operator
+    chooses Continue, and the leak is recorded in both files. LEAK_DU sits
+    between the light limit (10 % of the live picture, ≈ 2.5 DU here) and the
+    laser's level (half of it, ≈ 12.6 DU)."""
+    LEAK_DU = 6.0
+    RECORDED = "steady leak - operator continued"
+
+    def before_start(self, w, cam, args) -> None:
+        install_dark_leak(lambda i: self.LEAK_DU)
+
+    def extra_checks(self, w, run: "Run", folder: Path | None, args) -> None:
+        import h5py
+        print("\nChecks — leak scenario")
+        run.check(sum(t == T_LEAK for _, t in run.dialogs) == 1,
+                  "the light-leak window opened exactly once")
+        if folder is None:
+            return
+        with h5py.File(folder / "Calibration.h5", "r") as f:
+            a = dict(f["dark"].attrs)
+        mean = a.get("light_check_mean_du")
+        run.check(mean is not None and abs(mean - (self.LEAK_DU - 0.7)) < 1.0,
+                  f"the leak is in Calibration.h5: {mean} DU above the black level "
+                  f"(added {self.LEAK_DU} to a dark folder ≈ 0.7 DU under it)")
+        k2 = a.get("light_check_flicker_k2")
+        limit = a.get("light_check_flicker_limit_k2")
+        run.check(k2 is not None and limit is not None and k2 <= limit,
+                  f"judged steady: flicker would move κ² by {k2} (limit {limit})")
+        with h5py.File(folder / RESULTS_FILE, "r") as f:
+            meta = dict(f["metadata"].attrs)
+        run.check(meta.get("dark_light_check") == self.RECORDED,
+                  f"results metadata dark_light_check = {meta.get('dark_light_check')!r}")
+
+
 _slowdown = Slowdown()
 _recovery = Recovery()
+_leak = Leak()
 
 SCENARIOS: dict[str, Scenario] = {
     "normal": Scenario("one clean session at full speed"),
@@ -852,6 +928,15 @@ SCENARIOS: dict[str, Scenario] = {
         before_start=_recovery.before_start,
         during_measure=_recovery.during_measure,
         extra_checks=_recovery.extra_checks,
+    ),
+    "leak": Scenario(
+        f"steady light ({Leak.LEAK_DU:g} DU) through the probe during the dark "
+        f"calibration; the operator chooses Continue",
+        before_start=_leak.before_start,
+        extra_checks=_leak.extra_checks,
+        light_check=Leak.RECORDED,
+        dialogs=[T_FOLDER, T_DARK_PROMPT, T_LEAK, T_BRIGHT_PROMPT, T_MEAS_ENDED,
+                 T_PROBE_OK],
     ),
 }
 
@@ -1206,7 +1291,7 @@ def rehearse(args, run: Run) -> Path | None:
                   f"after Stop SCOS, over {run.display_frames_after_stop} displayed "
                   f"frame(s) (K1; now {run.closing_later!r})")
         check_measuring(run)
-        check_dark_rate(run, cam, folder)
+        check_dark_rate(run, cam, folder, scenario.light_check)
         verify_outputs(run, folder, w, cam, args, wall_start)
         check_crop_record(run, folder, args)
         scenario.extra_checks(w, run, folder, args)
@@ -1244,7 +1329,8 @@ def rehearse(args, run: Run) -> Path | None:
 DARK_BACKLOG_LIMIT = 20
 
 
-def check_dark_rate(run: Run, cam, folder: Path | None) -> None:
+def check_dark_rate(run: Run, cam, folder: Path | None,
+                    light_check: str = "passed") -> None:
     """U11 — the dark calibration ran at the frame source's maximum rate, the
     set rate was back for everything after it, the queue stayed short, and
     Calibration.h5 says how it ran."""
@@ -1280,10 +1366,11 @@ def check_dark_rate(run: Run, cam, folder: Path | None) -> None:
               "app.log has the dark calibration's rate summary")
     # The light check: the recording's folder name gives BL100DU, the live
     # picture before the prompt is the lit recording and the dark calibration
-    # plays the _dark folder — so it runs against the live picture and passes.
-    run.check(attrs.get("light_check") == "passed"
+    # plays the _dark folder — so it runs against the live picture and passes
+    # (or, in --scenario leak, records the leak the operator went on with).
+    run.check(attrs.get("light_check") == light_check
               and attrs.get("light_check_basis") == "live picture",
-              f"the dark calibration's light check passed against the live picture "
+              f"the dark calibration's light check: {light_check!r} against the live picture "
               f"(light_check = {attrs.get('light_check')}, basis = "
               f"{attrs.get('light_check_basis')}, reference "
               f"{attrs.get('light_check_reference_du')} DU, dark mean "
@@ -1575,13 +1662,13 @@ def check_saved_frames(run: Run, folder: Path | None, w, cam, args) -> None:
               f"saved dark frames are the source frames, unchanged ({same}/{len(sample)})")
 
 
-def check_dialogs(run: Run) -> None:
+def check_dialogs(run: Run, expected: list) -> None:
     print("\nChecks — dialogs (in the order they opened)")
     for kind, title in run.dialogs:
         print(f"       {kind:22s} {title}")
     order = [t for _, t in run.dialogs if t != T_GAIN_WARNING]
-    run.check(order == EXPECTED_DIALOGS,
-              f"protocol order: {' → '.join(EXPECTED_DIALOGS)}")
+    run.check(order == expected,
+              f"protocol order: {' → '.join(expected)}")
     crit = [t for k, t in run.dialogs if k == "critical"]
     run.check(not crit, f"no error dialogs {crit or ''}")
     run.check(not run.unknown, f"no unexpected dialogs {run.unknown or ''}")
@@ -1685,7 +1772,7 @@ def main() -> int:
     finally:
         faulthandler.cancel_dump_traceback_later()
 
-    check_dialogs(run)
+    check_dialogs(run, SCENARIOS[args.scenario].dialogs)
     print("\nChecks — exceptions")
     run.check(not run.exceptions, f"no uncaught exceptions ({len(run.exceptions)})")
     for text in run.exceptions:

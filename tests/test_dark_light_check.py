@@ -14,6 +14,11 @@ stop the run when it fails. What these tests hold the window to:
   - the finished dark mean is checked too (a laser switched on part-way);
   - a failure undoes the run first, then shows the red window;
   - no black level → skipped, never guessed.
+
+Since Vika's answer to open question 21 (2026-10-28), light above the limit is
+not always a stop: a *steady* leak opens the amber window and the operator
+chooses (Stop is the default); the laser — light at half the live picture or
+more — and a *flickering* leak still stop the run.
 """
 
 import os
@@ -97,6 +102,31 @@ def stopped(monkeypatch):
                      "calls": list(parent.camera.calls)})
     monkeypatch.setattr(safety_dialog, "show_dark_not_dark", _show)
     return seen
+
+
+class _LeakWindow:
+    """The amber light-leak window: records what it was shown with and
+    answers `answer` (True = Continue). `during(w)` runs while it is open —
+    the nested event loop of a real window keeps delivering frames."""
+
+    def __init__(self):
+        self.seen = []
+        self.answer = False
+        self.during = None
+
+    def __call__(self, parent, measured, limit):
+        self.seen.append({"measured": measured, "limit": limit,
+                          "state": parent._state})
+        if self.during is not None:
+            self.during(parent)
+        return self.answer
+
+
+@pytest.fixture
+def leak(monkeypatch):
+    window = _LeakWindow()
+    monkeypatch.setattr(safety_dialog, "ask_continue_with_leak", window)
+    return window
 
 
 def _make_window(cam, monkeypatch, tmp_path, n1=10, during_prompt=None):
@@ -370,3 +400,220 @@ class TestSkipped:
         assert stopped == []
         assert w._state is State.BRIGHT_CAL
         assert _dark_attrs(w)["light_check"] == "skipped - no black level"
+
+
+# A leak of 10 DU with the weak laser light of 2026-10-22 (33 DU): above the
+# 3.3 DU limit, under the laser's 16.5 DU — a leak, not the laser.
+LEAK = BLACK + 10.0
+
+
+class TestJudge:
+    """The rules themselves, at their edges (core/dark_light.py)."""
+
+    def test_laser_ceiling_is_half_the_live_picture(self):
+        assert dark_light.laser_ceiling(33.0) == pytest.approx(16.5)
+
+    def test_no_ceiling_without_a_reference(self):
+        assert dark_light.laser_ceiling(None) is None
+        assert dark_light.laser_ceiling(1.0) is None
+
+    def test_under_the_limit_is_dark_whatever_it_flickers(self):
+        # The camera's own jitter in the dark is shared with the measurement.
+        assert dark_light.judge(3.2, 3.3, 16.5, 1.0) == dark_light.DARK
+
+    def test_steady_leak(self):
+        assert dark_light.judge(10.0, 3.3, 16.5, 1e-5) == dark_light.STEADY_LEAK
+
+    def test_flicker_just_over_the_limit_stops(self):
+        assert dark_light.judge(10.0, 3.3, 16.5, 1.01e-5) == dark_light.FLICKER
+
+    def test_the_laser_stops_even_when_steady(self):
+        assert dark_light.judge(16.5, 3.3, 16.5, 0.0) == dark_light.LASER
+
+    def test_no_reference_stops(self):
+        assert dark_light.judge(12.0, 5.0, None, None) == dark_light.NO_REFERENCE
+
+    def test_flicker_effect(self):
+        # The 2026-10-19 leak, scaled from the rig: σ_f² ≈ 0.5 DU² at 33 DU.
+        sf2, k2 = dark_light.flicker_effect(0.5, 0.0, 1000, 33.0)
+        assert sf2 == pytest.approx(0.5)
+        assert k2 == pytest.approx(0.5 / 33.0 ** 2)
+
+    def test_pixel_noise_is_taken_off(self):
+        # 1000 pixels of variance 2 scatter their mean by 0.002 DU² — not flicker.
+        sf2, k2 = dark_light.flicker_effect(0.002, 2.0, 1000, 33.0)
+        assert sf2 == pytest.approx(0.0, abs=1e-15)
+        assert k2 == pytest.approx(0.0, abs=1e-15)
+
+    def test_frame_light_matches_numpy(self):
+        values = [10.0, 10.5, 9.0, 11.25, 10.0]
+        acc = dark_light.FrameLight()
+        for v in values:
+            acc.add(v)
+        assert acc.n == 5
+        assert acc.mean == pytest.approx(np.mean(values))
+        assert acc.var == pytest.approx(np.var(values, ddof=1))
+
+
+class TestSteadyLeak:
+
+    def test_steady_leak_asks_and_stop_is_the_default(self, make, stopped, leak):
+        # The patched window answers False — what Enter / Escape / the X give.
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        assert len(leak.seen) == 1
+        assert leak.seen[0]["measured"] == pytest.approx(10.0)
+        assert leak.seen[0]["limit"] == pytest.approx(3.3)
+        assert stopped == []                      # no red window on top
+        assert w._state is State.PREVIEW
+        assert w.btn_start_scos.text() == "Start SCOS"
+        assert w._session_folder is None
+        assert list(w._output_root.rglob(CALIBRATION_FILENAME)) == []
+        assert w.processor.dark_mean is None
+
+    def test_continue_measures_and_records_the_leak(self, make, stopped, leak):
+        leak.answer = True
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        assert len(leak.seen) == 1
+        assert stopped == []
+        assert w._state is State.BRIGHT_CAL
+        attrs = _dark_attrs(w)
+        assert attrs["light_check"] == "steady leak - operator continued"
+        assert attrs["light_check_mean_du"] == pytest.approx(10.0)
+        assert attrs["light_check_laser_du"] == pytest.approx(16.5)
+        assert attrs["light_check_flicker_k2"] == pytest.approx(0.0, abs=1e-12)
+        assert attrs["light_check_flicker_limit_k2"] == dark_light.FLICKER_LIMIT_K2
+
+    def test_the_leak_goes_into_the_results_file_too(self, make, stopped, leak):
+        leak.answer = True
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        w._start_recorder()
+        w._stop_recorder()
+        path = next(w._session_folder.glob("rBFi_*.h5"))
+        with h5py.File(path, "r") as f:
+            meta = dict(f["metadata"].attrs)
+        assert meta["dark_light_check"] == "steady leak - operator continued"
+        assert meta["dark_light_check_mean_du"] == pytest.approx(10.0)
+
+    def test_a_dark_run_records_passed_in_the_results_file(self, make, stopped, leak):
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [BLACK + 1] * 10)
+        w._start_recorder()
+        w._stop_recorder()
+        path = next(w._session_folder.glob("rBFi_*.h5"))
+        with h5py.File(path, "r") as f:
+            assert f["metadata"].attrs["dark_light_check"] == "passed"
+        assert leak.seen == []
+
+    def test_frames_behind_the_window_are_dropped(self, make, stopped, leak):
+        # A real window runs a nested event loop: still DARK_CAL, collector
+        # finished. Those frames must neither join the calibration nor open
+        # a second window.
+        leak.answer = True
+        leak.during = lambda w: _dark(w, [LIT] * 5, t0=w._dark_light_after + 5)
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        assert len(leak.seen) == 1
+        assert stopped == []
+        assert w._state is State.BRIGHT_CAL
+        attrs = _dark_attrs(w)
+        assert attrs["n_frames"] == 10
+        assert attrs["light_check_mean_du"] == pytest.approx(10.0)
+        assert w._dark_light_deciding is False
+
+    def test_stopped_behind_the_window_then_continue(self, make, stopped, leak):
+        # The camera fails while the window is open: _on_camera_error presses
+        # Stop Video, which abandons the calibration. Continue afterwards must
+        # find nothing to go on with — not a None collector in a frame slot.
+        leak.answer = True
+        leak.during = lambda w: w._abandon_calibration("Stopped behind the window")
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        assert len(leak.seen) == 1
+        assert w._state is State.PREVIEW
+        assert w._session_folder is None
+        assert list(w._output_root.rglob(CALIBRATION_FILENAME)) == []
+        assert w.processor.dark_mean is None
+
+    def test_a_window_that_cannot_open_stops_the_run(self, make, stopped, monkeypatch):
+        # No answer is not consent: the safe answer, Stop.
+        def _broken(*a, **k):
+            raise RuntimeError("no display")
+        monkeypatch.setattr(safety_dialog, "ask_continue_with_leak", _broken)
+        w = make()
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 10)
+        assert w._state is State.PREVIEW
+        assert w._session_folder is None
+        assert w._dark_light_deciding is False
+
+    def test_a_leak_does_not_stop_at_the_first_frame(self, make, stopped, leak):
+        # Above the limit, under the laser: the first-frames check lets it
+        # through; the decision comes once the calibration is complete.
+        w = make(n1=40)
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK] * 20)
+        assert w._state is State.DARK_CAL
+        assert leak.seen == [] and stopped == []
+
+    def test_a_leak_at_the_lasers_level_stops_at_once(self, make, stopped, leak):
+        w = make(n1=40)
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [BLACK + 17] * 3 + [BLACK] * 37)    # 17 ≥ 16.5 DU
+        assert len(stopped) == 1
+        assert w._frames_seen == 4 + 1
+        assert leak.seen == []
+
+
+class TestFlickeringLeak:
+
+    def test_flickering_leak_stops_without_asking(self, make, stopped, leak, caplog):
+        # 8 and 12 DU in turn: σ_f² ≈ 4 DU², κ² moved by ≈ 4 / 23² — far over.
+        w = make(n1=20)
+        _preview(w, LIT)
+        _start(w)
+        with caplog.at_level("WARNING"):
+            _dark(w, [BLACK + (8 if i % 2 else 12) for i in range(20)])
+        assert leak.seen == []
+        assert len(stopped) == 1
+        assert stopped[0]["measured"] == pytest.approx(10.0)
+        assert stopped[0]["state"] is State.PREVIEW
+        assert "flickering light" in caplog.text
+        assert w._session_folder is None
+
+    def test_a_little_flicker_still_counts_as_steady(self, make, stopped, leak):
+        # One frame in 100 is 1 DU brighter: σ_f² ≈ 0.01 DU², κ² moved by
+        # ≈ 0.01 / 23² = 1.9e-5 — over the limit. One in 600: 3.1e-6 — steady.
+        leak.answer = True
+        w = make(n1=600)
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK + 1] + [LEAK] * 599, dt=0.002)
+        assert len(leak.seen) == 1
+        k2 = _dark_attrs(w)["light_check_flicker_k2"]
+        assert 1e-6 < k2 < dark_light.FLICKER_LIMIT_K2
+
+    def test_a_few_brighter_frames_are_flicker(self, make, stopped, leak):
+        w = make(n1=100)
+        _preview(w, LIT)
+        _start(w)
+        _dark(w, [LEAK + 1] + [LEAK] * 99, dt=0.01)
+        assert leak.seen == []
+        assert len(stopped) == 1
