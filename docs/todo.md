@@ -698,6 +698,13 @@ after it all passed (5 by hand, 2 in the pre-commit hook). Two new timing-based 
 `tests/test_frame_writer.py` used a 20 ms sleep to let the writer thread take a frame; they now
 wait for it explicitly — a guess at the cause, not a proven one.
 
+**2026-10-29, again in the pre-commit hook — output not kept:** the commit of the steady-leak
+warning (Done item 64) was blocked by `Segmentation fault` (exit from the hook's pytest; only the
+last lines were seen: `<frozen runpy>` frames). The retry seconds later passed (868 passed,
+86 s) and the commit went in (`a41e29a`). The full suite had passed shortly before on almost
+the same code (867, before a two-line guard and its test were added). The hook itself shows only the tail — the lesson repeats:
+keep the whole output on the first try (`git commit … > commit.log 2>&1`).
+
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
 teardown. Running with `-v` also shows which test had started last.
@@ -736,6 +743,44 @@ has ended (accepted or given up), so `timeVec` comes from one clock from its fir
 `time_source` is true. Rejected: (a) leave it documented — a results file could still
 misdescribe itself; (c) a minimum calibration time — longer calibrations even when the
 camera was not restarted, and only indirectly tied to the cause.
+
+---
+
+#### D11 · Start the app from a desktop icon *(user, 2026-10-29)*
+
+Today the app is started from a terminal (`venv\Scripts\python.exe main.py`). The user wants
+the operator to start it with a double-click on a desktop icon. Not designed yet. Things to
+keep in mind:
+- `main.py` writes `app.log` to the **current folder**, so the shortcut's "Start in" must be
+  the repo folder (or the code must use paths next to `main.py`) — otherwise `app.log` lands
+  somewhere else. Check the same for `scos_config.local.json`, `CamerasMeasuredGain.csv` and
+  anything else read or written by a relative path.
+- It must use the project's `venv`, not whatever Python is first on the PATH.
+- With `pythonw.exe` there is no console window — then the log file is the only place the
+  messages go. Decide whether a console window should stay (it shows errors at once).
+- An icon for the window and the shortcut (the app has none today).
+- The laser-safety warning at launch (U1) must still open first.
+- Check it on the rig PC — the path to the repo there is not recorded.
+
+---
+
+#### D12 · Stretch the graph in the X direction only, to look at one period of time *(user, 2026-10-29)*
+
+The user wants the operator to stretch the rBFi graph **along the time axis only**, to look
+closely at one stretch of the recording (for example a few heartbeats). Today
+(`gui/plot_widget.py`) the graph has pyqtgraph's default mouse handling: the wheel and
+drag zoom and pan **both** axes, and `_refresh()` sets the Y range again every second, so a
+Y zoom is undone at once while an X zoom is kept, and the newest data runs off the right
+edge. Not designed yet. To decide:
+- Allow mouse zoom/pan on X only (`setMouseEnabled(x=True, y=False)`); Y keeps its automatic
+  range — over the whole recording, or over the part shown?
+- How to go back to "follow the live data": a button (the existing **Reset** button clears
+  the data — it must not be mistaken for that), double-click, or pyqtgraph's small "A" button.
+- Should it work during a measurement, after Stop SCOS, or both?
+- Display only — it must not change what is recorded or saved (`rBfi_fig.png` is drawn from
+  the results file, not from this widget). Related: F5 (a reopenable interactive figure
+  after the session), D1 (downsampling for long recordings).
+- Show a picture of the controls before building (user's habit: minimal version first).
 
 ---
 
@@ -919,7 +964,7 @@ unchanged.
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
   → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4/D7/D9 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
+  → D1/D2/D3/D4/D7/D9/D11/D12 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
   → ~~F1~~ (raw frames, 2026-10-21) → F2 (long sessions) → F3 (laser control) → F4 (results rows only) → F5 (reopenable figure)
   F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```
