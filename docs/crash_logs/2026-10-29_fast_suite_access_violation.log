@@ -1,0 +1,68 @@
+........................................................................ [  8%]
+........................................................................ [ 16%]
+........................................................................ [ 24%]
+........................................................................ [ 32%]
+........................................................................ [ 40%]
+........................................................................ [ 49%]
+........................................................................ [ 57%]
+........................................................................ [ 65%]
+........................................................................ [ 73%]
+........................................................................ [ 81%]
+........................................................................ [ 90%]
+........................................................................ [ 98%]
+...........Windows fatal exception: access violation
+
+Thread 0x00002c10 (most recent call first):
+  File "C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 359 in wait
+  File "C:\Users\USER\Scos-Python\tests\..\core\pipeline.py", line 502 in _emit_loop
+  File "C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 994 in run
+  File "C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1043 in _bootstrap_inner
+  File "C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1014 in _bootstrap
+
+Thread 0x00008960 (most recent call first):
+  File "C:\Users\USER\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 359 in wait
+  File "C:\Users\USER\Scos-Python\tests\..\core\pipeline.py", line 138 in get
+  File "C:\Users\USER\Scos-Python\tests\..\core\pipeline.py", line 467 in run
+
+Current thread 0x00006138 (most recent call first):
+  File "C:\Users\USER\Scos-Python\tests\test_playback_calibration.py", line ??? in <lambda>
+  File "C:\Users\USER\Scos-Python\tests\test_window_fits_screen.py", line 47 in _settle
+  File "C:\Users\USER\Scos-Python\tests\test_window_fits_screen.py", line 58 in win
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 908 in call_fixture_func
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 1202 in pytest_fixture_setup
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 1110 in execute
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 627 in _get_active_fixturedef
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 539 in getfixturevalue
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\fixtures.py", line 707 in _fillfixtures
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\python.py", line 1723 in setup
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 523 in setup
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 165 in pytest_runtest_setup
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 245 in <lambda>
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 353 in from_call
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 244 in call_and_report
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 131 in runtestprotocol
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\runner.py", line 118 in pytest_runtest_protocol
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\main.py", line 396 in pytest_runtestloop
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\main.py", line 372 in _main
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\main.py", line 318 in wrap_session
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\main.py", line 365 in pytest_cmdline_main
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\config\__init__.py", line 199 in main
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\_pytest\config\__init__.py", line 223 in console_main
+  File "C:\Users\USER\Scos-Python\venv\Lib\site-packages\pytest\__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main

@@ -28,6 +28,10 @@ try:
 except ImportError:
     _SERIAL_OK = False
 
+# Under pythonw.exe (the desktop icon) every console program would flash a
+# black window of its own. 0 off Windows, where the flag does not exist.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # ---------------------------------------------------------------------------
 # Arduino sketch template
 # ---------------------------------------------------------------------------
@@ -183,7 +187,7 @@ def upload_sketch(
         log(f"Compiling sketch (T={period_ms} ms, exposure={high_time_ms} ms)…")
         r = subprocess.run(
             [cli, "compile", "--fqbn", fqbn, sketch_dir],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, creationflags=_NO_WINDOW,
         )
         if r.returncode != 0:
             err = (r.stderr or r.stdout).strip()
@@ -195,7 +199,7 @@ def upload_sketch(
         log(f"Uploading to Arduino on {port}…")
         r = subprocess.run(
             [cli, "upload", "-p", port, "--fqbn", fqbn, sketch_dir],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, creationflags=_NO_WINDOW,
         )
         if r.returncode != 0:
             err = (r.stderr or r.stdout).strip()

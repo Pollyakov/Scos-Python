@@ -15,6 +15,9 @@ scratch/
 # it only ever describes the last run on one machine.
 app.log
 
+# Held by a running app so a second copy cannot start (main.py); Qt removes it on exit.
+scos.lock
+
 # Claude Code: keep personal settings (settings.local.json and anything else)
 # out of git, but track the project's own skills, commands and agents so they
 # are backed up and exist on every clone, e.g. the lab PC.

@@ -18,7 +18,7 @@ SCOS measures cerebral blood flow velocity by illuminating tissue with a laser a
 Work is tracked in [`docs/todo.md`](docs/todo.md) — the only task list (fixes from
 the first rig session, U1–U11, at the top, then rig-session prep, the backlog, Done). Run modes: `python main.py` (real camera; run
 `python check_camera.py` first; it opens with a laser-safety warning that must be confirmed —
-`gui/safety_dialog.py`, todo U1), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
+`gui/safety_dialog.py`, todo U1; operators start it from the **SCOS desktop icon** — `pythonw.exe`, no console, `app.log` always next to `main.py`, one copy at a time (`scos.lock`), a Python error shows a window, a crash in C code leaves a stack dump in `app.log`; `tools/make_desktop_shortcut.py` once per PC, todo Done item 65), `--mock-folder <recording dir>`, `--mock-tiff <stack>`,
 `--mock-h5 <results file>`. Headless whole-session rehearsal with checks:
 `python tools/rehearsal.py [--cal-frames 60] [--scenario normal]` — exit code 0 = all passed. It answers every
 dialog by its window title — a new hand-built window (`QDialog`) needs an entry in its

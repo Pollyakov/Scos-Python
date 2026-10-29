@@ -29,6 +29,9 @@ import h5py
 from core.crop import Crop
 
 
+# Under pythonw.exe (the desktop icon) `git` would flash a black window.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 FLUSH_EVERY = 300   # flush every N appended results (~15 s at 20 Hz)
 
 # One calibration file per session, holding both kinds (supervisor, 2026-09-23).
@@ -122,7 +125,7 @@ def _git_commit() -> str:
     def _run(*args: str) -> str:
         return subprocess.run(
             args, cwd=Path(__file__).parent, capture_output=True,
-            text=True, timeout=5, check=True,
+            text=True, timeout=5, check=True, creationflags=_NO_WINDOW,
         ).stdout.strip()
 
     try:

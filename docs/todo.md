@@ -705,6 +705,23 @@ last lines were seen: `<frozen runpy>` frames). The retry seconds later passed (
 the same code (867, before a two-line guard and its test were added). The hook itself shows only the tail — the lesson repeats:
 keep the whole output on the first try (`git commit … > commit.log 2>&1`).
 
+**2026-10-29, second time that day — the first full dump** (plain `pytest -m "not slow"`, while
+building the desktop icon; saved as [`crash_logs/2026-10-29_fast_suite_access_violation.log`](crash_logs/2026-10-29_fast_suite_access_violation.log)).
+`Windows fatal exception: access violation` at 98 %, in the **setup of `tests/test_window_fits_screen.py`'s
+`win` fixture** (`_settle()` → `processEvents()`). What that `processEvents()` was running is a
+**`<lambda>` from `tests/test_playback_calibration.py`** (line `???`) — a test long finished. The only
+lambda there that Qt can call is `cam.frame_ready.connect(lambda f, t: frames.append(…))` in
+`test_emitted_frames_follow_the_source` (line 124). **Likely, not proven:** the playback camera is
+stopped and dropped at the end of the test, but frames it emitted through the **queued** connection are
+still waiting in Qt's event queue, and are delivered to a lambda whose camera (and PyQt's proxy for the
+lambda) is gone.
+Not a freed frame: `FolderMockCamera` emits a fresh `tifffile.imread` array each time. Also alive at the
+moment of the crash: **two threads of an earlier test's `RealtimePipeline`** (`core/pipeline.py` `_emit_loop`
+and a worker's `run`, both waiting) — a pipeline some test never shut down. **Lead for a fix (not tried):**
+in that test, disconnect `frame_ready` and drain the queue (`processEvents()` until empty) after
+`cam.stop()`, or give the lambda a context object that lives as long as the camera; and find which test
+leaves a pipeline running. The rerun minutes later passed.
+
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
 teardown. Running with `-v` also shows which test had started last.
@@ -746,21 +763,7 @@ camera was not restarted, and only indirectly tied to the cause.
 
 ---
 
-#### D11 · Start the app from a desktop icon *(user, 2026-10-29)*
-
-Today the app is started from a terminal (`venv\Scripts\python.exe main.py`). The user wants
-the operator to start it with a double-click on a desktop icon. Not designed yet. Things to
-keep in mind:
-- `main.py` writes `app.log` to the **current folder**, so the shortcut's "Start in" must be
-  the repo folder (or the code must use paths next to `main.py`) — otherwise `app.log` lands
-  somewhere else. Check the same for `scos_config.local.json`, `CamerasMeasuredGain.csv` and
-  anything else read or written by a relative path.
-- It must use the project's `venv`, not whatever Python is first on the PATH.
-- With `pythonw.exe` there is no console window — then the log file is the only place the
-  messages go. Decide whether a console window should stay (it shows errors at once).
-- An icon for the window and the shortcut (the app has none today).
-- The laser-safety warning at launch (U1) must still open first.
-- Check it on the rig PC — the path to the repo there is not recorded.
+#### ~~D11 · Start the app from a desktop icon~~ — ✅ DONE 2026-10-29 (see item 65 in Done table); rig check open (`rig_checklist.md` R11)
 
 ---
 
@@ -964,7 +967,7 @@ unchanged.
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
   → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4/D7/D9/D11/D12 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
+  → D1/D2/D3/D4/D7/D9/~~D11~~/D12 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
   → ~~F1~~ (raw frames, 2026-10-21) → F2 (long sessions) → F3 (laser control) → F4 (results rows only) → F5 (reopenable figure)
   F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```
@@ -1040,6 +1043,7 @@ unchanged.
 | 63 | Save Frames easy to see (U12, 2026-10-27/28) | Rig, 2026-10-22: the tick was forgotten in two sessions running. **Final design — the user's own (2026-10-28):** just the **"Save Frames" checkbox, bigger** (14 px text, was the default size), inside a frame with a **coloured border** (amber `#d39e00`, the same ticked or not, no background fill); while it is ticked a small italic **"Frames will be saved"** appears beside it, and nothing when it is not. **Start SCOS keeps its plain text.** No size figure. **How it got there** (each version built, shown as a picture and run in playback): (1) 2026-10-27, her choice among four options — a filled amber/green strip with "Frames will NOT / WILL be saved — about X GB per minute" plus a Start SCOS label ("Start SCOS — frames NOT saved" / "+ save frames"); the options not taken were the strip only, the label only, and a question at every Start SCOS (one more click every session, and a new step among the protocol's opening dialogs); (2) the sentence made smaller and italic (in the same style it read as a second label for the box); (3) the Start SCOS label, the background fill and the checkbox's own text removed; (4) her final description above — the colour change, the "NOT saved" sentence and the GB-per-minute figure dropped too. Code: the checkbox's `toggled` shows/hides `lbl_save_frames`; nothing else changed in `MainWindow`. The tick is still **not remembered** between launches. Tests: `test_save_frames.py::TestEasyToSee` (2). Fast suite 837 passed; window still fits the screen. **Seen on the way, not caused by this:** one of the day's five full-frame `--save-frames` rehearsals (2.4 Mpx, 600 bright) had **15 bright frames not saved** — the writer's 40-frame queue was full, so it skipped and counted them as designed, and the rehearsal failed on the count; the rerun passed. A disk that stalls for ≈ 1 s on the full frame loses frames. Counted and shown, never silent, but full-frame Save Frames has not been run on the rig (`rig_checklist.md` R8 was cut). Rig check: `rig_checklist.md` R8e |
 | 64 | A steady light leak warns, a flickering one stops (open question 21, 2026-10-28) | **Vika's answer (2026-10-28):** a leak that flickers during the dark calibration must stop the run; a steady one leaves the measurement valid, so only a warning — the operator decides. Until then any light above the limit stopped the run (item 61). **Built (user's decisions 2026-10-28, all as recommended, the strict setting):** three cases, `core/dark_light.py` `judge()` — **the laser** (light ≥ 50 % of the live picture's ⟨I⟩; a first dark frame that high stops at once, so the flashing laser is still caught within the first second) → stop; **flicker** — the per-frame ROI light's variance, less what pixel noise alone gives, would move κ²_corr by more than **1 × 10⁻⁵** (σ_f² / (reference − light)²) → stop; **steady leak** → the amber window "Light Leak During the Dark Calibration" (`safety_dialog.DarkLeakDialog`), **Stop** the default (Enter / Escape / the X / a window that cannot open all stop). Continue → `Calibration.h5` `dark/light_check = "steady leak - operator continued"` with the mean, the laser level, the frame std, σ_f², the κ² effect and its limit — the same record in the results file's `metadata` as `dark_light_check…` (every session, passed ones too). No live picture → still a stop. Light under the limit is never judged for flicker: the camera's own frame-to-frame jitter is in the measurement too. **Why judge the effect, not the flicker:** the same leak moves κ²_corr by ≈ 0.5 % at 114 DU of signal and by ≈ 27 % at 33 DU (2026-10-19 leak, σ_f² ≈ 0.5 DU² scaled from the rig's room-light test) — so that leak would still **stop** the run at either level; room light around a probe will usually stop it. **Measured for the limit:** saved dark frames of 2026-10-22 (good probe, 600 at the max rate): the camera's own jitter σ_f² ≈ 4 × 10⁻⁴ DU² → 4 × 10⁻⁷ at 33 DU, 1/25 of the limit; but frames 0, 3 and 4 were ≈ 1 DU brighter than the rest (the laser's last light just after OK?) and alone brought it to 4.9 × 10⁻⁶. The lab recording's dark folder: 4.6 × 10⁻⁷. Every collected dark frame gets one more ROI mean on the GUI thread: 1.6–3.7 ms on the full sensor (dev PC) — the full-image dark step a little slower, a cut image unaffected. Plan: [`Plan_Q21_Steady_Leak.md`](Plan_Q21_Steady_Leak.md). Frames arriving behind the amber window are dropped (`_dark_light_deciding`); a run stopped behind it (a camera error presses Stop Video) is not continued. Tests: `test_dark_light_check.py` (+22: `TestJudge`, `TestSteadyLeak`, `TestFlickeringLeak`), `test_laser_safety.py::TestDarkLeak` (+8); 10 deliberate mistakes in the code, each caught. Rehearsal: `--scenario leak` (a steady 6 DU on the dark folder — window once, both records, judged steady at 5 × 10⁻⁷) passes; `normal` passes; mutations `leak-flicker` (4 / 8 DU in turn → stop, κ² effect 1.5 × 10⁻²) and `leak-stops` both caught. `tools/preview_safety_windows.py` shows the new window. Rig check: `rig_checklist.md` R10a (wording), R10d (room light → F), R10e (a steady torch, optional) |
 
+| 65 | The app starts from a desktop icon (D11, 2026-10-29) | The user asked for a double-click start instead of a terminal. **User's decisions (2026-10-29, left to me: "go with what you think is right"):** no console window, icon A (a cyan pulse curve, the live plot's colour, on the app's dark background; option B, a red laser spot with speckle grains, lost its detail at taskbar size). **Built:** (1) `tools/make_desktop_shortcut.py` — run once per PC; puts `SCOS.lnk` on the desktop (`GetFolderPath('Desktop')`, so a OneDrive desktop too): `venv\Scripts\pythonw.exe "<repo>\main.py"`, Start in = repo, icon `assets/scos.ico`. Made on the dev PC 2026-10-29. (2) `tools/make_icon.py` draws the icon at 16–256 px, each size on its own (line ≥ 2 px), into a PNG-in-ICO file; the `.ico` is committed. (3) `main.py`: `app.log` now goes **next to `main.py`** (`LOG_PATH`), not into the start folder — the only path that depended on it (settings, gain table and git hash were already anchored to their files; the output folder is picked in a dialog). Logging is no longer set up at import. (4) **One copy at a time:** a `QLockFile` (`scos.lock`, gitignored) is taken before `app.log` is opened — before this a second launch would have wiped the running session's log (mode="w") and fought it for the camera. The second copy shows "SCOS Is Already Running" and exits. Stale time 0: never released by age, only when the holder's process is gone (checked: held past 30 s, freed after a kill). Applies to the playback modes too. (5) **Crashes are no longer silent:** without a console an exception in a slot made the window vanish. `sys.excepthook` now logs the traceback (CRITICAL) and shows "SCOS Stopped — Error" (naming `app.log` and saying to copy it before the next start), shown by a separate tiny process so the app still **stops at once, as before** — carrying on in an unknown state could record wrong data. `threading.excepthook` only logs (a dying Python thread still ends only itself, as before). A crash inside C code (pypylon, Qt) bypasses both hooks: the window just vanishes, but `faulthandler` now writes every thread's stack into `app.log` (checked with a forced segfault). (6) `arduino-cli` and `git` run with `CREATE_NO_WINDOW` — under pythonw each would flash a black window. (7) Windows AppUserModelID set, so the taskbar shows the app's icon. **Checked on the dev PC through the real shortcut:** no console; `app.log` in the repo; the laser warning first (≈ 16 s after the click — imports); a second double-click gave the "already running" window and left the first copy's `app.log` intact; a forced error showed the crash window, exit code 1; a lock left by a killed copy was taken over by the next start (in a separate test).  Not checked: the taskbar icon by eye (left to the user). **Tests:** `tests/test_desktop_launch.py`. **Rig check:** `rig_checklist.md` R11. **Side finding, not fixed:** `confirm_laser_safety`'s docstring says `app.log` "is copied into the session folder" — nothing copies it; the next launch overwrites it |
 ---
 
 ## Map: frozen `merged_worklist.md` tasks → this file

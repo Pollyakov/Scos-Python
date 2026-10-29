@@ -243,6 +243,17 @@ run is then judged by the dark mean alone: a stop reads "the dark calibration's 
 | ☐ R10d | *(added 2026-10-28, Vika's answer to open question 21)* Laser **off**, room lights **on**; lift one edge of the probe a little so room light gets in; Start SCOS, OK | Room light flickers with the mains, so expect the **red** window, and in `app.log` "STOPPED — the dark calibration's mean is … flickering light, flicker would move κ² by F (limit 1e-05)" | The amber "Light Leak" window instead → click **Stop**, copy the `app.log` line "steady light leak — … flicker would move κ² by F": the room light flickers less than expected. Either way **write down F** — the first measured value for room light through a probe |
 | ☐ R10e | *(optional)* As R10d, but with a **steady** light instead of the room light — e.g. a battery torch held near the probe edge, room lights off | The amber window **"Light Leak During the Dark Calibration"**, **Stop** highlighted. Click **Stop**: run stopped, nothing written. Repeat and click **Continue**: the run goes on; `Calibration.h5` → `dark` attribute `light_check = steady leak - operator continued`, and the results file's `metadata` → `dark_light_check` the same | A red window → the torch flickers too (many do — PWM); copy the F value from `app.log` |
 
+### R11 · The desktop icon (written 2026-10-29, todo Done item 65)
+
+Once on the rig PC, after `git pull`. A few minutes, no subject, laser off.
+
+| | Do | Expect | If not |
+|---|---|---|---|
+| ☐ R11a | In the repo folder: `venv\Scripts\python.exe tools\make_desktop_shortcut.py` | `Made C:\Users\<user>\Desktop\SCOS.lnk` (or a OneDrive desktop) and the two lines it runs; an **SCOS** icon with the cyan pulse curve on the desktop. **Write down the repo path** it prints — not recorded anywhere yet | "Not found: …pythonw.exe" → `setup.bat` was never run on this PC |
+| ☐ R11b | Close every SCOS window; **double-click the icon** | No black console window. After a pause (≈ 15 s on the dev PC — imports) the **"Laser safety"** warning, then the app as in R2a. The taskbar button shows the **pulse-curve icon**, not Python's. `app.log` in the **repo folder** starts with "SCOS app starting" and the current time | Python's icon on the taskbar → tell me (cosmetic). Nothing at all after 30 s → open `app.log` in the repo folder and copy it |
+| ☐ R11c | While it runs, double-click the icon again | A small window **"SCOS Is Already Running"**; OK closes it; the first app runs on untouched (`app.log` still starts with the first launch's time) | A second laser warning → **close it with Exit** and tell me |
+| ☐ R11d | With the Arduino plugged in, tick **External Trigger** | The Arduino upload as in R9a — **no black window flashes** on the screen (the app runs `arduino-cli` twice: compile, upload) | Black windows flash → cosmetic, tell me |
+
 ---
 
 ## What to bring back
