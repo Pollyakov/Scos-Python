@@ -25,10 +25,11 @@ import threading
 import traceback
 from pathlib import Path
 
-import pyqtgraph as pg
-from PyQt6.QtCore import QLockFile
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication, QMessageBox
+# Only PyQt6 up here: everything heavier (pyqtgraph, scipy, h5py …) loads after
+# the "Starting SCOS…" sign is on screen.
+from PyQt6.QtCore import QLockFile, QRect, Qt
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 # Every file main.py writes or reads lives next to it, whatever folder the app
 # was started from — a desktop icon starts it from wherever Windows likes.
@@ -45,10 +46,6 @@ ALREADY_RUNNING_TITLE = "SCOS Is Already Running"
 CRASH_TITLE = "SCOS Stopped — Error"
 
 logger = logging.getLogger(__name__)
-
-# Dark theme for pyqtgraph
-pg.setConfigOption('background', '#1e1e1e')
-pg.setConfigOption('foreground', '#cccccc')
 
 
 def setup_logging(log_path: Path = LOG_PATH) -> None:
@@ -132,6 +129,26 @@ def _on_thread_exception(args: threading.ExceptHookArgs) -> None:
                      args.exc_type, args.exc_value, args.exc_traceback)))
 
 
+def splash_pixmap() -> QPixmap:
+    """The "Starting SCOS…" sign: the icon and two lines on the app's dark grey."""
+    pix = QPixmap(420, 150)
+    pix.fill(QColor("#1e1e1e"))
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QColor("#555555"))              # a splash has no frame of its own
+    p.drawRect(pix.rect().adjusted(0, 0, -1, -1))
+    p.drawPixmap(27, 27, QIcon(str(ICON_PATH)).pixmap(96, 96))
+    p.setPen(QColor("#dcdcdc"))
+    p.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+    p.drawText(QRect(145, 30, 260, 48), Qt.AlignmentFlag.AlignVCenter, "Starting SCOS…")
+    p.setPen(QColor("#9a9a9a"))
+    p.setFont(QFont("Segoe UI", 11))
+    p.drawText(QRect(145, 80, 260, 40), Qt.AlignmentFlag.AlignVCenter,
+               "This can take up to half a minute.")
+    p.end()
+    return pix
+
+
 def main():
     if sys.platform == "win32":
         import ctypes
@@ -150,10 +167,19 @@ def main():
             "camera, and it would overwrite the running session's app.log.")
         sys.exit(0)
 
+    # Loading the code below takes ≈ 10 s on a cold start (scipy, h5py,
+    # matplotlib; 2026-10-29) — without a console nothing would show meanwhile.
+    splash = QSplashScreen(splash_pixmap())
+    splash.show()
+    app.processEvents()
+
     sys.excepthook = _on_uncaught_exception     # before the log: a log that
     threading.excepthook = _on_thread_exception  # cannot open still shows the box
     setup_logging()
     logger.info("SCOS app starting")
+    import pyqtgraph as pg
+    pg.setConfigOption('background', '#1e1e1e')     # dark theme for the plots
+    pg.setConfigOption('foreground', '#cccccc')
     from gui.main_window import MainWindow
 
     parser = argparse.ArgumentParser(add_help=False)
@@ -179,6 +205,10 @@ def main():
     palette.setColor(QPalette.ColorRole.Highlight,       QColor(0, 120, 215))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
+
+    # Closed before anything else opens: it stays on top, and would cover the
+    # laser-safety warning.
+    splash.close()
 
     if args.mock_h5:
         logger.info("Mode: HDF5 replay — %s", args.mock_h5)

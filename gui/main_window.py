@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import warnings
 from pathlib import Path
@@ -1192,6 +1193,9 @@ class MainWindow(QMainWindow):
             return
         logger.warning("Run cancelled before the measurement — %s renamed to %s "
                        "(partial calibration, no results)", folder, target.name)
+        # Only into a folder kept anyway — an empty one is still removed above.
+        # It says why the run stopped (e.g. light during the dark calibration).
+        self._copy_app_log(target)
         self.status.showMessage(
             f"Run cancelled — partial calibration kept in {target}")
 
@@ -1317,6 +1321,7 @@ class MainWindow(QMainWindow):
             self._set_state(State.PREVIEW)
             if was_measuring:
                 self._show_probe_removal()
+                self._copy_app_log(session_folder)
             elif bright_stopped:
                 self._show_probe_removal(safety_dialog.PROBE_CANCELLED)
 
@@ -1344,6 +1349,38 @@ class MainWindow(QMainWindow):
                 self, outcome if outcome is not None else self._laser_off_outcome)
         except Exception:
             logger.exception("Probe-removal window could not be shown")
+
+    SESSION_LOG_FILENAME = "app.log"
+
+    def _copy_app_log(self, folder: Path | None) -> None:
+        """Copy the app's log, as it stands now, into a session folder.
+
+        app.log is rewritten at every launch, and started from the desktop icon
+        the app has no console — without this copy the record of a session (the
+        laser-safety confirmation, the calibration checks, the warnings) is gone
+        at the next start. Called last, after the probe-removal window, so the
+        copy holds everything up to the session's end; it starts at the app's
+        launch, so it may hold earlier sessions of the same run too.
+
+        The log is whatever file the root logger writes (main.py's app.log;
+        tools/rehearsal.py's own log in a rehearsal). A failed copy is only
+        logged — the session's data is already on disk.
+        """
+        if folder is None or not folder.is_dir():
+            return
+        # A real file only: pytest adds a FileHandler of its own on `nul`.
+        source = next((h for h in logging.getLogger().handlers
+                       if isinstance(h, logging.FileHandler)
+                       and Path(h.baseFilename).is_file()), None)
+        if source is None:
+            return
+        target = folder / self.SESSION_LOG_FILENAME
+        logger.info("Copying the app log into the session folder: %s", target)
+        source.flush()
+        try:
+            shutil.copyfile(source.baseFilename, target)
+        except OSError:
+            logger.exception("Could not copy the app log to %s", target)
 
     def _finish_session(self) -> None:
         """Single finalization point for a completed measurement.

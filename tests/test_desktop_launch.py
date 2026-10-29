@@ -80,14 +80,129 @@ class TestSecondCopy:
         again.unlock()
 
     def test_lock_comes_before_the_log_and_the_laser_warning(self):
-        tree = ast.parse((REPO / "main.py").read_text(encoding="utf-8"))
-        fn = next(n for n in tree.body
-                  if isinstance(n, ast.FunctionDef) and n.name == "main")
-        src = ast.unparse(fn)
+        src = _main_source()
         lock = src.index("acquire_instance_lock()")
         assert lock < src.index("setup_logging()")
         assert lock < src.index("confirm_laser_safety()")
         assert lock < src.index("CameraThread()")
+
+
+def _main_source() -> str:
+    tree = ast.parse((REPO / "main.py").read_text(encoding="utf-8"))
+    return ast.unparse(next(n for n in tree.body
+                            if isinstance(n, ast.FunctionDef) and n.name == "main"))
+
+
+class TestStartingSign:
+    """≈ 10 s pass on a cold start before anything else appears (2026-10-29)."""
+
+    def test_sign_is_drawn(self):
+        pix = main.splash_pixmap()
+        assert not pix.isNull()
+        assert (pix.width(), pix.height()) == (420, 150)
+
+    def test_nothing_heavy_loads_before_the_sign(self):
+        """Only the standard library and PyQt6 at the top of main.py."""
+        tree = ast.parse((REPO / "main.py").read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                top = name.split(".")[0]
+                assert top == "PyQt6" or top in sys.stdlib_module_names, name
+
+    def test_shown_after_the_lock_and_closed_before_the_laser_warning(self):
+        src = _main_source()
+        shown = src.index("QSplashScreen(")
+        assert src.index("acquire_instance_lock()") < shown
+        assert shown < src.index("from gui.main_window import MainWindow")
+        # It stays on top: it must be gone before the warning or any window opens.
+        closed = src.index("splash.close()")
+        assert closed < src.index("confirm_laser_safety()")
+        assert closed < src.index("MainWindow(")
+
+
+class TestLogCopiedIntoSession:
+    """app.log is rewritten at every launch; a copy stays with each session."""
+
+    @pytest.fixture
+    def file_log(self, tmp_path):
+        handler = logging.FileHandler(tmp_path / "running.log", encoding="utf-8")
+        root = logging.getLogger()
+        root.addHandler(handler)
+        yield handler
+        root.removeHandler(handler)
+        handler.close()
+
+    def _copy(self, folder):
+        from gui.main_window import MainWindow
+
+        class _Win:
+            SESSION_LOG_FILENAME = MainWindow.SESSION_LOG_FILENAME
+        MainWindow._copy_app_log(_Win(), folder)
+
+    def test_copy_holds_everything_logged_so_far(self, file_log, tmp_path):
+        session = tmp_path / "session"
+        session.mkdir()
+        logging.getLogger("test").warning("a line from the session")
+        self._copy(session)
+        text = (session / "app.log").read_text(encoding="utf-8")
+        assert "a line from the session" in text
+
+    def test_no_folder_no_copy(self, file_log, tmp_path):
+        self._copy(None)
+        self._copy(tmp_path / "missing")
+        assert not (tmp_path / "missing").exists()
+
+    def _discard(self, folder):
+        """MainWindow._discard_session_folder on a stand-in with only what it uses."""
+        from gui.main_window import MainWindow
+
+        class _Status:
+            def showMessage(self, *_):
+                pass
+
+        class _Win:
+            SESSION_LOG_FILENAME = MainWindow.SESSION_LOG_FILENAME
+            _copy_app_log = MainWindow._copy_app_log
+            status = _Status()
+
+            def _close_frame_writer(self):
+                pass
+        win = _Win()
+        win._session_folder = folder
+        MainWindow._discard_session_folder(win)
+
+    def test_cancelled_run_with_a_calibration_keeps_a_copy(self, file_log, tmp_path):
+        folder = tmp_path / "scos_x"
+        folder.mkdir()
+        (folder / "Calibration.h5").write_bytes(b"dark only")
+        logging.getLogger("test").warning("why the run stopped")
+        self._discard(folder)
+        kept = tmp_path / "scos_x_cancelled"
+        assert "why the run stopped" in (kept / "app.log").read_text(encoding="utf-8")
+
+    def test_cancelled_empty_folder_is_still_removed(self, file_log, tmp_path):
+        folder = tmp_path / "scos_y"
+        folder.mkdir()
+        self._discard(folder)
+        assert not folder.exists()
+        assert not (tmp_path / "scos_y_cancelled").exists()
+
+    def test_copied_after_the_last_window_of_a_session(self):
+        import inspect
+        from gui.main_window import MainWindow
+        src = inspect.getsource(MainWindow._toggle_scos)
+        assert src.index("self._show_probe_removal()") < src.index(
+            "self._copy_app_log(session_folder)")
+        # A cancelled run's kept folder gets one too — never an empty one,
+        # which must still be removed.
+        src = inspect.getsource(MainWindow._discard_session_folder)
+        assert src.index("folder.rmdir()") < src.index("self._copy_app_log(target)")
 
 
 class TestCrash:

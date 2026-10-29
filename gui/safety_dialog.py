@@ -160,7 +160,8 @@ class LaserSafetyDialog(_SafetyWindow):
 def confirm_laser_safety(parent: QWidget | None = None) -> bool:
     """Show the warning and wait. True only if the operator clicked "I confirm".
 
-    Both answers go into app.log, which is copied into the session folder —
+    Both answers go into app.log, which is copied into the session folder at
+    the end of each session (MainWindow._copy_app_log, since 2026-10-29) —
     a record that the warning was confirmed, and when.
     """
     dialog = LaserSafetyDialog(parent)

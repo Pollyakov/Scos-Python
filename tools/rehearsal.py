@@ -85,7 +85,9 @@ METADATA_FIELDS  = {"camera_sn", "camera_model", "gain_du_per_e", "gain_source",
 # Spelled out, not imported from core.recorder, so a wrong name in the app is
 # caught here (protocol step 6; todo U9).
 RESULTS_FILE     = "rBFi_resultsAndParameters.h5"
-SESSION_FILES    = {"Calibration.h5", RESULTS_FILE, "rBfi_fig.png"}
+# app.log: a copy of the running log, made after the probe-removal window
+# (todo Done item 66) — in a rehearsal, of this rehearsal's log.
+SESSION_FILES    = {"Calibration.h5", RESULTS_FILE, "rBfi_fig.png", "app.log"}
 # How long preview keeps playing after Stop SCOS before Stop Video, so the K1
 # check sees displayed frames arrive after the closing message.
 CLOSING_HOLD_S   = 3.0
@@ -1400,6 +1402,11 @@ def verify_outputs(run: Run, folder: Path | None, w, cam, args,
     if fig.exists():
         run.check(fig.stat().st_size > 5_000,
                   f"rBfi_fig.png is a real image ({fig.stat().st_size} bytes)")
+    log_copy = folder / "app.log"
+    if log_copy.exists():
+        text = log_copy.read_text(encoding="utf-8", errors="replace")
+        run.check("Probe-removal instructions shown" in text,
+                  "app.log copy covers the session to its end (the probe-removal window)")
 
     def sat_names(f) -> list[str]:
         hits = []

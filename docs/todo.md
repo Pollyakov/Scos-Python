@@ -170,6 +170,49 @@ no `single()` in the repo). κ²_corr there ≈ 0.008; at a smaller κ² the gap
 
 ---
 
+#### A5 · Vika's run on saved frames: raw κ² agrees, corrected κ² is 8 % off — find out why *(reported by the user 2026-10-29)*
+
+**What came back.** Vika ran her MATLAB script (`SCOSvsTime_WithNoiseSubtraction_Ver2`) on the frames
+the app saved in session `TestKsenia\scos_20261022_165057` (the rig check of Save Frames, `rig_checklist.md`
+R8d; PRO camera SN 40513592, cut 500 × 495, 8 ms, 8 dB, 20 Hz, BL 100, 1 min, light weak that day,
+⟨I⟩ ≈ 33 DU). Against the app's results:
+- **raw κ²: 0.01 % apart** — the frames, the mask and the mean intensity agree;
+- **corrected κ² ("raw contrast after cleaning"): 8 % apart** — too much to leave unexplained. **Needed
+  before the v0 tag (E5).**
+- One more frame was saved than processed: **1301 measurement frames saved, 1300 results** (known and
+  expected — the last frame was still inside the pipeline at Stop SCOS, "tail 1", Done item 62). Her
+  script reads all 1301. One frame in 1300 moves a mean by about 0.1 % at most, so it cannot explain
+  8 % — but check that her per-frame comparison pairs frames by index (`frame_times.csv`), not shifted
+  by one.
+
+**Why raw agrees and corrected does not — where to look.** Raw κ² = var / ⟨I⟩². Corrected κ² subtracts
+noise terms from the variance first: G·⟨I⟩ (shot noise), `spVar` (the fixed speckle pattern), the dark
+variance, 1/12 (quantization). Raw agreeing to 0.01 % rules out the frames, mask and ⟨I⟩; the gap is in
+one of the subtracted terms. **Weak light makes it large:** what is left after the subtraction is a
+small difference of large numbers, and at ⟨I⟩ ≈ 33 DU a small absolute difference in one term is a
+big relative change in κ²_corr (to be computed from this session's numbers — step 3).
+Candidates, most likely first:
+1. **`spVar` source — expected to differ.** Her script takes `spVar` from the first 600 **measurement**
+   frames; the app takes it from the 600 **bright-calibration** frames (R8d's "Expect" column already
+   says "close but not identical"). Also open question 17 (the leftover temporal noise in `spVar`
+   depends on the number of frames averaged).
+2. **The dark variance** — same 600 dark frames (`_dark` folder), but check how each side builds it
+   (per pixel vs. one number; subtracting the black level or the dark mean).
+3. **G** — both should read `CamerasMeasuredGain.csv` for SN 40513592 Mono12 at 8 dB; check the value
+   her run actually used (16-bit TIFFs are read as Mono12).
+4. The 1/12 term, and any term one side applies and the other does not.
+
+**Steps.**
+1. Get from Vika her outputs for this run: the κ²_corr per frame (or the `.mat` it saves), and the
+   `spVar`, dark variance and G she used. Ask how she computed "8 %" (mean over the session? per frame?).
+2. `tools/compare_with_matlab.py "<session folder>"` on her output.
+3. Term by term: the ROI mean of each subtracted term on both sides, in DU², next to var − G·⟨I⟩ — the
+   term whose difference is ≈ 8 % of κ²_corr · ⟨I⟩² is the cause.
+4. If it is `spVar` (candidate 1): rerun the app's math with her `spVar` (from the first 600 measurement
+   frames) — it should then agree; then the question for Vika is which source is right, not a bug.
+
+---
+
 ### Tier E — v0 Release Requirements
 
 These are the concrete items needed before tagging version 0. They come from the
@@ -272,7 +315,8 @@ Show the saved path in the status bar.
 **Decided 2026-10-20 (user):** the tag waits until **Vika has checked the math on saved
 frames**. If those are frames saved *by this app*, raw-frame saving (F1) must come first —
 done 2026-10-21 (Done item 58); rig check passed 2026-10-22 (`rig_checklist.md` R8a–c,
-session `scos_20261022_165057`); **now waiting for her check** (R8d).
+session `scos_20261022_165057`). **Her check came back (2026-10-29):** raw κ² 0.01 % apart,
+corrected κ² 8 % apart — **A5 must explain the 8 % before the tag.**
 
 After E1–E4 are done and all tests pass, create an annotated git tag:
 ```
@@ -963,7 +1007,7 @@ unchanged.
 ▶ fixes from the first rig session (above): U1 → U2 → U3 → U4 → U5 → U8 → U9 → U6 → U10 → D8 → U11   (all ✅; U6 and U11 checked on the rig 2026-10-19)
 ▶ rig-session prep (above): all ✅ or closed 2026-10-20, except 3d (long run — before the first long recording) and 5b (not sent)
   then, after a successful session:
-~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20)
+~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20) → **A5 (corrected κ² 8 % off Vika's — before E5)**
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
   → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
@@ -1044,6 +1088,7 @@ unchanged.
 | 64 | A steady light leak warns, a flickering one stops (open question 21, 2026-10-28) | **Vika's answer (2026-10-28):** a leak that flickers during the dark calibration must stop the run; a steady one leaves the measurement valid, so only a warning — the operator decides. Until then any light above the limit stopped the run (item 61). **Built (user's decisions 2026-10-28, all as recommended, the strict setting):** three cases, `core/dark_light.py` `judge()` — **the laser** (light ≥ 50 % of the live picture's ⟨I⟩; a first dark frame that high stops at once, so the flashing laser is still caught within the first second) → stop; **flicker** — the per-frame ROI light's variance, less what pixel noise alone gives, would move κ²_corr by more than **1 × 10⁻⁵** (σ_f² / (reference − light)²) → stop; **steady leak** → the amber window "Light Leak During the Dark Calibration" (`safety_dialog.DarkLeakDialog`), **Stop** the default (Enter / Escape / the X / a window that cannot open all stop). Continue → `Calibration.h5` `dark/light_check = "steady leak - operator continued"` with the mean, the laser level, the frame std, σ_f², the κ² effect and its limit — the same record in the results file's `metadata` as `dark_light_check…` (every session, passed ones too). No live picture → still a stop. Light under the limit is never judged for flicker: the camera's own frame-to-frame jitter is in the measurement too. **Why judge the effect, not the flicker:** the same leak moves κ²_corr by ≈ 0.5 % at 114 DU of signal and by ≈ 27 % at 33 DU (2026-10-19 leak, σ_f² ≈ 0.5 DU² scaled from the rig's room-light test) — so that leak would still **stop** the run at either level; room light around a probe will usually stop it. **Measured for the limit:** saved dark frames of 2026-10-22 (good probe, 600 at the max rate): the camera's own jitter σ_f² ≈ 4 × 10⁻⁴ DU² → 4 × 10⁻⁷ at 33 DU, 1/25 of the limit; but frames 0, 3 and 4 were ≈ 1 DU brighter than the rest (the laser's last light just after OK?) and alone brought it to 4.9 × 10⁻⁶. The lab recording's dark folder: 4.6 × 10⁻⁷. Every collected dark frame gets one more ROI mean on the GUI thread: 1.6–3.7 ms on the full sensor (dev PC) — the full-image dark step a little slower, a cut image unaffected. Plan: [`Plan_Q21_Steady_Leak.md`](Plan_Q21_Steady_Leak.md). Frames arriving behind the amber window are dropped (`_dark_light_deciding`); a run stopped behind it (a camera error presses Stop Video) is not continued. Tests: `test_dark_light_check.py` (+22: `TestJudge`, `TestSteadyLeak`, `TestFlickeringLeak`), `test_laser_safety.py::TestDarkLeak` (+8); 10 deliberate mistakes in the code, each caught. Rehearsal: `--scenario leak` (a steady 6 DU on the dark folder — window once, both records, judged steady at 5 × 10⁻⁷) passes; `normal` passes; mutations `leak-flicker` (4 / 8 DU in turn → stop, κ² effect 1.5 × 10⁻²) and `leak-stops` both caught. `tools/preview_safety_windows.py` shows the new window. Rig check: `rig_checklist.md` R10a (wording), R10d (room light → F), R10e (a steady torch, optional) |
 
 | 65 | The app starts from a desktop icon (D11, 2026-10-29) | The user asked for a double-click start instead of a terminal. **User's decisions (2026-10-29, left to me: "go with what you think is right"):** no console window, icon A (a cyan pulse curve, the live plot's colour, on the app's dark background; option B, a red laser spot with speckle grains, lost its detail at taskbar size). **Built:** (1) `tools/make_desktop_shortcut.py` — run once per PC; puts `SCOS.lnk` on the desktop (`GetFolderPath('Desktop')`, so a OneDrive desktop too): `venv\Scripts\pythonw.exe "<repo>\main.py"`, Start in = repo, icon `assets/scos.ico`. Made on the dev PC 2026-10-29. (2) `tools/make_icon.py` draws the icon at 16–256 px, each size on its own (line ≥ 2 px), into a PNG-in-ICO file; the `.ico` is committed. (3) `main.py`: `app.log` now goes **next to `main.py`** (`LOG_PATH`), not into the start folder — the only path that depended on it (settings, gain table and git hash were already anchored to their files; the output folder is picked in a dialog). Logging is no longer set up at import. (4) **One copy at a time:** a `QLockFile` (`scos.lock`, gitignored) is taken before `app.log` is opened — before this a second launch would have wiped the running session's log (mode="w") and fought it for the camera. The second copy shows "SCOS Is Already Running" and exits. Stale time 0: never released by age, only when the holder's process is gone (checked: held past 30 s, freed after a kill). Applies to the playback modes too. (5) **Crashes are no longer silent:** without a console an exception in a slot made the window vanish. `sys.excepthook` now logs the traceback (CRITICAL) and shows "SCOS Stopped — Error" (naming `app.log` and saying to copy it before the next start), shown by a separate tiny process so the app still **stops at once, as before** — carrying on in an unknown state could record wrong data. `threading.excepthook` only logs (a dying Python thread still ends only itself, as before). A crash inside C code (pypylon, Qt) bypasses both hooks: the window just vanishes, but `faulthandler` now writes every thread's stack into `app.log` (checked with a forced segfault). (6) `arduino-cli` and `git` run with `CREATE_NO_WINDOW` — under pythonw each would flash a black window. (7) Windows AppUserModelID set, so the taskbar shows the app's icon. **Checked on the dev PC through the real shortcut:** no console; `app.log` in the repo; the laser warning first (≈ 16 s after the click — imports); a second double-click gave the "already running" window and left the first copy's `app.log` intact; a forced error showed the crash window, exit code 1; a lock left by a killed copy was taken over by the next start (in a separate test).  Not checked: the taskbar icon by eye (left to the user). **Tests:** `tests/test_desktop_launch.py`. **Rig check:** `rig_checklist.md` R11. **Side finding, not fixed:** `confirm_laser_safety`'s docstring says `app.log` "is copied into the session folder" — nothing copies it; the next launch overwrites it |
+| 66 | "Starting SCOS…" sign, and `app.log` copied into every session folder (2026-10-29) | Two follow-ups to the desktop icon (item 65), asked for by the user. **(1) The sign:** on a cold start the app's code takes ≈ 10 s to load (scipy, h5py, matplotlib — measured 2026-10-29; ≈ 1.4 s when warm), and with no console nothing showed meanwhile — an operator would double-click again. `main.py` now shows a small dark `QSplashScreen` (the icon, "Starting SCOS…", "This can take up to half a minute.") right after the one-copy lock is taken, and closes it **before** the laser-safety warning or any window opens — a splash stays on top and would cover the warning. Only PyQt6 and the standard library are imported at the top of `main.py` (pyqtgraph moved into `main()`), so the sign comes first. **Measured through the real icon, 2026-10-29:** sign after ≈ 1 s, laser warning after ≈ 2.4 s (warm). Twice the first start after a code change took ≈ 10 s before the first log line — before the sign could show (Python starting and loading freshly changed files; Windows scanning them is the likely cause, not proven). Expect that after each `git pull` on the rig. **(2) The log copy:** `app.log` is rewritten at every launch, and without a console it is the only record of a session (the laser-safety confirmation, calibration checks, warnings). `MainWindow._copy_app_log()` copies it into the session folder as `app.log` **after the probe-removal window**, so the copy covers the whole session (it starts at the app's launch, so it may hold earlier sessions of the same run too); also into a cancelled run's kept `_cancelled` folder (it says why the run stopped) — never into an empty one, which is still removed. The source is the root logger's file handler that writes a real file (pytest adds one on `nul`); in a rehearsal it is the rehearsal's log. A failed copy is only logged. `safety_dialog.confirm_laser_safety`'s docstring had claimed this copy since 2026-10-09 — now true. **Checked:** rehearsals `normal` and `leak` pass with `app.log` in the session folder, its copy ending with the probe-removal window. **Tests:** `tests/test_desktop_launch.py` (sign drawn, nothing heavy imported before it, shown after the lock and closed before the warning; a cancelled run's kept folder gets a copy, an empty one is still removed; copy holds the lines so far; placement after the last window; not into an empty cancelled folder) |
 ---
 
 ## Map: frozen `merged_worklist.md` tasks → this file
