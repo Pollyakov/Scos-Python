@@ -220,6 +220,30 @@ class TestStartScosGainGate:
             w.btn_start_scos.setChecked(False)
             w.close()
 
+    def test_another_threads_warning_is_not_a_rescaled_gain(self, dialogs, monkeypatch):
+        """catch_warnings() records warnings from every thread. A pipeline
+        worker's numpy "Mean of empty slice" landing inside the lookup once
+        opened "Estimated G" for an exact row (fast suite, 2026-10-31)."""
+        import threading
+        import warnings
+        w = _window(serial=LAB_SN, fmt="Mono12", gain_db=8.0)
+        real = w.processor.resolve_gain
+
+        def _with_a_foreign_warning():
+            t = threading.Thread(
+                target=lambda: warnings.warn("Mean of empty slice", RuntimeWarning))
+            t.start()
+            t.join()
+            return real()
+        monkeypatch.setattr(w.processor, "resolve_gain", _with_a_foreign_warning)
+        try:
+            w.btn_start_scos.setChecked(True)
+            assert dialogs["warning"] == []
+            assert w.btn_start_scos.isChecked()
+        finally:
+            w.btn_start_scos.setChecked(False)
+            w.close()
+
     def test_inexact_gain_warns_and_continues(self, dialogs):
         """Mono10 @ 24 dB: rescaled from the 20 dB row, operator told, run starts."""
         w = _window(serial=LAB_SN, fmt="Mono10", gain_db=24.0)

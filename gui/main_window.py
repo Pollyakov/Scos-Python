@@ -28,7 +28,8 @@ from PyQt6.QtCore import Qt, QEvent, QEventLoop, QSize, QTimer, QThread, pyqtSig
 import scipy.io
 
 from camera    import CameraThread
-from processor import SCOSProcessor, GainTableError, shrink_mask_for_window
+from processor import (SCOSProcessor, GainRescaledWarning, GainTableError,
+                       shrink_mask_for_window)
 from core.session   import (BrightCalCollector, DarkCalCollector, State,
                             NORM_METHOD_MEAN, NORM_METHOD_PERCENTILE,
                             choose_norm_method, normalization_constant)
@@ -3438,6 +3439,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self, "Can't calculate SCOS", f"{exc}{self._GAIN_TABLE_HINT}")
             return False
+        # Only the table's own warning: `caught` also holds whatever other
+        # threads warned meanwhile (catch_warnings is process-wide).
+        rescaled = any(issubclass(w.category, GainRescaledWarning) for w in caught)
 
         logger.info("G = %.6f DU/e (source: %s, SN %s, Mono%d, %.1f dB)",
                     g, self.processor.gain_source, sn or "-",
@@ -3454,7 +3458,7 @@ class MainWindow(QMainWindow):
                 f"These results are for exercising the GUI — do not use them as "
                 f"measurements.",
             )
-        elif caught:
+        elif rescaled:
             QMessageBox.warning(
                 self, "Estimated G[DU/e]",
                 f"CameraSN {sn} Mono{self.processor.bit_depth} is in the "

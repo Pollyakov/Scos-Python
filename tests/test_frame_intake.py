@@ -104,6 +104,10 @@ def replay(tmp_path_factory):
     cam.stop()
     pipeline.stop()
     pipeline.wait(3000)
+    # The stalled GUI leaves frames and results queued for these slots; cut
+    # them off here, or they run during a later test (todo D9).
+    cam.frame_ready.disconnect()
+    pipeline.result_ready.disconnect()
 
     return {
         "times":      times,

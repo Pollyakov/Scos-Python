@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import tifffile
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -121,7 +121,13 @@ class TestPlaybackSource:
         cam = FolderMockCamera(recording, loop=True)
         cam.open()
         frames = []
-        cam.frame_ready.connect(lambda f, t: frames.append(int(f[8, 8])))
+        # Direct: the lambda runs on the camera thread, so no call to it can
+        # wait in Qt's event queue after the test. Queued, the frames still
+        # waiting at cam.stop() were delivered during a later test — the
+        # intermittent access violation in test_window_fits_screen.py (todo D9,
+        # same dump 2026-10-29 and 2026-10-31).
+        cam.frame_ready.connect(lambda f, t: frames.append(int(f[8, 8])),
+                                Qt.ConnectionType.DirectConnection)
         cam.frame_rate = 200.0
 
         cam.set_playback_source("dark")
@@ -130,14 +136,11 @@ class TestPlaybackSource:
         n_dark = len(frames)
 
         cam.set_playback_source("main")
-        # Wait for main frames to actually arrive, not for "N more frames":
-        # frame_ready is a queued connection, so dark frames emitted before the
-        # switch can still be in Qt's event queue — on a loaded machine enough
-        # of them to satisfy a count. (That backlog is real, and is what
-        # MainWindow._flush_stale_frames() exists for.)
+        # Wait for main frames to actually arrive, not for "N more frames".
         dark, main = DARK_DU << SHIFT, MAIN_DU << SHIFT
         qapp_processing(lambda: frames.count(main) >= 3)
         cam.stop()
+        cam.frame_ready.disconnect()
 
         assert frames[0] == dark
         first_main = frames.index(main)

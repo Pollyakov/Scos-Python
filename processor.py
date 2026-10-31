@@ -29,6 +29,13 @@ class GainTableError(ValueError):
     """Raised when a camera's SN + nBits combination is absent from the gain CSV."""
 
 
+class GainRescaledWarning(UserWarning):
+    """The exact gain_db is not in the table: G was rescaled in dB from the
+    closest row. Its own type so MainWindow._prepare_gain() can tell it from any
+    other warning — warnings.catch_warnings() also records those raised by other
+    threads meanwhile (a pipeline worker's numpy RuntimeWarning, todo D9)."""
+
+
 @dataclass(frozen=True)
 class _RoiCrop:
     """Immutable bundle of ROI-dependent state.
@@ -141,7 +148,7 @@ def load_gain_from_table(
         warnings.warn(
             f"gain_db={gain_db} not in table for cameraSN={camera_sn}, nBits={n_bits}. "
             f"Interpolated G={actual_g:.6f} DU/e from closest entry at {dbs[idx]} dB.",
-            UserWarning,
+            GainRescaledWarning,
             stacklevel=2,
         )
 

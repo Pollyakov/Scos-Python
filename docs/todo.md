@@ -772,8 +772,46 @@ leaves a pipeline running. The rerun minutes later passed.
 
 **2026-10-31, in the pre-commit hook (a docs-only commit):** the **same dump, line for line** — access
 violation in `test_window_fits_screen.py`'s `_settle()`, running the `<lambda>` from
-`test_playback_calibration.py`, with the same two leaked `RealtimePipeline` threads. Two dumps out of
-two point at that lambda, so the lead above is now the first thing to try.
+`test_playback_calibration.py`, with the same two `RealtimePipeline` threads. Two dumps out of
+two point at that lambda.
+
+**Correction (2026-10-31): the two pipeline threads are not a leak.** `MainWindow.__init__` starts its
+own pipeline (`gui/main_window.py:307-308`), and the crash happened inside the `win` fixture, right
+after it built a window — they are that window's fresh, idle pipeline. Checked: a pytest plugin that
+listed the threads alive after every test of a full run found none left behind by any test.
+
+**Fix applied 2026-10-31 — watching, not proven.** The isolated pair (`test_emitted_frames_follow_the_source`
+then `test_window_fits_screen.py`) did not crash in 15 runs, nor in 6 with Python's garbage collector
+forced to run often, so the crash was never reproduced on demand. What was changed:
+- `test_emitted_frames_follow_the_source` connects its lambda with `DirectConnection` (it runs on the
+  camera thread, as in every other camera test here) and disconnects it after `cam.stop()` — no call
+  to it can wait in Qt's event queue any more;
+- `tests/test_frame_intake.py`'s `replay` fixture, the same shape (a deliberately stalled GUI leaves
+  frames and results queued for its slots), disconnects both after the pipeline has stopped.
+Checked that a disconnect really discards calls already queued: 5 of 5 delivered without it, 0 of 5
+with it (PyQt6, a signal emitted from another thread). Also seen during this work, a **different**
+flaky test: `test_pipeline.py::TestStopDiscardingBacklog::test_finishes_after_one_round_not_the_whole_backlog`
+failed once — "stop took 1.06 s", limit 0.6 s — a timing check, during a run with a diagnostic
+plugin; it can block a commit too. Not chased.
+
+**Verification, first 10 fast runs after the fix (2026-10-31):** 9 passed (887 each); no access
+violation in any. Run 10 failed **for another reason — a small real app bug, now fixed:**
+`test_results_schema.py::TestGuiWiring::test_start_time_is_the_time_of_t0` reached
+`QMessageBox.warning("Estimated G[DU/e]")` for an exact table row (Mono12, 8 dB, G = 0.9313).
+`MainWindow._prepare_gain()` treated **any** warning recorded during `resolve_gain()` as "G was
+rescaled", and `warnings.catch_warnings()` is process-wide — it also records warnings raised by
+other threads meanwhile. In that test a pipeline worker processes an all-zero frame and numpy
+warns "Mean of empty slice"; normally before or after the lookup, that once inside it. G itself
+was always right — only the message was false; the same could have shown the operator a false
+"Estimated G" window. Fix: `processor.GainRescaledWarning` (a `UserWarning`), raised by
+`load_gain_from_table()` for a rescaled G; `_prepare_gain()` reacts to that type only. Test
+`test_gain_table.py::TestStartScosGainGate::test_another_threads_warning_is_not_a_rescaled_gain`
+(a thread warns inside the lookup); with the old `elif caught:` put back it fails.
+
+**Then, on the final code:** the whole suite with the slow MATLAB tests once (894 passed, 7 min), then
+10 fast runs one after another (888 passed each). **So far 21 full runs since the fix without the
+access violation** (before it: about 1 run in 5–10). Still open by the rule below — close it after
+≥ 30, counting the pre-commit hook's runs.
 
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
