@@ -190,7 +190,11 @@ noise terms from the variance first: G·⟨I⟩ (shot noise), `spVar` (the fixed
 variance, 1/12 (quantization). Raw agreeing to 0.01 % rules out the frames, mask and ⟨I⟩; the gap is in
 one of the subtracted terms. **Weak light makes it large:** what is left after the subtraction is a
 small difference of large numbers, and at ⟨I⟩ ≈ 33 DU a small absolute difference in one term is a
-big relative change in κ²_corr (to be computed from this session's numbers — step 3).
+big relative change in κ²_corr. **This session's numbers** (open question 20): raw κ² ≈ 0.033, shot noise
+G/⟨I⟩ ≈ 0.028 (G = 0.931 for SN 40513592), corrected κ² ≈ 0.0017 — only ≈ 5 % of raw. So 8 % of κ²_corr
+≈ 1.4 × 10⁻⁴ ≈ **0.4 % of raw κ²**: any one noise term off by that much explains the whole gap. Example:
+G = 0.956 (the rig camera SN 40075248's value) instead of 0.931 would move the shot-noise term by
+≈ 7 × 10⁻⁴ — about five times the gap — so G is worth checking first, it is the cheapest.
 Candidates, most likely first:
 1. **`spVar` source — expected to differ.** Her script takes `spVar` from the first 600 **measurement**
    frames; the app takes it from the 600 **bright-calibration** frames (R8d's "Expect" column already
@@ -198,8 +202,8 @@ Candidates, most likely first:
    depends on the number of frames averaged).
 2. **The dark variance** — same 600 dark frames (`_dark` folder), but check how each side builds it
    (per pixel vs. one number; subtracting the black level or the dark mean).
-3. **G** — both should read `CamerasMeasuredGain.csv` for SN 40513592 Mono12 at 8 dB; check the value
-   her run actually used (16-bit TIFFs are read as Mono12).
+3. **G** — both should read `CamerasMeasuredGain.csv` for SN 40513592 Mono12 at 8 dB (0.931); check the
+   value her run actually used (16-bit TIFFs are read as Mono12; the SN is in the file names).
 4. The 1/12 term, and any term one side applies and the other does not.
 
 **Steps.**
@@ -765,6 +769,11 @@ and a worker's `run`, both waiting) — a pipeline some test never shut down. **
 in that test, disconnect `frame_ready` and drain the queue (`processEvents()` until empty) after
 `cam.stop()`, or give the lambda a context object that lives as long as the camera; and find which test
 leaves a pipeline running. The rerun minutes later passed.
+
+**2026-10-31, in the pre-commit hook (a docs-only commit):** the **same dump, line for line** — access
+violation in `test_window_fits_screen.py`'s `_settle()`, running the `<lambda>` from
+`test_playback_calibration.py`, with the same two leaked `RealtimePipeline` threads. Two dumps out of
+two point at that lambda, so the lead above is now the first thing to try.
 
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
