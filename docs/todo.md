@@ -809,8 +809,8 @@ was always right — only the message was false; the same could have shown the o
 (a thread warns inside the lookup); with the old `elif caught:` put back it fails.
 
 **Then, on the final code:** the whole suite with the slow MATLAB tests once (894 passed, 7 min), then
-10 fast runs one after another (888 passed each). **So far 21 full runs since the fix without the
-access violation** (before it: about 1 run in 5–10). Still open by the rule below — close it after
+10 fast runs one after another (888 passed each), then the hook of commit `a0daed7` (888). **So far
+22 full runs since the fix without the access violation** (before it: about 1 run in 5–10). Still open by the rule below — close it after
 ≥ 30, counting the pre-commit hook's runs.
 
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names

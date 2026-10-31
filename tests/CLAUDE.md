@@ -39,3 +39,12 @@ of a window that has never been shown, so after a `setText()` every `sizeHint()`
 window with `WA_DontShowOnScreen` set first (laid out, never drawn — the suite runs in the
 pre-commit hook), and let a change climb the layouts with several `processEvents()` passes,
 one per level.
+
+A test that connects its own function or lambda to a **camera's or pipeline's signal** (emitted
+from another thread) must not leave calls queued for it: connect with
+`Qt.ConnectionType.DirectConnection` where it can run on that thread, and `disconnect()` after
+`stop()`/`wait()` (a disconnect discards the calls already queued). Otherwise the frames still
+queued at `stop()` reach it during a later test — the random access violation in
+`test_window_fits_screen.py` (todo D9, fixed 2026-10-31). Note also that
+`warnings.catch_warnings()` is process-wide: it records warnings from every thread, so check for
+the warning's own type (e.g. `processor.GainRescaledWarning`), never "any warning".
