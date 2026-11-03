@@ -17,7 +17,8 @@ Frames are matched by file name: the script's `frameNames` against the app's
 results file. Prints how far apart raw κ², corrected κ² and ⟨I⟩ are.
 
 What can differ, and why (read from her code, 2026-10-20): her `spVar` comes
-from the first 600 frames of the recording itself, the app's from the bright
+from the first 600 frames of the recording itself (1000 when it has more than
+1000 — found 2026-11-01), the app's from the bright
 calibration frames; her ⟨I⟩² in the κ² denominator is a fitted mean image
 (`FitMeanIm`), the app's the local mean. On the lab recording, with the same
 dark frames, G and spVar, the two agree within 0.45 % (raw) and 1.2 %

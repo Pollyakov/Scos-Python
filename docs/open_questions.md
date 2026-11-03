@@ -164,12 +164,15 @@ is most of raw κ² (0.033), so corrected κ² (0.0017) is a small remainder, se
 in G or the noise terms. Is ≈ 30 DU acceptable, or should the laser power / fiber be checked?
 
 **22. Your run on the saved frames — the 8 % in corrected κ²** *(raised 2026-10-29, todo A5;
-not sent yet.)* Thank you for running your script on `scos_20261022_165057`. Raw κ² agrees to
+**sent 2026-10-31**, waiting for her answer. Correction found 2026-11-01 in her code: for (c),
+her script uses the first **1000** frames, not 600, when the recording has more than 1000 —
+this one has 1301. Our own test of her method, with our dark variance and G, todo A5, gives +1.5 %, not 8 %.)* Thank you for running your script on `scos_20261022_165057`. Raw κ² agrees to
 0.01 %, so the frames, mask and intensity match; the 8 % in corrected κ² must come from one of the
 subtracted noise terms. With that day's weak light (⟨I⟩ ≈ 33 DU) corrected κ² is only ≈ 5 % of raw,
 so a 0.4 % difference in any one term is enough. To find which one, could you send:
 (a) your output for this run (the `.mat` with κ² per frame, raw and corrected);
-(b) the G[DU/e] your script used (ours: 0.931, SN 40513592, Mono12, 8 dB);
+(b) the G[DU/e] your script used (ours: 0.931, SN 40513592, Mono12, 8 dB); — **answered 2026-11-03:
+0.931317527287469, identical to the app's;**
 (c) where your spVar came from (we think: the first 600 measurement frames — the app uses the 600
 bright-calibration frames), and its mean in the ROI;
 (d) how you computed the 8 % — the mean over the whole session, or frame by frame?

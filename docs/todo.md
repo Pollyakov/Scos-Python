@@ -197,7 +197,8 @@ G = 0.956 (the rig camera SN 40075248's value) instead of 0.931 would move the s
 ≈ 7 × 10⁻⁴ — about five times the gap — so G is worth checking first, it is the cheapest.
 Candidates, most likely first:
 1. **`spVar` source — expected to differ.** Her script takes `spVar` from the first 600 **measurement**
-   frames; the app takes it from the 600 **bright-calibration** frames (R8d's "Expect" column already
+   frames — **1000 when the recording has more than 1000 frames** (`numFramesForSPNoise`; this one has
+   1301, so 1000); the app takes it from the 600 **bright-calibration** frames (R8d's "Expect" column already
    says "close but not identical"). Also open question 17 (the leftover temporal noise in `spVar`
    depends on the number of frames averaged).
 2. **The dark variance** — same 600 dark frames (`_dark` folder), but check how each side builds it
@@ -214,6 +215,81 @@ Candidates, most likely first:
    term whose difference is ≈ 8 % of κ²_corr · ⟨I⟩² is the cause.
 4. If it is `spVar` (candidate 1): rerun the app's math with her `spVar` (from the first 600 measurement
    frames) — it should then agree; then the question for Vika is which source is right, not a bug.
+
+**Test without Vika, 2026-11-01 — her method rebuilt in Python on the saved frames: only +1.5 %.**
+Read from her code (`SCOSvsTime_WithNoiseSubtraction_Ver2.m`, `baseFunc/FitMeanIm.m`), the app differs
+from her script in three places that touch κ²_corr, and the test swapped each one, in all 8 combinations
+(same dark frames, same dark variance, same G 0.931, same 1/12):
+- **`spVar`** from her first 1000 measurement frames instead of the 600 bright frames: ROI mean 0.387
+  vs 0.410 DU² → κ²_corr **+1.2 %**;
+- **her fitted intensity image** (`FitMeanIm`: a per-pixel straight-line fit of the 7×7 mean against the
+  frame's ROI mean, over the same 1000 frames) instead of the local mean, in the shot-noise term and the
+  denominator → **+0.3 %**;
+- **her mask** (the full circle, as R8d passes it) instead of the app's circle shrunk by 4 px → −0.04 %.
+All three together: κ²_corr **+1.5 %** (mean 0.0017214 vs 0.0016957; median per frame +1.5 %); raw κ²
+−0.06 %. Anchors: the app's own rerun reproduces the results file (0.0016957); the dark variance
+rebuilt from the files equals `Calibration.h5` (2 × 10⁻⁷). Her first-frame console line, as her code
+would print it: ⟨I⟩ = 32.75, K_raw 0.03281, Ks 0.02844, Kr 0.00240, Ksp 0.00036, Kq 7.8 × 10⁻⁵,
+Kf 0.00153 — compare with her console when it comes.
+So **assuming her dark variance and G equal ours** (both confirmed since, below), her `Ver2` method
+does not give 8 % on these frames — but **her numbers came from another script** (below), so this does
+not bound her run.
+How much each term would have to change to move κ²_corr by 8 % (from the first-frame line): G by
+≈ 0.5 %, the dark variance by ≈ 6 % (its term, 0.0024, is 1.4 × κ²_corr itself), `spVar` by ≈ 40 %.
+What is left, none confirmed:
+- ~~**her dark variance**~~ — **ruled out 2026-11-03:** her `meanImDark.mat` (600 frames) has the
+  app's dark mean (2 × 10⁻⁶ DU) and, averaged 7 × 7 the same way, its dark variance (only N vs N − 1,
+  below) — so no stale dark file was involved either.
+- **a stale `smoothingCoefficients_7x7.mat`** — likewise *loaded* if one is already in the measurement
+  folder, without checking the mask or the window size; it would change `spVar` and the fit.
+- ~~**G**~~ — **ruled out 2026-11-03: Vika's run used G = 0.931317527287469, the app's value to every
+  digit** (`metadata/gain_du_per_e`). Before her answer: her `LoadG.m` (copy in `Downloads`) picks the table row by SN, bit depth and the closest gain,
+  so for SN 40513592, 12 bits, 8 dB it gives 0.931 — the same — *if her table equals the ZIP's
+  `CamerasMeasuredGain.csv`*. With 10 bits it would give ≈ 0.23 (κ²_corr far more than 8 % off). To
+  explain 8 % alone, G would have to be ≈ 0.927 or ≈ 0.937.
+- ~~**frames paired one apart**~~ — **ruled out 2026-11-03:** her script compares the *means* (≲ 0.1 %
+  from a shift). Before: only if she compared raw κ² by its mean and corrected κ² frame by frame:
+  shifted by one frame, the median per-frame |gap| in κ²_corr is 8.2 % (it changes with the pulse, 16 %
+  spread), but the signed mean is +2.7 %, and raw κ² differs by 0.4 % per frame — not her 0.01 %. Her
+  script read 1301 frames, the app has 1300 results, so the pairing is worth asking about.
+**2026-11-03 — Vika: ⟨I⟩ per frame also differs "by some percent".** *(Explained the same day — not a
+real difference: her comparison line compares every frame with every other frame, see below. The
+dark-offset idea in this paragraph is withdrawn: her dark mean equals the app's.)* Both sides compute ⟨I⟩ the same way
+(frame − dark mean, averaged over the circle). Measured on the saved frames: her full circle vs the app's
+shrunk one −0.02 %; paired one frame apart median 0.1 % (max 0.8 %) — neither is "some percent". The
+only thing found that is: subtracting **BL 100 instead of the measured dark mean** (98.47 DU in the
+circle — 1.5 DU below the black level) → ⟨I⟩ **−4.7 %** on every frame; a stale `meanIm.mat` or another
+dark folder would act the same way. But an ⟨I⟩ that far off would also move her raw κ² by ≈ 10 % (and
+κ²_corr by far more than 8 %), against her 0.01 % — so her numbers do not fit together yet. Ask her: how
+many percent, which direction, the same on every frame or changing, and against which app value.
+**2026-11-03 — Vika's files (in `MatLab/`, untracked: `ComparePythonGUIwithMatlab.m`, her comparison;
+`ReadRecordVarAndMean.m`; `meanImDark.mat`, her dark mean/variance for this session).** Found:
+- **Dark variance: the same.** Her "mean |darkVarVika − darkVarGUI| = 0.39" (reproduced: 0.3935) compares
+  her *per-pixel* variance with the app's `var_dark`, which is *already 7 × 7-averaged*. Averaged the same
+  way, the two agree to 6 × 10⁻⁸ DU² in the circle — except one real difference: her
+  `ReadRecordVarAndMean` divides by N, the app by N − 1 → hers 0.17 % smaller → her κ²_corr ≈ +0.24 %
+  (negligible; N − 1 is the unbiased one). Dark mean: the same (2 × 10⁻⁶ DU).
+- **Intensity: the same — her "some percent" comes from the comparison line.** `frames_mean` is a 1 × 1301
+  row, `I_GUI` (h5read of a 1-D dataset) a 1300 × 1 column, so `abs(frames_mean - I_GUI)./I_GUI` makes a
+  1300 × 1301 matrix — every frame against every other frame — and `Ierror` is 0.6–1.8 %, i.e. how much
+  ⟨I⟩ changes over the session. Paired one to one: 9 × 10⁻⁶ %. Run in MATLAB R2020b on this PC with her
+  lines unchanged except the paths. Fix for her: `frames_mean(1:920)' - I_GUI(1:920)`.
+- **Her κ² comes from another script: `SCOSvsTime_Ver1_noIFit_Compare`** (not `Ver2`, not in `MatLab/`).
+  "noIFit" *may* mean the local mean instead of `FitMeanIm` (a guess from the name only — then our
+  rebuild would give ≈ +1.2 %, +0.24 % from N). **Need that script — it is not on GitHub** (checked 2026-11-03: no branch of `viti1/SCOS` or `viti1/baseFunc` has it, nor `ComparePythonGUIwithMatlab.m`; it exists only on her PC) (and any helper it calls, and any
+  cached spVar file it left). When it comes, check the 1/12 term first: it alone is ≈ 4.6 % of κ²_corr
+  (Kq 7.8 × 10⁻⁵ of 0.0017) — a sensitivity fact, not a claim about her code. Her metric wraps the gap
+  in `abs()`, so it cannot tell whose κ²_corr is larger. Her pairing: raw and ⟨I⟩ `(2:end)`, corrected
+  `(1:end-1)` — the extra frame is the *last* one, so `(1:end-1)` is right and `(2:end)` is one frame
+  off; her numbers are differences of the *means*, so the shift moves them by ≲ 0.1 %.
+
+**The app's exact mask in MATLAB (checked 2026-11-03, R2020b, this session):**
+`mask = logical(h5read('<session>\Calibration.h5','/dark/mask'))'; maskApp = imerode(mask, true(9));`
+— identical, pixel for pixel, to `shrink_mask_for_window(dark/mask, 7)` (145 764 px; `app.log`: "6992 px
+removed"). `dark/mask` is the full circle; the app erodes it by window // 2 + 1 = 4 px (a 9 × 9 square)
+at Start SCOS. Passing `maskApp` to her script makes it average over the same pixels as the app.
+Not known yet: whose κ²_corr is larger, and whether her 8 % is of the means or per frame. Script: the
+session scratchpad's `gap_test.py` (copy to `tools/` offered, 2026-11-01).
 
 ---
 

@@ -44,7 +44,8 @@ the space and is 7× slower.
   black level) is subtracted from both the frames and the dark mean, so it cancels — the name
   must carry the real value (100 on the rig camera).
 - The dark frames in a folder next to it, with `_dark` added to the name; at least 400 frames.
-- She takes `spVar` from the first 600 frames of the recording itself, not from separate
+- She takes `spVar` from the first 600 frames of the recording itself (1000 when it has more
+  than 1000 — found 2026-11-01), not from separate
   bright frames. So her κ² will differ a little from the app's (different frames for the
   same correction). The comparison will show how much.
 
