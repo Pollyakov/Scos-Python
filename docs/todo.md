@@ -262,8 +262,9 @@ circle — 1.5 DU below the black level) → ⟨I⟩ **−4.7 %** on every frame
 dark folder would act the same way. But an ⟨I⟩ that far off would also move her raw κ² by ≈ 10 % (and
 κ²_corr by far more than 8 %), against her 0.01 % — so her numbers do not fit together yet. Ask her: how
 many percent, which direction, the same on every frame or changing, and against which app value.
-**2026-11-03 — Vika's files (in `MatLab/`, untracked: `ComparePythonGUIwithMatlab.m`, her comparison;
-`ReadRecordVarAndMean.m`; `meanImDark.mat`, her dark mean/variance for this session).** Found:
+**2026-11-03 — Vika's files: her comparison `ComparePythonGUIwithMatlab.m` (now in `docs/vika_matlab/` — on this PC only, git-ignored);
+`ReadRecordVarAndMean.m` (deleted — the same as `baseFunc` main); `meanImDark.mat`, her dark mean/variance for this
+session (moved to the session folder as `Vika_meanImDark.mat`).** Found:
 - **Dark variance: the same.** Her "mean |darkVarVika − darkVarGUI| = 0.39" (reproduced: 0.3935) compares
   her *per-pixel* variance with the app's `var_dark`, which is *already 7 × 7-averaged*. Averaged the same
   way, the two agree to 6 × 10⁻⁸ DU² in the circle — except one real difference: her
@@ -274,7 +275,7 @@ many percent, which direction, the same on every frame or changing, and against 
   1300 × 1301 matrix — every frame against every other frame — and `Ierror` is 0.6–1.8 %, i.e. how much
   ⟨I⟩ changes over the session. Paired one to one: 9 × 10⁻⁶ %. Run in MATLAB R2020b on this PC with her
   lines unchanged except the paths. Fix for her: `frames_mean(1:920)' - I_GUI(1:920)`.
-- **Her κ² comes from another script: `SCOSvsTime_Ver1_noIFit_Compare`** (not `Ver2`, not in `MatLab/`).
+- **Her κ² comes from another script: `SCOSvsTime_Ver1_noIFit_Compare`** (not `Ver2`, not among the files she sent).
   "noIFit" *may* mean the local mean instead of `FitMeanIm` (a guess from the name only — then our
   rebuild would give ≈ +1.2 %, +0.24 % from N). **Need that script — it is not on GitHub** (checked 2026-11-03: no branch of `viti1/SCOS` or `viti1/baseFunc` has it, nor `ComparePythonGUIwithMatlab.m`; it exists only on her PC) (and any helper it calls, and any
   cached spVar file it left). When it comes, check the 1/12 term first: it alone is ≈ 4.6 % of κ²_corr
@@ -288,8 +289,10 @@ many percent, which direction, the same on every frame or changing, and against 
 — identical, pixel for pixel, to `shrink_mask_for_window(dark/mask, 7)` (145 764 px; `app.log`: "6992 px
 removed"). `dark/mask` is the full circle; the app erodes it by window // 2 + 1 = 4 px (a 9 × 9 square)
 at Start SCOS. Passing `maskApp` to her script makes it average over the same pixels as the app.
-Not known yet: whose κ²_corr is larger, and whether her 8 % is of the means or per frame. Script: the
-session scratchpad's `gap_test.py` (copy to `tools/` offered, 2026-11-01).
+**Follow-up to Vika sent 2026-11-03 (by the user)** — after the findings above; waiting for her
+`SCOSvsTime_Ver1_noIFit_Compare.m` (it decides the 8 %).
+Not known yet: whose κ²_corr is larger, and whether her 8 % is of the means or per frame. Script:
+`tools/gap_vs_matlab_method.py` (paths fixed to this session; ≈ 4 min).
 
 ---
 
@@ -886,7 +889,7 @@ was always right — only the message was false; the same could have shown the o
 
 **Then, on the final code:** the whole suite with the slow MATLAB tests once (894 passed, 7 min), then
 10 fast runs one after another (888 passed each), then the hook of commit `a0daed7` (888). **So far
-22 full runs since the fix without the access violation** (before it: about 1 run in 5–10). Still open by the rule below — close it after
+24 full runs since the fix without the access violation** (incl. the hooks of `3433d1a` and `c9f2645`, 2026-11-03, 888 passed) (before it: about 1 run in 5–10). Still open by the rule below — close it after
 ≥ 30, counting the pre-commit hook's runs.
 
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names

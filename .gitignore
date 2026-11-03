@@ -39,3 +39,6 @@ scos_config.local.json.tmp
 # A local list of recent commits (made 2026-10-20 on request) — regenerate with git log;
 # kept out of the repo because git itself already holds it.
 docs/commit_log.md
+
+# Vika's own MATLAB scripts, kept locally for reference only (user, 2026-11-03).
+docs/vika_matlab/

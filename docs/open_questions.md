@@ -164,7 +164,7 @@ is most of raw κ² (0.033), so corrected κ² (0.0017) is a small remainder, se
 in G or the noise terms. Is ≈ 30 DU acceptable, or should the laser power / fiber be checked?
 
 **22. Your run on the saved frames — the 8 % in corrected κ²** *(raised 2026-10-29, todo A5;
-**sent 2026-10-31**, waiting for her answer. Correction found 2026-11-01 in her code: for (c),
+**sent 2026-10-31**; partly answered 2026-11-03 (G, her comparison script, her dark mean/variance — todo A5); **follow-up sent 2026-11-03 by the user**, waiting for her `SCOSvsTime_Ver1_noIFit_Compare.m`. Correction found 2026-11-01 in her code: for (c),
 her script uses the first **1000** frames, not 600, when the recording has more than 1000 —
 this one has 1301. Our own test of her method, with our dark variance and G, todo A5, gives +1.5 %, not 8 %.)* Thank you for running your script on `scos_20261022_165057`. Raw κ² agrees to
 0.01 %, so the frames, mask and intensity match; the 8 % in corrected κ² must come from one of the
