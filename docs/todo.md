@@ -294,6 +294,33 @@ at Start SCOS. Passing `maskApp` to her script makes it average over the same pi
 Not known yet: whose κ²_corr is larger, and whether her 8 % is of the means or per frame. Script:
 `tools/gap_vs_matlab_method.py` (paths fixed to this session; ≈ 4 min).
 
+**2026-11-04 — what-if table ready for when her script arrives: `tools/gap_what_if.py`** (≈ 6 min,
+read-only). Each line changes **one** thing in the app's formula on this session's frames and shows how
+raw and corrected κ² move (signed; her metric is `abs()`). Candidates from her Ver2, from Ver2's
+commented-out `fittedI = meanIm` (lines 423–424 — likely what "noIFit" means: the local mean, as the
+app does), and from her **old `SCOSvsTime_WithNoiseSubtraction.m`** — deleted from GitHub on 2024-11-07,
+last version `2b067ca`, copy in `docs/vika_matlab/` (git-ignored) — probably the "Ver1" her compare
+script grew from. Results (κ²_corr change of the means; raw κ² 0.00 % unless given):
+- no 1/12 term **+4.57 %**; dark term as the old script, (7×7 mean of the dark *std*)² instead of the
+  7×7 mean of the variance, **+3.55 %**; dark ÷ N +0.24 %; dark per pixel, not averaged, −0.01 %;
+- spVar from the first 500 measurement frames (old) −0.62 %, 600 −0.03 %, 1000 (Ver2) +1.24 %;
+- intensity: FitMeanIm over 1000 frames trained as Ver2 does (on frame − BL, applied to frame − dark
+  mean) **+0.36 %** (raw −0.07 %; agrees with the +0.3 % above), trained on what it is applied to +0.13 %;
+  the old script's fit (trained on raw frames, BL still in — applied ≈ 98 DU lower) and its typo
+  `fitI_B = fitI_A(...)` (line 319) → absurd, raw κ² too, so ruled out; the frame's ROI mean as one
+  number +0.15 % (raw −0.11 %);
+- mask full circle −0.04 % (raw +0.02 %); G from ConvertGain 10.5e3 e⁻ (old) −87 % — ruled out, her G
+  is the table's; bounds: dark not subtracted +141 %, spVar not subtracted +22.5 %;
+- the old script read spVar and the dark map at the **wrong pixels** after its "Decrease Image Size"
+  (cut mask on the uncut map — MATLAB picks the elements at the cut mask's linear indices, no error;
+  checked in R2020b): changes the old-script guess by −0.55 %;
+- **old-script guess** (noIFit, dark std², spVar 500, full circle) **+2.87 %**; with dark ÷ N and no
+  1/12 as well **+7.67 %**. The terms are linear, so changes add.
+**So no single documented difference gives 8 %.** The two biggest — no 1/12 (+4.6 %) and the old dark
+term (+3.6 %) — together give ≈ +8.1 %, but nothing in her known scripts drops the 1/12 term. When her
+script arrives: look for these two first. Every candidate that moves κ²_corr by more than 1 % (G
+aside) *raises* it, so if hers is *lower* than the app's, the cause is something not in this table.
+
 ---
 
 ### Tier E — v0 Release Requirements
@@ -499,7 +526,7 @@ A GigE dropout during an unattended multi-hour run currently ends the acquisitio
 disconnect recovers on its own, into the camera-thread intake path, and the gap is logged
 and marked in the data (so `timeVec` shows it rather than hiding it).
 
-#### B5 · An ROI circle with no pixel on the image *(found 2026-10-11, U6 step 6 — not verified in the app)*
+#### ~~B5 · An ROI circle with no pixel on the image~~ — ✅ DONE 2026-11-04 (see item 67 in Done table) *(found 2026-10-11, U6 step 6)*
 
 In the rehearsal mutation `cut-offset` with `--cut-radius 150` the ROI mask had **no pixels**
 (the circle fell outside the frame), and `_on_scos_frame`'s intensity statistics
@@ -758,7 +785,7 @@ GUI thread altogether is the bigger alternative and a threading change — not b
 
 ---
 
-#### D9 · Intermittent fatal crash of the fast test suite *(found 2026-10-11)* — **low priority, test-only** (user, 2026-10-20)
+#### ~~D9 · Intermittent fatal crash of the fast test suite~~ — ✅ CLOSED 2026-11-04 (fixed 2026-10-31; 30 runs without it) *(found 2026-10-11)*
 
 **Decided 2026-10-20: low priority.** It happens only in `pytest`, never in the app (real
 camera or playback): no app code connects a lambda to a signal (searched `gui/`, `core/`, the
@@ -891,6 +918,16 @@ was always right — only the message was false; the same could have shown the o
 10 fast runs one after another (888 passed each), then the hook of commit `a0daed7` (888). **So far
 24 full runs since the fix without the access violation** (incl. the hooks of `3433d1a` and `c9f2645`, 2026-11-03, 888 passed) (before it: about 1 run in 5–10). Still open by the rule below — close it after
 ≥ 30, counting the pre-commit hook's runs.
+
+**Closed 2026-11-04: 30 runs since the fix without the access violation.** Run 25 = the hook of
+`4936fca` (2026-11-03; the count above stopped at 24 before it). Runs 26–30 = five fast runs one
+after another on 2026-11-04 (897 tests, on the new off-image-ROI code, Done item 67), outputs saved
+— no crash, no non-zero exit from a crash. **Not all 30 were green:** two failed for other reasons,
+both fixed: run 10 (the false "Estimated G", above) and run 28 —
+`test_frame_writer.py::test_frame_times_csv`, a too-tight tolerance: each capture time is written to
+1 µs, so the difference of two can be off by up to 1 µs plus float noise, and `abs=1e-6` failed
+when `time.monotonic()` happened to round badly (1.00005 µs); now `abs=2e-6`, the file is unchanged.
+If the access violation ever comes back, reopen this item — the notes above are the leads.
 
 **Next time it happens:** save the *whole* output (`… > crash.log 2>&1`) — the dump names
 the test that was running and the C-level frame — then look at that test's window/thread
@@ -1135,9 +1172,9 @@ unchanged.
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20) → **A5 (corrected κ² 8 % off Vika's — before E5)**
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
-  → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect)
+  → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect) → ~~B5~~ (2026-11-04)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
-  → D1/D2/D3/D4/D7/D9/~~D11~~/D12 (any order; D9 low priority, test-only — decided 2026-10-20); D5 at the rig; ~~D6~~, ~~D8~~
+  → D1/D2/D3/D4/D7/~~D9~~ (closed 2026-11-04)/~~D11~~/D12 (any order); D5 at the rig; ~~D6~~, ~~D8~~
   → ~~F1~~ (raw frames, 2026-10-21) → F2 (long sessions) → F3 (laser control) → F4 (results rows only) → F5 (reopenable figure)
   F6 (lost frames from timeVec gaps): only if a camera logs "no frame numbers"
 ```
@@ -1215,6 +1252,8 @@ unchanged.
 
 | 65 | The app starts from a desktop icon (D11, 2026-10-29) | The user asked for a double-click start instead of a terminal. **User's decisions (2026-10-29, left to me: "go with what you think is right"):** no console window, icon A (a cyan pulse curve, the live plot's colour, on the app's dark background; option B, a red laser spot with speckle grains, lost its detail at taskbar size). **Built:** (1) `tools/make_desktop_shortcut.py` — run once per PC; puts `SCOS.lnk` on the desktop (`GetFolderPath('Desktop')`, so a OneDrive desktop too): `venv\Scripts\pythonw.exe "<repo>\main.py"`, Start in = repo, icon `assets/scos.ico`. Made on the dev PC 2026-10-29. (2) `tools/make_icon.py` draws the icon at 16–256 px, each size on its own (line ≥ 2 px), into a PNG-in-ICO file; the `.ico` is committed. (3) `main.py`: `app.log` now goes **next to `main.py`** (`LOG_PATH`), not into the start folder — the only path that depended on it (settings, gain table and git hash were already anchored to their files; the output folder is picked in a dialog). Logging is no longer set up at import. (4) **One copy at a time:** a `QLockFile` (`scos.lock`, gitignored) is taken before `app.log` is opened — before this a second launch would have wiped the running session's log (mode="w") and fought it for the camera. The second copy shows "SCOS Is Already Running" and exits. Stale time 0: never released by age, only when the holder's process is gone (checked: held past 30 s, freed after a kill). Applies to the playback modes too. (5) **Crashes are no longer silent:** without a console an exception in a slot made the window vanish. `sys.excepthook` now logs the traceback (CRITICAL) and shows "SCOS Stopped — Error" (naming `app.log` and saying to copy it before the next start), shown by a separate tiny process so the app still **stops at once, as before** — carrying on in an unknown state could record wrong data. `threading.excepthook` only logs (a dying Python thread still ends only itself, as before). A crash inside C code (pypylon, Qt) bypasses both hooks: the window just vanishes, but `faulthandler` now writes every thread's stack into `app.log` (checked with a forced segfault). (6) `arduino-cli` and `git` run with `CREATE_NO_WINDOW` — under pythonw each would flash a black window. (7) Windows AppUserModelID set, so the taskbar shows the app's icon. **Checked on the dev PC through the real shortcut:** no console; `app.log` in the repo; the laser warning first (≈ 16 s after the click — imports); a second double-click gave the "already running" window and left the first copy's `app.log` intact; a forced error showed the crash window, exit code 1; a lock left by a killed copy was taken over by the next start (in a separate test).  Not checked: the taskbar icon by eye (left to the user). **Tests:** `tests/test_desktop_launch.py`. **Rig check:** `rig_checklist.md` R11. **Side finding, not fixed:** `confirm_laser_safety`'s docstring says `app.log` "is copied into the session folder" — nothing copies it; the next launch overwrites it |
 | 66 | "Starting SCOS…" sign, and `app.log` copied into every session folder (2026-10-29) | Two follow-ups to the desktop icon (item 65), asked for by the user. **(1) The sign:** on a cold start the app's code takes ≈ 10 s to load (scipy, h5py, matplotlib — measured 2026-10-29; ≈ 1.4 s when warm), and with no console nothing showed meanwhile — an operator would double-click again. `main.py` now shows a small dark `QSplashScreen` (the icon, "Starting SCOS…", "This can take up to half a minute.") right after the one-copy lock is taken, and closes it **before** the laser-safety warning or any window opens — a splash stays on top and would cover the warning. Only PyQt6 and the standard library are imported at the top of `main.py` (pyqtgraph moved into `main()`), so the sign comes first. **Measured through the real icon, 2026-10-29:** sign after ≈ 1 s, laser warning after ≈ 2.4 s (warm). Twice the first start after a code change took ≈ 10 s before the first log line — before the sign could show (Python starting and loading freshly changed files; Windows scanning them is the likely cause, not proven). Expect that after each `git pull` on the rig. **(2) The log copy:** `app.log` is rewritten at every launch, and without a console it is the only record of a session (the laser-safety confirmation, calibration checks, warnings). `MainWindow._copy_app_log()` copies it into the session folder as `app.log` **after the probe-removal window**, so the copy covers the whole session (it starts at the app's launch, so it may hold earlier sessions of the same run too); also into a cancelled run's kept `_cancelled` folder (it says why the run stopped) — never into an empty one, which is still removed. The source is the root logger's file handler that writes a real file (pytest adds one on `nul`); in a rehearsal it is the rehearsal's log. A failed copy is only logged. `safety_dialog.confirm_laser_safety`'s docstring had claimed this copy since 2026-10-09 — now true. **Checked:** rehearsals `normal` and `leak` pass with `app.log` in the session folder, its copy ending with the probe-removal window. **Tests:** `tests/test_desktop_launch.py` (sign drawn, nothing heavy imported before it, shown after the lock and closed before the warning; a cancelled run's kept folder gets a copy, an empty one is still removed; copy holds the lines so far; placement after the last window; not into an empty cancelled folder) |
+| 67 | An ROI circle with no pixel to measure is refused (B5, 2026-11-04) | **Reproduced 2026-11-04** (window built as in `tests/test_cut_image.py`): the circle can be dragged anywhere; wholly off the image, the ⟨I⟩/p5/p95 labels in `_on_scos_frame` ran `np.percentile` over zero pixels → `IndexError` every 0.5 s — in the app (`main.py`'s excepthook) the crash window, and SCOS closes, in PREVIEW. Start SCOS went through both calibrations and only then measured over nothing; a circle too small for the window (r = 2, window 7: 13 px on the image, 0 after `shrink_mask_for_window`) the same. Cut Image cut the camera to 4 × 2 px in a sensor corner. **Fixed:** the labels show "— (ROI off the image)"; **Start SCOS refuses** ("ROI Outside the Image" warning, before G, the folder and the laser prompt — the protocol order is untouched) when the *shrunk* mask is empty; **Cut Image refuses** (status bar) when the circle has no pixel on the sensor. A circle half off the image is still valid. No change to the math or to a valid ROI. `tests/test_empty_roi.py` (9 tests; 5 fail on the old code). |
+
 ---
 
 ## Map: frozen `merged_worklist.md` tasks → this file

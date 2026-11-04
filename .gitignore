@@ -42,3 +42,8 @@ docs/commit_log.md
 
 # Vika's own MATLAB scripts, kept locally for reference only (user, 2026-11-03).
 docs/vika_matlab/
+
+# The 8 % corrected-kappa^2 gap with Vika's MATLAB run (todo A5): its scripts and their
+# output stay on this PC only (user, 2026-11-04). tools/compare_with_matlab.py stays in git.
+tools/gap_*.py
+gap_arrays.npz

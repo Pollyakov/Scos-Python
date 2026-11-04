@@ -129,7 +129,10 @@ class TestWriting:
         assert [float(r[4]) for r in rows[2:]] == [0.0, 0.05]
         for r in rows[1:]:                            # every row names a real file
             assert (tmp_path / "Frames" / r[1]).is_file()
-        assert float(rows[3][3]) - float(rows[2][3]) == pytest.approx(0.05, abs=1e-6)
+        # Each time is written to 1 µs (6 decimals), so the difference of two
+        # can be off by up to 1 µs plus float noise — abs=1e-6 failed now and
+        # then, depending on time.monotonic() (seen 2026-11-04: 1.00005 µs).
+        assert float(rows[3][3]) - float(rows[2][3]) == pytest.approx(0.05, abs=2e-6)
 
     def test_counts(self, writer):
         for _ in range(3):

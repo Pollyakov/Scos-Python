@@ -37,7 +37,7 @@ from core.recorder  import (CALIBRATION_FILENAME, RESULTS_FILENAME, HDF5Recorder
                             write_calibration)
 from core.results_figure import save_results_figure
 from core.pipeline  import MAX_WORKERS, RealtimePipeline
-from core.crop      import Crop, crop_for_circle
+from core.crop      import Crop, circle_mask, crop_for_circle
 from core.frame_writer import FRAMES_DIRNAME, FrameWriter, frames_folder_name
 from core import dark_light, disk_space
 from gui.image_widget import ImageWidget
@@ -1213,6 +1213,26 @@ class MainWindow(QMainWindow):
                     "The Arduino program is still being sent (about 10 seconds).\n\n"
                     "Click Start SCOS again when the status bar says "
                     "\"Arduino: trigger pulses active\".")
+                self._reset_start_button()
+                return
+            # An ROI with no pixel left for κ² (todo B5): the circle dragged off
+            # the image, or so small that the edge trim for the window removes
+            # all of it. Without this the run went through both calibrations
+            # and then measured over nothing. Checked on the shrunk mask the
+            # measurement will use; the ROI and Window Size are locked from
+            # here on, so it cannot change before the measurement starts.
+            if (self._mask is not None and not shrink_mask_for_window(
+                    self._mask, self.spn_window.value()).any()):
+                logger.info("Start SCOS refused — the ROI has no pixel left for κ² "
+                            "(%d px on the image, window %d)",
+                            int(self._mask.sum()), self.spn_window.value())
+                QMessageBox.warning(
+                    self, "ROI Outside the Image",
+                    "The ROI circle has no pixels on the image that can be "
+                    "measured — it is outside the image, or too small for "
+                    f"Window Size {self.spn_window.value()}.\n\n"
+                    "Move the circle onto the image or make it larger "
+                    "(or click Auto ROI), then click Start SCOS again.")
                 self._reset_start_button()
                 return
             logger.info(
@@ -3008,15 +3028,23 @@ class MainWindow(QMainWindow):
             # Same units as everything else on screen and in the file: these
             # labels say "DU", and in playback the raw frame is 64x that.
             pixels = self._to_du(frame)[self._mask].astype(np.float64)
-            mean_i = float(pixels.mean())
-            p5     = float(np.percentile(pixels, 5))
-            p95    = float(np.percentile(pixels, 95))
-            self.lbl_mean_i.setText(f"⟨I⟩  : {mean_i:.1f} DU")
-            self.lbl_p5.setText(    f"p5   : {p5:.1f} DU")
-            self.lbl_p95.setText(   f"p95  : {p95:.1f} DU")
             self._last_stats_time = now
-            if self._state == State.PREVIEW:
-                self._note_preview_light(t_capture, mean_i)
+            if pixels.size == 0:
+                # The ROI circle is off the image (todo B5): nothing to average.
+                # np.percentile raised IndexError here, and an exception in a
+                # slot closes the app. Start SCOS refuses such an ROI.
+                self.lbl_mean_i.setText("⟨I⟩  : — (ROI off the image)")
+                self.lbl_p5.setText(    "p5   : —")
+                self.lbl_p95.setText(   "p95  : —")
+            else:
+                mean_i = float(pixels.mean())
+                p5     = float(np.percentile(pixels, 5))
+                p95    = float(np.percentile(pixels, 95))
+                self.lbl_mean_i.setText(f"⟨I⟩  : {mean_i:.1f} DU")
+                self.lbl_p5.setText(    f"p5   : {p5:.1f} DU")
+                self.lbl_p95.setText(   f"p95  : {p95:.1f} DU")
+                if self._state == State.PREVIEW:
+                    self._note_preview_light(t_capture, mean_i)
 
         # Calibration intercepts — after FPS/stats (so labels stay live) and
         # before the rate-limiter (every frame must be counted).
@@ -3508,6 +3536,13 @@ class MainWindow(QMainWindow):
                 if circ is None:
                     return
                 sensor_w, sensor_h = cam.sensor_size()
+                if not circle_mask((sensor_h, sensor_w), circ).any():
+                    # A circle wholly off the sensor (todo B5) would be cut to a
+                    # few pixels in a corner, with no ROI pixel in them.
+                    logger.info("Cut Image refused — the ROI circle is off the image")
+                    self.status.showMessage("Cut Image: the ROI circle is off the "
+                                            "image — move it onto the image first")
+                    return
                 req = crop_for_circle(circ["cx"], circ["cy"], circ["r"],
                                       sensor_w, sensor_h, cam.camera_steps())
                 logger.info("Cut Image — asking the camera for %d × %d at (%d, %d)",

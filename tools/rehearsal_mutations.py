@@ -54,7 +54,9 @@ U6 — the camera-side crop (these add --cut; measured 2026-10-11 with
            not empty — the silent case, κ²_corr still positive (0.0071) →
            "Calibration.h5 mask = the ROI circle in the crop" (1 535 319 px,
            expected 1 872 352). With --cut-radius 150 the circle falls wholly
-           outside the 354 × 354 crop and every frame raises instead.
+           outside the 354 × 354 crop: until 2026-11-04 every frame raised;
+           since then (todo Done item 67) Start SCOS refuses with "ROI Outside
+           the Image" → "protocol order" fails and the dark calibration times out.
   cut-skip     frames of the old size, still queued after Cut, are not
            skipped and reset the mask to the whole frame (plan pitfall P1)
            → "Calibration.h5 mask = the ROI circle in the crop" (125 316 px,
