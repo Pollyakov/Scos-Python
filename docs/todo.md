@@ -170,7 +170,7 @@ no `single()` in the repo). κ²_corr there ≈ 0.008; at a smaller κ² the gap
 
 ---
 
-#### A5 · Vika's run on saved frames: raw κ² agrees, corrected κ² is 8 % off — find out why *(reported by the user 2026-10-29)*
+#### A5 · Vika's run on saved frames: raw κ² agrees, corrected κ² is 8 % off — find out why *(reported by the user 2026-10-29)* — **explained 2026-11-04: her script's `spIm` has no dark subtraction (end of this item); waiting for her rerun**
 
 **What came back.** Vika ran her MATLAB script (`SCOSvsTime_WithNoiseSubtraction_Ver2`) on the frames
 the app saved in session `TestKsenia\scos_20261022_165057` (the rig check of Save Frames, `rig_checklist.md`
@@ -290,7 +290,8 @@ session (moved to the session folder as `Vika_meanImDark.mat`).** Found:
 removed"). `dark/mask` is the full circle; the app erodes it by window // 2 + 1 = 4 px (a 9 × 9 square)
 at Start SCOS. Passing `maskApp` to her script makes it average over the same pixels as the app.
 **Follow-up to Vika sent 2026-11-03 (by the user)** — after the findings above; waiting for her
-`SCOSvsTime_Ver1_noIFit_Compare.m` (it decides the 8 %).
+`SCOSvsTime_Ver1_noIFit_Compare.m` (it decides the 8 %). **She sent it on 2026-11-04** — read the same
+day; the answer is at the end of this item.
 Not known yet: whose κ²_corr is larger, and whether her 8 % is of the means or per frame. Script:
 `tools/gap_vs_matlab_method.py` (paths fixed to this session; ≈ 4 min).
 
@@ -320,6 +321,46 @@ script grew from. Results (κ²_corr change of the means; raw κ² 0.00 % unless
 term (+3.6 %) — together give ≈ +8.1 %, but nothing in her known scripts drops the 1/12 term. When her
 script arrives: look for these two first. Every candidate that moves κ²_corr by more than 1 % (G
 aside) *raises* it, so if hers is *lower* than the app's, the cause is something not in this table.
+
+**2026-11-04 (evening) — EXPLAINED: her `spIm` keeps the dark pattern.** Her new mail: dark variance
+now ÷ N − 1 and 7 × 7-averaged, the 1301st frame dropped; ⟨I⟩, dark variance and raw κ² agree; corrected
+κ² **hers 8 % lower** (signed metric now); "Bright spVar mean difference in DU: 0.13224". Her
+`SCOSvsTime_Ver1_noIFit_Compare.m` and the new `ComparePythonGUIwithMatlab.m` are in `docs/vika_matlab/`
+(the 11-03 one kept as `…_2026-11-03.m`). Ver1 subtracts 1/12 (line 426) and builds the dark term as the
+app does — so the what-if leads are not it. The cause is line 327:
+`spIm = ReadRecordVarAndMean([recName '_bright'], 600)` — the **raw mean of the bright frames, the dark
+mean never subtracted**. Her Ver2 (line 328) and the old script (line 286) both do `spIm = mean(...) -
+background`; the app does mean − dark mean (`BrightCalCollector.result`). The dark mean has its own
+fixed pattern (local 7 × 7 variance 0.126 DU² in the circle), so her `spVar` holds it on top of the
+speckle pattern — but every measurement frame has the dark mean subtracted before `stdfilt`, so that
+pattern is not in the variance she subtracts it from. Checked on the session (`tools/gap_spvar_check.py`,
+`tools/gap_spvar_full_check.py`, local only):
+- her recipe vs `Calibration.h5` `bright/spVar`: mean |d| **0.13224** — her number to 5 digits; signed
+  +0.131 DU², i.e. her `spVar` **+32 %** (0.541 vs 0.410). The app's recipe in float64 vs the stored
+  float32: 7 × 10⁻⁵.
+- her line-426 formula on all 1300 frames, scored with her metric: raw κ² 0.000 %; corrected κ² with
+  her `spVar` **−7.46 %**; with the dark mean subtracted **0.000 %**.
+So the app is right on this point and the gap is closed, **if her exact figure is ≈ 7.5 %** (she wrote
+"8 %"). For her: subtract the dark mean in line 327 and **delete `smoothingCoefficients_7x7.mat`** in the
+measurement folder — Ver1 caches `spVar` there (lines 318–340) and would reload the old one. Her call:
+it is her script. Not changed in the app. Still open before the tag: her rerun confirming ≈ 0 %.
+
+**2026-11-09 — her rerun: ≈ 0.5 % left. EXPLAINED: wrong pixels in her line 426.** She sent
+`SCOSvsTime_Ver1_noIFit_CompareUpdated.m` (line 327 now `... - BlackLevel - background` = minus the dark
+mean; spVar no longer cached) and `ComparePythonGUIwithMatlabUpdated.m` (both in `docs/vika_matlab/`).
+Cause: after "Decrease Image Size" (lines 346–363) the frame is cut to the ROI's box (here 447 × 447 of
+495 × 500) and the mask is cut with it (`masks_cut`), but `spVar` and `darkVarPerWindow` stay full-size —
+`spVar(masks_cut{ch})` then takes the elements at the *cut* mask's linear indices of the *full* map:
+other pixels, no error (the same finding as for the old script in the what-if list above). Her Ver2 has
+the same line (427; there only `fitI_A/B` are cut). Checked with `tools/gap_half_percent_check.py`
+(local only), her formula on all 1300 frames, her metric: right pixels **0.000 %**, her wrong pixels
+**−0.58 %** (spVar ROI mean 0.421 there vs 0.410; dark map 2.5765 both). Dark variance ÷ N instead of
+÷ N − 1 would add +0.24 % (wrong pixels + ÷ N: −0.34 %). Fix for her: before the frame loop,
+`spVar = spVar(roi.y, roi.x); darkVarPerWindow = darkVarPerWindow(roi.y, roi.x);` (and `darkVar`, used
+only in the first-frame print). Ask her the sign and exact number.
+**Follow-up (not done):** Ver2 is the MATLAB reference of the app's offline accuracy tests
+(`LocalStd7x7_corr.mat`, "corrected κ² 1.2 % error" in CLAUDE.md) — the same wrong pixels may be part
+of that 1.2 %. Check by rerunning the offline comparison with her κ²_corr recomputed on the right pixels.
 
 ---
 
