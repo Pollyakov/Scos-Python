@@ -44,6 +44,16 @@ class PlotWidget(QWidget):
         self.curve = self.graph.plot(pen=pg.mkPen('#00d4ff', width=2))
         layout.addWidget(self.graph)
 
+        # Stretching the graph along time only (todo D12, picture 2 chosen 2026-11-09).
+        # Wheel stretches/shrinks the time axis, dragging slides it; the height is
+        # always set by this widget, never by the mouse. Turning the wheel switches
+        # off pyqtgraph's automatic X range — that state *is* "stretched"
+        # (is_stretched()); a double-click switches it back on (show_all()).
+        # Display only: nothing here touches the data that is recorded or saved.
+        self.graph.setMouseEnabled(x=True, y=False)
+        self.graph.getViewBox().sigXRangeChanged.connect(self._on_x_range_changed)
+        self.graph.scene().sigMouseClicked.connect(self._on_mouse_clicked)
+
         # Buttons row
         btn_row = QHBoxLayout()
         self.btn_reset = QPushButton("Reset")
@@ -103,16 +113,64 @@ class PlotWidget(QWidget):
         if not self._use_minutes and self._time and self._time[-1] > NORM_LONG_RECORDING_S:
             self._use_minutes = True
             self.graph.setLabel('bottom', 'Time', units='min')
+            if self.is_stretched():
+                # Keep showing the same stretch of time in the new unit.
+                x0, x1 = self.graph.getViewBox().viewRange()[0]
+                self.graph.setXRange(x0 / 60.0, x1 / 60.0, padding=0)
 
         div = 60.0 if self._use_minutes else 1.0
         self.curve.setData([t / div for t in self._time], self._bfi)
         self._dirty = False
-        if len(self._bfi) >= 10:
+        if self.is_stretched():
+            self._fit_height_to_shown()
+        elif len(self._bfi) >= 10:
             arr = np.array(self._bfi)
             lo = float(np.percentile(arr, 5))
             hi = float(np.percentile(arr, 95))
             pad = max((hi - lo) * 0.15, hi * 0.05)
             self.graph.setYRange(max(0.0, lo - pad), hi + pad, padding=0)
+
+    # ------------------------------------------------------------------
+    # Stretching along time (display only)
+    # ------------------------------------------------------------------
+
+    def is_stretched(self) -> bool:
+        """True while the operator has stretched or slid the time axis.
+
+        The view then holds still while new points arrive; show_all() (or a
+        double-click) goes back to the whole recording, following live data.
+        """
+        return not self.graph.getViewBox().autoRangeEnabled()[0]
+
+    def show_all(self) -> None:
+        """Back to the whole recording, following the live data again."""
+        vb = self.graph.getViewBox()
+        vb.enableAutoRange(x=True)
+        vb.updateAutoRange()     # now, not at the next paint
+        self.render_now()
+
+    def _on_mouse_clicked(self, ev) -> None:
+        if ev.double():
+            self.show_all()
+
+    def _on_x_range_changed(self, *_args) -> None:
+        # Wheel or drag: refit the height at once, not at the next 1 s tick.
+        if self.is_stretched():
+            self._fit_height_to_shown()
+
+    def _fit_height_to_shown(self) -> None:
+        """Fit the height to the points inside the stretch being looked at."""
+        if not self._time:
+            return
+        div = 60.0 if self._use_minutes else 1.0
+        x0, x1 = self.graph.getViewBox().viewRange()[0]
+        t = np.asarray(self._time) / div
+        shown = np.asarray(self._bfi)[(t >= x0) & (t <= x1)]
+        if shown.size < 2:
+            return
+        lo, hi = float(shown.min()), float(shown.max())
+        pad = max((hi - lo) * 0.1, hi * 0.01)
+        self.graph.setYRange(max(0.0, lo - pad), hi + pad, padding=0)
 
     def reset(self):
         self._time.clear()
@@ -121,6 +179,7 @@ class PlotWidget(QWidget):
         self._use_minutes = False
         self.graph.setLabel('bottom', 'Time', units='s')
         self.curve.setData([], [])
+        self.graph.getViewBox().enableAutoRange(x=True)
 
     def get_data(self) -> tuple[np.ndarray, np.ndarray]:
         """Plotted data, time in **seconds**.
