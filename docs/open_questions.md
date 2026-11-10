@@ -178,6 +178,31 @@ bright-calibration frames), and its mean in the ROI;
 (d) how you computed the 8 % — the mean over the whole session, or frame by frame?
 (Your script read 1301 measurement frames, the app has 1300 results: the last frame was still being
 processed when Stop was pressed. That alone moves a mean by about 0.1 % at most.)
+**→ Answered by her scripts:** the 8 % was her `spIm` without dark subtraction (found 2026-11-04,
+she fixed it); the ≈ 0.5 % left after that is question 23. Details: todo A5.
+
+**23. The ≈ 0.5 % left after the spVar fix — wrong pixels in line 426** *(raised 2026-11-09, todo A5;
+sent by the user; **answered 2026-11-10: Vika confirmed it was a bug in her code — after the fix it fits perfectly.** Todo A5 closed)*. The message as sent:
+
+> Hi Vika,
+> Thank you! I think I found the remaining ~0.5 %.
+> After "Decrease Image Size" (lines 346–363) the frame and the mask are cut to `roi.y, roi.x`
+> (447×447 here), but `spVar` and `darkVarPerWindow` stay full-size (495×500). In line 426,
+> `spVar(masks_cut{ch})` and `darkVarPerWindow(masks_cut{ch})` index a full-size map with the cut
+> mask — MATLAB takes the elements at the cut mask's linear indices, so these are different
+> pixels, with no error.
+> On the saved frames (your line-426 formula on all 1300 frames, your comparison): with the right
+> pixels the corrected contrast differs by 0.000 %; with the current indexing −0.58 %.
+> Suggested fix, before the frame loop:
+> `spVar = spVar(roi.y, roi.x);`
+> `darkVarPerWindow = darkVarPerWindow(roi.y, roi.x);`
+> `darkVar = darkVar(roi.y, roi.x);` (used only in the first-frame printout)
+> The same line is in `SCOSvsTime_WithNoiseSubtraction_Ver2.m` (line 427).
+> Could you tell me the exact number and sign you get (is yours lower than the GUI's)? And after
+> the fix, do you get ≈ 0 %?
+
+(Why the sign matters: with her dark variance still ÷ N instead of ÷ N − 1 the gap would be
+−0.34 %, not −0.58 %.)
 
 ---
 
