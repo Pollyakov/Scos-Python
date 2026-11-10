@@ -24,10 +24,16 @@ the first rig session, U1–U11, at the top, then rig-session prep, the backlog,
 dialog by its window title — a new hand-built window (`QDialog`) needs an entry in its
 `answers` table, or the rehearsal reports it as an unexpected dialog.
 
-**Math validation result (against MATLAB reference, 600 real frames):**
-- Raw κ²: **0.45% error** ✓
-- Corrected κ²: **1.2% error** ✓ (G from the measured table for SN 40513592, spVar from smoothingCoefficients.mat,
-  dark calibration from 600 dark frames)
+**Math validation result (against MATLAB reference, 600 real frames; re-checked 2026-11-10, todo Done item 70):**
+- Vika's MATLAB result `LocalStd7x7_corr.mat` (Ver2, 2024-11-01) is rebuilt **exactly** (< 10⁻¹²) by
+  `tools/recheck_matlab_reference.py` from her own saved maps and the 600 dark frames.
+- Her file differs from today's method in three named ways — spVar/darkVar on the wrong pixels (her
+  cut-mask line), her hand-typed G 1.468449 (table: 1.459666), and a fitted ⟨I⟩ instead of the 7×7
+  window mean (`docs/SCOS_protocol.md:53`). They partly cancel: the old "raw 0.45 % / corrected 1.2 %"
+  was that cancellation, not the app's error.
+- With the three updated (answer key `tests/data/LocalStd7x7_corr_updated.mat`, in git; a copy beside
+  hers), the app agrees to
+  **≤ 3 × 10⁻⁷** (float32 rounding) — raw κ², corrected κ², ⟨I⟩. The slow tests check it at 10⁻⁵.
 
 **Key parameters for THIS lab:**
 - Frame size: not fixed — whatever the camera sends: the full sensor (1216 × 1936 on the rig camera, SN 40075248), or, after **Cut Image**, only a rectangle around the ROI circle that the camera itself crops (todo U6, see below)
@@ -165,9 +171,11 @@ IMPORTANT: in `--mock-folder` playback there is no laser to switch off, so
 `DARK_CAL` instead. The bright calibration comes from the main recording, subject in
 place — which is correct: **the bright calibration is taken with the subject in the
 measurement area** (user's instruction, 2026-10-08), and MATLAB's `smoothingCoefficients.mat`
-was made from the same frames. With 600 bright frames a playback session matches MATLAB
-(κ²_corr 0.0083 vs `LocalStd7x7_corr.mat`'s mean 0.00838; `spVar` 0.513 vs 0.528 in
-`totMask`; measured 2026-10-08). The older claim that playback lands well below MATLAB
+was made from the same frames. With 600 bright frames a playback session matches
+(κ²_corr 0.0083, measured 2026-10-08, vs 0.00833, the mean of the updated answer key's
+600-frame column — her 2024 file's 0.00838 is off by three partly cancelling differences, see
+Math validation above; `spVar` 0.513 vs her 0.528 in `totMask` — hers is from 500 frames, not
+600, with the same dark mean). The older claim that playback lands well below MATLAB
 because "`spVar` is 2.3× too large from the subject" was wrong: its reference figure, 0.0105,
 is not the recording's mean — its origin is not traced: no variable in `LocalStd7x7_corr.mat` or `smoothingCoefficients.mat` averages 0.0105, though single frames reach it (MATLAB's κ²_corr pulses between 0.004 and 0.013). With 60 bright frames κ²_corr *is* lower (≈ 0.0070–0.0076): the leftover noise in
 an average of N frames is counted as `spVar` (open question 17). `tests/test_dark_cal_offline.py`

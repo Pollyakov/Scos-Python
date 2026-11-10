@@ -7,11 +7,22 @@ Validates two claims:
      (_stream_tiffs_welford + uniform_filter used in processor.load_calibration_mat),
      to rtol=1e-12.
 
-  2. End-to-end accuracy — using the Welford dark cal to process the main recording
-     reproduces MATLAB's corrSpeckleContrast to < 2 % relative error on each frame
-     (same tolerance as the existing offline validation).
+  2. End-to-end accuracy — using the Welford dark cal and Vika's spVar to process the
+     main recording reproduces the answer key `tests/data/LocalStd7x7_corr_updated.mat` to 1e-5
+     relative (κ²_corr, κ²_raw) on 30 frames spread over the recording.
 
-Skipped automatically when the reference data folder is absent (e.g. in CI).
+The answer key (2026-11-10, docs/todo.md Done item 70): Vika's own MATLAB result
+`LocalStd7x7_corr.mat` (Ver2, 2024-11-01), rebuilt exactly (< 1e-12) by
+`tools/recheck_matlab_reference.py`, then brought up to today's method in three named
+steps — spVar/darkVar on the right pixels (her script indexed them with the cut mask),
+G from the measured table (she had typed 1.468449; the table gives 1.459666), and
+⟨I⟩ = the 7×7 window mean (SCOS_protocol.md:53) instead of her fitted image. Her old
+file agreed with the app only to ~1–2 % because those three differences partly cancel.
+After the update the app differs by float32 rounding only (≤ 2e-7 measured), so the
+test guards the math against future breakage; the link to MATLAB is the exact rebuild.
+Regenerate with `python tools/recheck_matlab_reference.py --write-key`.
+
+Skipped automatically when the reference data folder or the key is absent (e.g. in CI).
 
 Reference data: C:/Users/USER/Scos_Frames_and_Results/
   expT5ms_Gain24dB_BL100DU_FR40Hz_005/        — main recording TIFFs + MATLAB results
@@ -47,6 +58,12 @@ _WINDOW       = 7
 _CAMERA_SN    = "40513592"
 _BIT_DEPTH    = 10
 _GAIN_DB      = 24.0      # from folder name: Gain24dB
+
+# The answer key, kept in git (see module docstring); the tool also leaves a copy
+# beside Vika's file in the lab data folder.
+_KEY_FILE = Path(__file__).parent / "data" / "LocalStd7x7_corr_updated.mat"
+_KEY_RTOL = 1e-5      # float32 process() vs float64 key: ≤ 2e-7 measured (2026-11-10)
+_KEY_FRAMES = range(0, 600, 20)   # 30 frames spread over the whole recording
 
 _reference_available = _DARK_DIR.exists() and _MAIN_DIR.exists()
 _skip_if_missing = pytest.mark.skipif(
@@ -111,22 +128,22 @@ def test_dark_cal_welford_matches_batch():
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — End-to-end corrSpeckleContrast vs MATLAB reference (< 2 %)
+# Test 2 — End-to-end κ² vs the updated answer key (rtol 1e-5)
 # ---------------------------------------------------------------------------
 
 @_slow
 @_skip_if_missing
+@pytest.mark.skipif(not _KEY_FILE.exists(),
+                    reason="answer key missing — run tools/recheck_matlab_reference.py --write-key")
 def test_dark_cal_end_to_end_matches_matlab():
     """
-    Using DarkCalCollector dark cal + smoothingCoefficients.mat spVar,
-    process the first N_FRAMES main recording frames and compare
-    corrSpeckleContrast against MATLAB's LocalStd7x7_corr.mat.
+    DarkCalCollector dark cal + Vika's spVar (smoothingCoefficients.mat), the app's
+    SCOSProcessor on 30 frames spread over the main recording, against the updated
+    answer key's `corrSpeckleContrast` (her spVar), `rawSpeckleContrast` and `meanVec`.
 
-    Tolerance: < 2 % relative error per frame, matching the existing offline
-    validation result documented in CLAUDE.md (1.2 % average error on κ²_corr).
+    Tolerance 1e-5 relative (measured ≤ 2e-7: float32 in process(), todo A4). The old
+    2 % — needed against her 2024 file — would have let a 1 % slip in the math through.
     """
-    N_FRAMES = 10   # enough to validate; keep the test fast
-
     # --- Dark calibration via DarkCalCollector ---
     dark_tiffs = _sort_tiffs(_DARK_DIR)
     col = DarkCalCollector(n_frames=len(dark_tiffs), window_size=_WINDOW)
@@ -134,7 +151,7 @@ def test_dark_cal_end_to_end_matches_matlab():
         col.add_frame(tifffile.imread(str(tp)).astype(np.float64) / _SCALE)
     dark_mean, dark_var = col.result()
 
-    # --- Bright calibration: load spVar from smoothingCoefficients.mat ---
+    # --- Bright calibration: spVar from Vika's smoothingCoefficients.mat ---
     smooth_mat = scipy.io.loadmat(
         str(_MAIN_DIR / "smoothingCoefficients.mat"), squeeze_me=True
     )
@@ -153,20 +170,24 @@ def test_dark_cal_end_to_end_matches_matlab():
     proc.dark_var   = dark_var
     proc.bright_var = sp_var
 
-    # --- MATLAB reference ---
-    ref = scipy.io.loadmat(
-        str(_MAIN_DIR / "LocalStd7x7_corr.mat"), squeeze_me=True
-    )
-    matlab_corr = ref["corrSpeckleContrast"]   # shape (600,)
+    # --- Answer key ---
+    key = scipy.io.loadmat(str(_KEY_FILE), squeeze_me=True)
+    # The key was built with the table's G; a changed gain table must fail here,
+    # by name, rather than as a κ² mismatch.
+    assert proc.resolve_gain() == pytest.approx(float(key["G"]), rel=1e-12), (
+        f"G from the gain table {proc.resolve_gain():.6f} != the key's {float(key['G']):.6f}")
 
-    # --- Process first N_FRAMES main frames ---
-    main_tiffs = _sort_tiffs(_MAIN_DIR)[:N_FRAMES]
-    for i, tp in enumerate(main_tiffs):
-        frame = tifffile.imread(str(tp))       # raw uint16
-        _, k2_corr, _ = proc.process(frame, tot_mask)
+    main_tiffs = _sort_tiffs(_MAIN_DIR)
+    assert len(main_tiffs) == len(key["corrSpeckleContrast"]) == 600
+    for i in _KEY_FRAMES:
+        frame = tifffile.imread(str(main_tiffs[i]))       # raw uint16
+        k2_raw, k2_corr, mean_i = proc.process(frame, tot_mask)
 
-        rel_err = abs(k2_corr - matlab_corr[i]) / abs(matlab_corr[i])
-        assert rel_err < 0.02, (
-            f"Frame {i}: k2_corr={k2_corr:.6f} vs MATLAB={matlab_corr[i]:.6f} "
-            f"— relative error {rel_err*100:.2f}% exceeds 2%"
-        )
+        for name, got, want in (("k2_corr", k2_corr, key["corrSpeckleContrast"][i]),
+                                ("k2_raw", k2_raw, key["rawSpeckleContrast"][i]),
+                                ("<I>", mean_i, key["meanVec"][i])):
+            rel_err = abs(got - want) / abs(want)
+            assert rel_err < _KEY_RTOL, (
+                f"Frame {i}: {name}={got:.8g} vs answer key {want:.8g} "
+                f"— relative error {rel_err:.2e} exceeds {_KEY_RTOL:.0e}"
+            )

@@ -70,12 +70,14 @@ Anything that does not match — even if it looks harmless — goes into step 4.
 2. **During the measurement the live image updates only every 2.5 s.** On purpose, to save
    GUI time. The FPS, κ² and ⟨I⟩ labels keep moving.
 3. **With 60 Bright Frames, corrected κ² is lower than MATLAB's.** With 600 it matches.
-   MATLAB's corrected κ² for this recording (`LocalStd7x7_corr.mat`) averages **0.0084**:
+   The expected corrected κ² for this recording, with 600 bright frames, averages **0.0083**
+   (answer key `LocalStd7x7_corr_updated.mat`, 2026-11-10; Vika's older `LocalStd7x7_corr.mat`
+   says 0.0084 — it differs from today's method in three small ways, see todo Done item 70):
 
    | Bright Frames | corrected κ² | `spVar` (mean in ROI) |
    |---|---|---|
    | 60  | ≈ 0.0070–0.0076 (three runs) | ≈ 1.2 |
-   | 600 | ≈ 0.0083–0.0085 (two runs, one by hand on 2026-10-07) | ≈ 0.51 (MATLAB: 0.53) |
+   | 600 | ≈ 0.0083–0.0085 (two runs, one by hand on 2026-10-07) | ≈ 0.51 (MATLAB: 0.53, from 500 frames) |
 
    **The frame count**, not a bug: `spVar` is measured on the *average* of the bright
    frames, and the random noise left in an average of N frames shrinks only as 1/N — with 60

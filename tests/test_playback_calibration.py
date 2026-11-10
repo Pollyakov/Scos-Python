@@ -21,8 +21,10 @@ Measured on the lab recording, 2026-09-28: the fixed path gives κ²_corr ≈
 "MATLAB 0.0105" and blamed the subject being in place for a 2.3× `spVar`.
 Corrected 2026-10-08: the bright calibration is taken with the subject in place,
 as MATLAB's `smoothingCoefficients.mat` was; with 600 bright frames a playback
-session gives 0.0083 against `LocalStd7x7_corr.mat`'s mean of 0.00838, and
-`spVar` within 3 % of MATLAB's.) The offline tests remain the per-frame accuracy
+session gives 0.0083 against the updated answer key's mean of 0.00833
+(`LocalStd7x7_corr_updated.mat`, 600-frame spVar; Vika's 2024 file says 0.00838,
+but differs from today's method in three partly cancelling ways — todo Done item 70),
+and `spVar` 0.513 vs her 0.528 — hers is from 500 frames, not 600.) The offline tests remain the per-frame accuracy
 check; this mode is for rehearsing the sequence.
 """
 

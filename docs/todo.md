@@ -358,9 +358,60 @@ the same line (427; there only `fitI_A/B` are cut). Checked with `tools/gap_half
 ÷ N − 1 would add +0.24 % (wrong pixels + ÷ N: −0.34 %). Fix for her: before the frame loop,
 `spVar = spVar(roi.y, roi.x); darkVarPerWindow = darkVarPerWindow(roi.y, roi.x);` (and `darkVar`, used
 only in the first-frame print). Ask her the sign and exact number.
-**Follow-up (not done):** Ver2 is the MATLAB reference of the app's offline accuracy tests
-(`LocalStd7x7_corr.mat`, "corrected κ² 1.2 % error" in CLAUDE.md) — the same wrong pixels may be part
-of that 1.2 %. Check by rerunning the offline comparison with her κ²_corr recomputed on the right pixels.
+**Follow-up — done 2026-11-10, see A6 below.**
+
+#### ~~A6 · The offline accuracy tests' MATLAB answer key is out of date~~ — ✅ CLOSED 2026-11-10 (see item 70 in Done table): new answer key built, tests tightened from 2 % to 10⁻⁵
+The slow tests (`test_dark_cal_offline.py`, `test_bright_cal_offline.py`) compare the app's corrected κ² with
+`LocalStd7x7_corr.mat` (lab recording `expT5ms_Gain24dB_BL100DU_FR40Hz_005`, 600 frames) at < 2 % per frame.
+`tools/recheck_matlab_reference.py` (≈ 9 min, read-only) rebuilt that file in Python.
+- **Which script made it:** her own copy of Ver2 on 2024-11-01, between GitHub commits `81cadaf` (2024-10-09)
+  and `3a914ac` (2024-11-06) — the saved variables match `81cadaf`, the ÷ 64 and the gain match `3a914ac`.
+- **Reproduced exactly from her own maps** (`smoothingCoefficients.mat`, `Mask.mat`) and the 600 dark TIFFs:
+  ⟨I⟩ to 7 × 10⁻¹⁵ DU, raw κ² to 2 × 10⁻¹⁴, corrected κ² to 5 × 10⁻¹⁴ (relative). Her `spIm` = mean of the
+  first **500** frames minus our dark mean (3 × 10⁻¹³ DU) — so her dark mean = ours. Her **G = 1.468449**
+  on every frame = the hand-typed `0.5846 · 10^(8/20)` of `3a914ac`; the table (today's `LoadG.m`, the app)
+  gives **1.459666** (from the 20 dB row).
+- **The old answer key differs from today's method in three ways, not one:** (1) wrong pixels (her line
+  447 then / 427 now), (2) her old hand-typed G, (3) the fitted intensity image (`FitMeanIm`, still in
+  GitHub's Ver2) where the app uses the window's own 7 × 7 mean — as `docs/SCOS_protocol.md:53` says
+  ("for each window: calc mean … <I>") and as her comparison script `…noIFit…` does.
+- **Effects on κ²_corr (mean of 600 frames):** pixels fixed alone −2.54 % (0.008383 → 0.008188); then table
+  G +5.64 %; then local mean −3.84 %; then the app's spVar (600 frames, not her 500) +0.43 %. The G term is
+  ≈ 8 × κ²_corr here (G/⟨I⟩ ≈ 0.067 at ⟨I⟩ ≈ 22 DU), so 0.6 % in G moves κ²_corr ≈ 5.6 %.
+- **So the documented "1.2 %" was three differences partly cancelling** (app vs old key: −1.02 % with her
+  spVar, −0.59 % with the app's bright calibration). Pixels fixed alone, the gap **grows** to +1.56 % / +2.01 %.
+- **With all three updated** (her calculation, right pixels, table G, local mean), the app agrees to
+  **2 × 10⁻⁷** on every frame (float32 rounding) — with her spVar, and with the app's own bright calibration.
+  What this proves: a chain — her MATLAB file → our rebuild (exact) → three named changes → the app
+  (rounding only). After the changes the comparison is with the app's own formula in float64, so the tight
+  test guards against future breakage; it is not new MATLAB validation. Only the dark-calibration test (her
+  spVar) still uses a piece of her data.
+- On this recording fitted vs local mean is 3.8 % (per frame 2.6–6.6 %, so not a pure scale factor —
+  rBFi's shape moves ≈ 1 % against a 31 % beat-to-beat spread); on the rig session it was 0.3 %
+  (A5, 2026-11-01). Size depends on the recording; not explained.
+**Decided by the user 2026-11-10: build the new answer key and tighten the tests.** Built:
+- `tools/recheck_matlab_reference.py --write-key` writes `LocalStd7x7_corr_updated.mat` to `tests/data/`
+  and beside her file (hers untouched) — **only if** the rebuild of her file passes six exactness checks (< 10⁻¹²: spIm, ⟨I⟩,
+  raw κ², corrected κ² on the wrong pixels with her G, G constant over frames, G = her hand-typed value).
+  Columns: `corrSpeckleContrast` (her spVar), `corrSpeckleContrast_sp600` (spVar = stdfilt² of the mean of
+  all 600 frames − dark mean, float64, as today's Ver2), `rawSpeckleContrast`, `meanVec`, `G`, `G_her_2024`,
+  `provenance`.
+- `test_dark_cal_offline.py` (her spVar → `corrSpeckleContrast`, plus raw κ² and ⟨I⟩) and
+  `test_bright_cal_offline.py` (app's bright cal → `corrSpeckleContrast_sp600`): rtol **10⁻⁵** (measured
+  ≤ 2 × 10⁻⁷ / 3 × 10⁻⁷), 30 frames spread over the recording (every 20th) instead of the first 10; both
+  first assert that the table's G equals the key's, so a changed gain table fails by name. Skipped when the
+  key file is missing. Both pass (4 slow tests, 5 min).
+- Planted mistake: dark variance 0.1 % too large → caught (frame 0, 0.13 % off); the old 2 % would have passed.
+- CLAUDE.md's "0.45 % / 1.2 %" replaced; tests' docstrings fixed (their "spVar differs because of a
+  different dark_mean" was wrong: her spVar is from 500 frames, dark mean identical);
+  `tools/compare_with_matlab.py` docstring.
+- Also restated against the new key's 600-frame mean (0.00833, not her 0.00838): CLAUDE.md's playback
+  paragraph, `tests/test_playback_calibration.py`'s docstring (no assertion used the old file),
+  `docs/simulation_checklist.md` item 3.
+- Left as history: `docs/Plan_U6_Camera_Crop.md` and `docs/reviews/*` still quote "0.45–1.2 %".
+- **The key is in git** (user, 2026-11-10): `tests/data/LocalStd7x7_corr_updated.mat` (≈ 20 KB; one
+  `!` exception to `*.mat` in `.gitignore`) — the tests read this copy; the tool writes it and a copy
+  beside Vika's file in the lab data folder. The tests still need the lab frames, so elsewhere they skip.
 
 ---
 
@@ -1212,7 +1263,7 @@ unchanged.
 ▶ fixes from the first rig session (above): U1 → U2 → U3 → U4 → U5 → U8 → U9 → U6 → U10 → D8 → U11   (all ✅; U6 and U11 checked on the rig 2026-10-19)
 ▶ rig-session prep (above): all ✅ or closed 2026-10-20, except 3d (long run — before the first long recording) and 5b (not sent)
   then, after a successful session:
-~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20) → ~~A5~~ (closed 2026-11-10 — Vika's script, app unchanged)
+~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20) → ~~A5~~ (closed 2026-11-10 — Vika's script, app unchanged) → ~~A6~~ (closed 2026-11-10 — new answer key, tests at 10⁻⁵)
   → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
   → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect) → ~~B5~~ (2026-11-04)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
@@ -1296,7 +1347,8 @@ unchanged.
 | 66 | "Starting SCOS…" sign, and `app.log` copied into every session folder (2026-10-29) | Two follow-ups to the desktop icon (item 65), asked for by the user. **(1) The sign:** on a cold start the app's code takes ≈ 10 s to load (scipy, h5py, matplotlib — measured 2026-10-29; ≈ 1.4 s when warm), and with no console nothing showed meanwhile — an operator would double-click again. `main.py` now shows a small dark `QSplashScreen` (the icon, "Starting SCOS…", "This can take up to half a minute.") right after the one-copy lock is taken, and closes it **before** the laser-safety warning or any window opens — a splash stays on top and would cover the warning. Only PyQt6 and the standard library are imported at the top of `main.py` (pyqtgraph moved into `main()`), so the sign comes first. **Measured through the real icon, 2026-10-29:** sign after ≈ 1 s, laser warning after ≈ 2.4 s (warm). Twice the first start after a code change took ≈ 10 s before the first log line — before the sign could show (Python starting and loading freshly changed files; Windows scanning them is the likely cause, not proven). Expect that after each `git pull` on the rig. **(2) The log copy:** `app.log` is rewritten at every launch, and without a console it is the only record of a session (the laser-safety confirmation, calibration checks, warnings). `MainWindow._copy_app_log()` copies it into the session folder as `app.log` **after the probe-removal window**, so the copy covers the whole session (it starts at the app's launch, so it may hold earlier sessions of the same run too); also into a cancelled run's kept `_cancelled` folder (it says why the run stopped) — never into an empty one, which is still removed. The source is the root logger's file handler that writes a real file (pytest adds one on `nul`); in a rehearsal it is the rehearsal's log. A failed copy is only logged. `safety_dialog.confirm_laser_safety`'s docstring had claimed this copy since 2026-10-09 — now true. **Checked:** rehearsals `normal` and `leak` pass with `app.log` in the session folder, its copy ending with the probe-removal window. **Tests:** `tests/test_desktop_launch.py` (sign drawn, nothing heavy imported before it, shown after the lock and closed before the warning; a cancelled run's kept folder gets a copy, an empty one is still removed; copy holds the lines so far; placement after the last window; not into an empty cancelled folder) |
 | 67 | An ROI circle with no pixel to measure is refused (B5, 2026-11-04) | **Reproduced 2026-11-04** (window built as in `tests/test_cut_image.py`): the circle can be dragged anywhere; wholly off the image, the ⟨I⟩/p5/p95 labels in `_on_scos_frame` ran `np.percentile` over zero pixels → `IndexError` every 0.5 s — in the app (`main.py`'s excepthook) the crash window, and SCOS closes, in PREVIEW. Start SCOS went through both calibrations and only then measured over nothing; a circle too small for the window (r = 2, window 7: 13 px on the image, 0 after `shrink_mask_for_window`) the same. Cut Image cut the camera to 4 × 2 px in a sensor corner. **Fixed:** the labels show "— (ROI off the image)"; **Start SCOS refuses** ("ROI Outside the Image" warning, before G, the folder and the laser prompt — the protocol order is untouched) when the *shrunk* mask is empty; **Cut Image refuses** (status bar) when the circle has no pixel on the sensor. A circle half off the image is still valid. No change to the math or to a valid ROI. `tests/test_empty_roi.py` (9 tests; 5 fail on the old code). |
 | 68 | Stretch the graph along time only (D12, 2026-11-09) | The user's wish of 2026-10-29: look closely at one stretch of the recording (a few heartbeats). **Picture first:** three mock-ups from the real widget (today / mouse only, double-click to go back / plus a "Show All" button) — the user chose the minimal one, no new buttons, and accepted the proposed behaviour as it was. **Built** (`gui/plot_widget.py`, display only — nothing recorded or saved changes): the mouse moves the time axis only (`setMouseEnabled(x=True, y=False)`): wheel stretches/shrinks, drag slides. Stretched = pyqtgraph's automatic X range is off (`is_stretched()`); the view then **holds still** while points arrive, and the **height fits the part shown** (min–max + 10 %, refitted at once on wheel/drag and at every 1 s refresh) instead of the whole recording's 5–95 % range — otherwise the beats stay squashed. **Double-click** (`show_all()`) goes back to the whole recording, following live data; Reset (clears the data) does that too. Crossing 120 s while stretched (axis seconds → minutes) keeps the same stretch in the new unit. The axis unit stays minutes when stretched in a long recording ("1.86 min…") — switching units while zooming would confuse. pyqtgraph's own small "A" button (bottom-left, on hover) also goes back. Works during and after a measurement. **Tests:** `tests/test_plot_widget.py` `TestStretchAlongTime` (10; real wheel and double-click events — note: a real double-click is press, release, double-click, release; `QTest.mouseDClick` alone does not reach pyqtgraph). Not checked: on the rig PC with a real mouse |
-| 69 | The 8 % gap with Vika's corrected κ² — explained and closed (A5, 2026-11-10) | Vika ran her MATLAB on the app's saved frames (`scos_20261022_165057`): raw κ² agreed, corrected κ² 8 % apart. **Two bugs, both in her new script `SCOSvsTime_Ver1_noIFit_Compare.m`, none in the app:** (1) `spIm` = raw mean of the bright frames, dark mean not subtracted → the dark fixed pattern (0.126 DU²) counted in spVar (+32 %) → her κ²_corr −7.46 % (her "0.13224" reproduced to 5 digits; found 2026-11-04, she fixed it); (2) after "Decrease Image Size" the full-size `spVar` and `darkVarPerWindow` maps indexed with the *cut* mask → other pixels → −0.58 % (found 2026-11-09; the same line is in her Ver2, line 427). With both fixed her formula gives 0.000 % on all 1300 frames (`tools/gap_spvar_full_check.py`, `tools/gap_half_percent_check.py`, local only); **Vika confirmed 2026-11-10: "it fits perfectly".** Also ruled out on the way: G (identical), dark mean/variance (identical, ÷ N − 1), intensity, frame pairing, 1/12. Her scripts: `docs/vika_matlab/` (local). Details: A5 above. **Follow-up offered, not decided:** the app's offline MATLAB tests use Ver2's output as reference ("corrected κ² 1.2 %" in CLAUDE.md) — Ver2 has bug (2), so part of that 1.2 % may be MATLAB's |
+| 69 | The 8 % gap with Vika's corrected κ² — explained and closed (A5, 2026-11-10) | Vika ran her MATLAB on the app's saved frames (`scos_20261022_165057`): raw κ² agreed, corrected κ² 8 % apart. **Two bugs, both in her new script `SCOSvsTime_Ver1_noIFit_Compare.m`, none in the app:** (1) `spIm` = raw mean of the bright frames, dark mean not subtracted → the dark fixed pattern (0.126 DU²) counted in spVar (+32 %) → her κ²_corr −7.46 % (her "0.13224" reproduced to 5 digits; found 2026-11-04, she fixed it); (2) after "Decrease Image Size" the full-size `spVar` and `darkVarPerWindow` maps indexed with the *cut* mask → other pixels → −0.58 % (found 2026-11-09; the same line is in her Ver2, line 427). With both fixed her formula gives 0.000 % on all 1300 frames (`tools/gap_spvar_full_check.py`, `tools/gap_half_percent_check.py`, local only); **Vika confirmed 2026-11-10: "it fits perfectly".** Also ruled out on the way: G (identical), dark mean/variance (identical, ÷ N − 1), intensity, frame pairing, 1/12. Her scripts: `docs/vika_matlab/` (local). Details: A5 above. **Follow-up:** the app's offline MATLAB tests use Ver2's output as reference ("corrected κ² 1.2 %" in CLAUDE.md) — Ver2 has bug (2); re-checked 2026-11-10, see A6 |
+| 70 | Offline accuracy tests: new MATLAB answer key, tolerance 2 % → 10⁻⁵ (A6, 2026-11-10) | Vika's 2024 `LocalStd7x7_corr.mat` rebuilt exactly (< 10⁻¹²) from her own maps — made by her local Ver2 between GitHub `81cadaf` and `3a914ac`, G hand-typed 1.468449, spVar from 500 frames, our dark mean. It differs from today's method in three ways that partly cancel: wrong pixels (−2.54 %), her G vs the table's 1.459666 (+5.64 %), fitted ⟨I⟩ vs the 7×7 window mean of `SCOS_protocol.md:53` (−3.84 %) — so the documented "1.2 %" was cancellation, and fixing the pixels alone made the gap larger (+1.56 %). With all three updated the app agrees to ≤ 3 × 10⁻⁷. New key `LocalStd7x7_corr_updated.mat` (written by `tools/recheck_matlab_reference.py --write-key` only after the exact rebuild); `test_dark_cal_offline.py` / `test_bright_cal_offline.py` at 10⁻⁵ on 30 frames, G checked against the key; a planted 0.1 % dark-variance slip is caught. What the tight test proves: guard against future breakage; the link to MATLAB is the exact rebuild. Details: A6 above |
 
 ---
 

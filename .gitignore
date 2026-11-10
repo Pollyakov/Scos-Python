@@ -5,6 +5,8 @@ __pycache__/
 *.pyd
 .env
 *.mat
+# …except the offline tests' answer key (≈ 20 KB, tools/recheck_matlab_reference.py, 2026-11-10)
+!tests/data/LocalStd7x7_corr_updated.mat
 *.tiff
 *.tif
 *.avi

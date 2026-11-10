@@ -204,6 +204,32 @@ sent by the user; **answered 2026-11-10: Vika confirmed it was a bug in her code
 (Why the sign matters: with her dark variance still ÷ N instead of ÷ N − 1 the gap would be
 −0.34 %, not −0.58 %.)
 
+**24. Fitted ⟨I⟩ (`FitMeanIm`) or the window mean — which is the method from now on?** *(drafted
+2026-11-10 after the accuracy re-check, todo Done item 70; not yet sent. The app follows
+`docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she says otherwise.)*
+Message, ready to send:
+
+> Hi Vika,
+> A short follow-up, nothing urgent.
+> The app's automatic accuracy test compared the app with `LocalStd7x7_corr.mat`, which your Ver2
+> made on 1 Nov 2024 from `VikaHead\Basler_1920\T2_short_40Hz\expT5ms_Gain24dB_BL100DU_FR40Hz_005`.
+> We rebuilt that run exactly in Python (agreement to 10⁻¹⁴) and found it differs from today's
+> method in three ways:
+> 1. The same wrong-pixel line as before (`spVar(masks_cut)`, `darkVar(masks_cut)`; line 447 then,
+>    427 in today's Ver2 on GitHub).
+> 2. G = 1.4685 DU/e, typed by hand for SN 40513592 Mono10 (0.5846 at 16 dB, rescaled to 24 dB).
+>    `CamerasMeasuredGain.csv` through `LoadG` gives 1.4597 (from the 20 dB row). On this
+>    recording 0.6 % in G moves corrected κ² by 5.6 %, because the shot-noise term G/⟨I⟩ is about
+>    8 times larger than κ² itself.
+> 3. ⟨I⟩ from `FitMeanIm` (`fitI_A · meanFrame + fitI_B`) instead of the 7×7 window mean. The
+>    protocol says the window mean, and your noIFit comparison script and the app use it. On this
+>    recording that alone changes corrected κ² by 3.8 % on average (2.6–6.6 % per frame); on the
+>    rig session from 22 Oct it was only 0.3 %.
+> These three partly cancel, which is why the app agreed with that file to about 1 %. With all
+> three updated, the app agrees to 2 × 10⁻⁷, and the test now checks it at 10⁻⁵.
+> One question: Ver2 on GitHub still uses `FitMeanIm`. Is the window mean (as in the protocol)
+> the method from now on, or is there a reason to keep the fitted ⟨I⟩?
+
 ---
 
 ## G. Sent 2026-10-27 — answered 2026-10-28 (see "Answered")

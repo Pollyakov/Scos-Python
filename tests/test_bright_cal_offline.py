@@ -12,11 +12,16 @@ Two tests:
    bright_var as the batch path (_stream_tiffs_mean + local_variance).  Proves the
    online algorithm is numerically correct independent of MATLAB.
 
-2. End-to-end corrSpeckleContrast < 2 % per frame
-   Using DarkCalCollector dark cal + BrightCalCollector bright cal, process 10 main
-   frames and compare against MATLAB's LocalStd7x7_corr.mat.  Our spVar gives
-   0.6–1.2 % error (slightly better than smoothingCoefficients.mat's ~1 % because
-   our dark_mean and sp_im are internally consistent).
+2. End-to-end corrSpeckleContrast to 1e-5 relative
+   Using DarkCalCollector dark cal + BrightCalCollector bright cal (all 600 frames),
+   process 30 main frames spread over the recording and compare against the answer
+   key `tests/data/LocalStd7x7_corr_updated.mat`, column `corrSpeckleContrast_sp600` — spVar
+   computed the MATLAB way (stdfilt² in float64) from the same 600 frames minus the
+   same dark mean.  What the key is and why it replaced Vika's 2024
+   `LocalStd7x7_corr.mat`: see tests/test_dark_cal_offline.py's docstring.
+   (Her own spVar is from the first 500 frames, with exactly our dark mean — not
+   "a different dark_mean", as this file said before 2026-11-10; 500 vs 600 frames
+   moves κ²_corr by +0.43 %.)
 
 Both tests are skipped automatically when the reference data folder is absent.
 
@@ -54,6 +59,10 @@ _WINDOW       = 7
 _CAMERA_SN    = "40513592"
 _BIT_DEPTH    = 10
 _GAIN_DB      = 24.0
+
+_KEY_FILE = Path(__file__).parent / "data" / "LocalStd7x7_corr_updated.mat"   # in git; see test_dark_cal_offline.py
+_KEY_RTOL = 1e-5      # app (float32 process + bright cal) vs float64 key: ≤ 3e-7 measured
+_KEY_FRAMES = range(0, 600, 20)   # 30 frames spread over the whole recording
 
 _reference_available = _MAIN_DIR.exists() and _DARK_DIR.exists()
 _skip_if_missing = pytest.mark.skipif(
@@ -121,22 +130,23 @@ def test_bright_cal_welford_matches_batch():
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — End-to-end corrSpeckleContrast vs MATLAB reference (< 2 %)
+# Test 2 — End-to-end corrSpeckleContrast vs the updated answer key (rtol 1e-5)
 # ---------------------------------------------------------------------------
 
 @_slow
 @_skip_if_missing
+@pytest.mark.skipif(not _KEY_FILE.exists(),
+                    reason="answer key missing — run tools/recheck_matlab_reference.py --write-key")
 def test_bright_cal_end_to_end_matches_matlab():
     """
-    Full pipeline using both DarkCalCollector and BrightCalCollector reproduces
-    MATLAB's corrSpeckleContrast to < 2 % per frame.
+    Full pipeline using both DarkCalCollector and BrightCalCollector (all 600 main
+    frames) reproduces the answer key's `corrSpeckleContrast_sp600` to 1e-5 per frame
+    (measured ≤ 3e-7 — float32 in local_variance() and process(), todo A4).
 
-    Observed: 0.6–1.2 % error.  The spVar values differ from smoothingCoefficients.mat
-    by ~4 % in mean because MATLAB's .mat was generated in a different run with a
-    slightly different dark_mean.  Internally consistent dark+bright cal gives
-    better end-to-end accuracy than mixing our dark_mean with MATLAB's spVar.
+    Before 2026-11-10 this compared with Vika's 2024 file at < 2 % (observed
+    0.6–1.2 %); that file's corrected κ² differs from today's method in three ways
+    that partly cancel (docs/todo.md Done item 70).
     """
-    N_FRAMES   = 10
     main_tiffs = _sort_tiffs(_MAIN_DIR)
     dark_tiffs = _sort_tiffs(_DARK_DIR)
 
@@ -166,14 +176,17 @@ def test_bright_cal_end_to_end_matches_matlab():
 
     mat      = scipy.io.loadmat(str(_MAIN_DIR / "smoothingCoefficients.mat"), squeeze_me=True)
     tot_mask = mat["totMask"].astype(bool)
-    ref      = scipy.io.loadmat(str(_MAIN_DIR / "LocalStd7x7_corr.mat"), squeeze_me=True)
-    matlab_corr = ref["corrSpeckleContrast"]
+    key      = scipy.io.loadmat(str(_KEY_FILE), squeeze_me=True)
+    assert proc.resolve_gain() == pytest.approx(float(key["G"]), rel=1e-12), (
+        f"G from the gain table {proc.resolve_gain():.6f} != the key's {float(key['G']):.6f}")
+    key_corr = key["corrSpeckleContrast_sp600"]
+    assert len(main_tiffs) == len(key_corr) == 600
 
-    for i, tp in enumerate(main_tiffs[:N_FRAMES]):
-        frame = tifffile.imread(str(tp))
+    for i in _KEY_FRAMES:
+        frame = tifffile.imread(str(main_tiffs[i]))
         _, k2_corr, _ = proc.process(frame, tot_mask)
-        rel_err = abs(k2_corr - matlab_corr[i]) / abs(matlab_corr[i])
-        assert rel_err < 0.02, (
-            f"Frame {i}: k2_corr={k2_corr:.6f} vs MATLAB={matlab_corr[i]:.6f} "
-            f"— relative error {rel_err*100:.2f}% exceeds 2%"
+        rel_err = abs(k2_corr - key_corr[i]) / abs(key_corr[i])
+        assert rel_err < _KEY_RTOL, (
+            f"Frame {i}: k2_corr={k2_corr:.8g} vs answer key {key_corr[i]:.8g} "
+            f"— relative error {rel_err:.2e} exceeds {_KEY_RTOL:.0e}"
         )

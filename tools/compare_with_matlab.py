@@ -20,9 +20,11 @@ What can differ, and why (read from her code, 2026-10-20): her `spVar` comes
 from the first 600 frames of the recording itself (1000 when it has more than
 1000 — found 2026-11-01), the app's from the bright
 calibration frames; her ⟨I⟩² in the κ² denominator is a fitted mean image
-(`FitMeanIm`), the app's the local mean. On the lab recording, with the same
-dark frames, G and spVar, the two agree within 0.45 % (raw) and 1.2 %
-(corrected) — CLAUDE.md.
+(`FitMeanIm`), the app's the local mean; and her Ver2 indexes spVar/darkVar
+with the cut mask (wrong pixels). On the lab recording these differences move
+corrected κ² by several % each and partly cancel; with them removed the app
+equals her calculation to float32 rounding (`tools/recheck_matlab_reference.py`,
+todo Done item 70).
 """
 
 from __future__ import annotations
