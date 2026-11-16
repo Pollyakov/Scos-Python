@@ -19,7 +19,9 @@ G from the measured table (she had typed 1.468449; the table gives 1.459666), an
 ⟨I⟩ = the 7×7 window mean (SCOS_protocol.md:53) instead of her fitted image. Her old
 file agreed with the app only to ~1–2 % because those three differences partly cancel.
 After the update the app differs by float32 rounding only (≤ 2e-7 measured), so the
-test guards the math against future breakage; the link to MATLAB is the exact rebuild.
+test guards the math against future breakage. The link to MATLAB: the exact rebuild,
+and MATLAB R2020b running Ver2 with those changes (and ReadRecordVarAndMean ÷ N − 1)
+reproduces the key's `corrSpeckleContrast_sp600`, raw κ² and ⟨I⟩ to 8e-14 (2026-11-10).
 Regenerate with `python tools/recheck_matlab_reference.py --write-key`.
 
 Skipped automatically when the reference data folder or the key is absent (e.g. in CI).

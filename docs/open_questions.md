@@ -206,7 +206,9 @@ sent by the user; **answered 2026-11-10: Vika confirmed it was a bug in her code
 
 **24. Fitted ⟨I⟩ (`FitMeanIm`) or the window mean — which is the method from now on?** *(drafted
 2026-11-10 after the accuracy re-check, todo Done item 70; not yet sent. The app follows
-`docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she says otherwise.)*
+`docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she says otherwise.
+The code offered below is in `docs/vika_matlab/` (`…Ver2_proposed.m`, `ReadRecordVarAndMean_proposed.m`,
+local) and was run in MATLAB here on 2026-11-10.)*
 Message, ready to send:
 
 > Hi Vika,
@@ -227,8 +229,37 @@ Message, ready to send:
 >    rig session from 22 Oct it was only 0.3 %.
 > These three partly cancel, which is why the app agreed with that file to about 1 %. With all
 > three updated, the app agrees to 2 × 10⁻⁷, and the test now checks it at 10⁻⁵.
-> One question: Ver2 on GitHub still uses `FitMeanIm`. Is the window mean (as in the protocol)
-> the method from now on, or is there a reason to keep the fitted ⟨I⟩?
+>
+> In case it's useful, here is the change for Ver2 (today's GitHub version), tested in MATLAB:
+>
+> After `fitI_B_cut = fitI_B(roi.y, roi.x);` (line 365), add:
+> ```
+> spVar            = spVar(roi.y , roi.x);
+> darkVarPerWindow = darkVarPerWindow(roi.y , roi.x);
+> darkVar          = darkVar(roi.y , roi.x);   % used only in the first-frame printout
+> ```
+> In the frame loop, use your commented-out lines (417, 423–424) instead of the fitted ones:
+> ```
+>     meanIm = imboxfilt(im_cut,windowSize);
+>     ...
+>         fittedI = meanIm;
+>         fittedISquare = meanIm.^2;
+> ```
+> And in `baseFunc/ReadRecordVarAndMean.m`, line 83 divides the dark variance by N; with N − 1
+> (as `std(rec,0,3).^2`):
+> ```
+> recVar = (recSSum/nOfFrames - recMean.^2) * nOfFrames/(nOfFrames-1);
+> ```
+> (You may already have this one locally — your comparison on 4 Nov used N − 1. Old
+> `meanIm.mat` files in dark folders keep the N-variance, so delete them after the change.)
+>
+> With these three changes, Ver2 in MATLAB R2020b on that recording gives the same corrected κ²,
+> raw κ² and ⟨I⟩ as the app's new reference on all 600 frames (to 10⁻¹³). Without the
+> `ReadRecordVarAndMean` change it is 0.28 % higher. `FitMeanIm` is then no longer used, so it
+> could also be removed from the calibration part to save time.
+>
+> One question: is the window mean (as in the protocol) the method from now on, or is there a
+> reason to keep the fitted ⟨I⟩?
 
 ---
 

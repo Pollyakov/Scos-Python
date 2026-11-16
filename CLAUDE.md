@@ -34,6 +34,8 @@ dialog by its window title — a new hand-built window (`QDialog`) needs an entr
 - With the three updated (answer key `tests/data/LocalStd7x7_corr_updated.mat`, in git; a copy beside
   hers), the app agrees to
   **≤ 3 × 10⁻⁷** (float32 rounding) — raw κ², corrected κ², ⟨I⟩. The slow tests check it at 10⁻⁵.
+- **MATLAB itself confirms the key:** Ver2 with the three changes (plus `ReadRecordVarAndMean` ÷ N − 1),
+  run in MATLAB R2020b on the recording, equals it to 8 × 10⁻¹⁴ on all 600 frames (2026-11-10).
 
 **Key parameters for THIS lab:**
 - Frame size: not fixed — whatever the camera sends: the full sensor (1216 × 1936 on the rig camera, SN 40075248), or, after **Cut Image**, only a rectangle around the ROI circle that the camera itself crops (todo U6, see below)
