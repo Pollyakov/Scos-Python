@@ -486,7 +486,7 @@ the supervisor's spec and her answers of 2026-09-23:
   `dark_cal_*.mat` / `bright_cal_*.mat` writes and the embedded `calibration` group are gone.
 - `h5_replay.py` reads both the old and new dataset names, so existing recordings still play.
 
-Still open for Tier E: **only the v0 tag (E5)**. The normalization method (E1, item 23), the
+Still open for Tier E: **nothing — the v0 tag (E5) was made on 2026-11-17**. The normalization method (E1, item 23), the
 laser popup (E3, item 28) and the figure file (E4, item 27) have all landed since this
 paragraph was written.
 
@@ -522,7 +522,9 @@ Show the saved path in the status bar.
 
 ---
 
-#### E5 · Git tag v0
+#### ~~E5 · Git tag v0~~ — ✅ DONE 2026-11-17: tag `v0` on commit `a68d718`, pushed to GitHub
+
+**Tagged 2026-11-17 (user: "tag v0").** Before tagging, the full suite was run, slow MATLAB tests included: 918 passed, none skipped. The tag is annotated, with the message below. Everything after this commit is post-v0 work.
 
 **Decided 2026-10-20 (user):** the tag waits until **Vika has checked the math on saved
 frames**. If those are frames saved *by this app*, raw-frame saving (F1) must come first —
@@ -1274,7 +1276,7 @@ unchanged.
 ▶ rig-session prep (above): all ✅ or closed 2026-10-20, except 3d (long run — before the first long recording) and 5b (not sent)
   then, after a successful session:
 ~~A1~~ → ~~A2~~ → ~~A3~~ → ~~A4~~ (float32 kept, 2026-10-20) → ~~A5~~ (closed 2026-11-10 — Vika's script, app unchanged) → ~~A6~~ (closed 2026-11-10 — new answer key, tests at 10⁻⁵)
-  → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → E5 (tag v0 — after Vika's check of the math on saved frames)
+  → ~~E1~~ → ~~E2~~ → ~~E3~~ → ~~E4~~ → ~~E5~~ (tag `v0`, 2026-11-17, commit `a68d718`)
   → B1 (overload dialog) → ~~B2~~ (with F1) → ~~B3~~ → B4 (camera reconnect) → ~~B5~~ (2026-11-04)
   → C1 (scos_math) → C2 (frame_source ABC) → C3 (camera_source)
   → D1/D2/D3/D4/D7/~~D9~~ (closed 2026-11-04)/~~D11~~/~~D12~~ (2026-11-09) (any order); D5 at the rig; ~~D6~~, ~~D8~~
@@ -1360,6 +1362,7 @@ unchanged.
 | 69 | The 8 % gap with Vika's corrected κ² — explained and closed (A5, 2026-11-10) | Vika ran her MATLAB on the app's saved frames (`scos_20261022_165057`): raw κ² agreed, corrected κ² 8 % apart. **Two bugs, both in her new script `SCOSvsTime_Ver1_noIFit_Compare.m`, none in the app:** (1) `spIm` = raw mean of the bright frames, dark mean not subtracted → the dark fixed pattern (0.126 DU²) counted in spVar (+32 %) → her κ²_corr −7.46 % (her "0.13224" reproduced to 5 digits; found 2026-11-04, she fixed it); (2) after "Decrease Image Size" the full-size `spVar` and `darkVarPerWindow` maps indexed with the *cut* mask → other pixels → −0.58 % (found 2026-11-09; the same line is in her Ver2, line 427). With both fixed her formula gives 0.000 % on all 1300 frames (`tools/gap_spvar_full_check.py`, `tools/gap_half_percent_check.py`, local only); **Vika confirmed 2026-11-10: "it fits perfectly".** Also ruled out on the way: G (identical), dark mean/variance (identical, ÷ N − 1), intensity, frame pairing, 1/12. Her scripts: `docs/vika_matlab/` (local). Details: A5 above. **Follow-up:** the app's offline MATLAB tests use Ver2's output as reference ("corrected κ² 1.2 %" in CLAUDE.md) — Ver2 has bug (2); re-checked 2026-11-10, see A6 |
 | 70 | Offline accuracy tests: new MATLAB answer key, tolerance 2 % → 10⁻⁵ (A6, 2026-11-10) | Vika's 2024 `LocalStd7x7_corr.mat` rebuilt exactly (< 10⁻¹²) from her own maps — made by her local Ver2 between GitHub `81cadaf` and `3a914ac`, G hand-typed 1.468449, spVar from 500 frames, our dark mean. It differs from today's method in three ways that partly cancel: wrong pixels (−2.54 %), her G vs the table's 1.459666 (+5.64 %), fitted ⟨I⟩ vs the 7×7 window mean of `SCOS_protocol.md:53` (−3.84 %) — so the documented "1.2 %" was cancellation, and fixing the pixels alone made the gap larger (+1.56 %). With all three updated the app agrees to ≤ 3 × 10⁻⁷. New key `LocalStd7x7_corr_updated.mat` (written by `tools/recheck_matlab_reference.py --write-key` only after the exact rebuild); `test_dark_cal_offline.py` / `test_bright_cal_offline.py` at 10⁻⁵ on 30 frames, G checked against the key; a planted 0.1 % dark-variance slip is caught. What the tight test proves: guard against future breakage; the link to MATLAB is the exact rebuild — **and MATLAB R2020b itself, running Ver2 with the changes (plus `ReadRecordVarAndMean` ÷ N − 1), reproduces the key to 8 × 10⁻¹⁴** (MATLAB code offered to Vika, question 24). Details: A6 above |
 | 71 | Lost-frames counter stands out (2026-11-17) | The "Dropped: N" label in the Info box was red all the time, so 0 and 7 looked alike. Now grey at zero and a white-on-red block as soon as a frame is dropped from the queue or lost at the camera; it stays red after the run, until the next Start SCOS. The label also gets the run's final count at the end (before, it was refreshed only once a second from results). `MainWindow._show_frame_loss()`, `tests/test_frame_loss_label.py`. A small step taken before the v0 tag instead of the full overload dialog (B1), which stays in the backlog. |
+| 72 | Gain table: camera DAN02 added (2026-11-17) | `CamerasMeasuredGain.csv` gained the row SN 40092364, acA1440-220um, "DAN02", Mono12, 8 dB, G = 0.9327 — copied from MATLAB's `baseFunc` (GitHub main, added there 2026-11-09; user: no need to ask Vika). Only the row was added: baseFunc's copy now rounds the other values to 9 decimals (≈ 4 × 10⁻¹⁰ relative), the app keeps its full-precision ones. `tests/test_gain_table.py::test_the_labs_cameras_are_in_the_table`. Same day, found on GitHub: Vika fixed the wrong-pixel line in her main script herself (2026-11-15, now `SCOSvsTime_Ver2.m`) — the note to her (`open_questions.md` 24) was shortened to the two points left: fitted ⟨I⟩ vs window mean, variance ÷ N vs N − 1. |
 
 ---
 

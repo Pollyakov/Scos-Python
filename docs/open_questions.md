@@ -204,62 +204,48 @@ sent by the user; **answered 2026-11-10: Vika confirmed it was a bug in her code
 (Why the sign matters: with her dark variance still ÷ N instead of ÷ N − 1 the gap would be
 −0.34 %, not −0.58 %.)
 
-**24. Fitted ⟨I⟩ (`FitMeanIm`) or the window mean — which is the method from now on?** *(drafted
-2026-11-10 after the accuracy re-check, todo Done item 70; not yet sent. The app follows
-`docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she says otherwise.
-The code offered below is in `docs/vika_matlab/` (`…Ver2_proposed.m`, `ReadRecordVarAndMean_proposed.m`,
-local) and was run in MATLAB here on 2026-11-10.)*
+**24. Fitted ⟨I⟩ (`FitMeanIm`) or the window mean — which is the method from now on?** *(first
+drafted 2026-11-10 after the accuracy re-check, todo Done item 70; **shortened 2026-11-17, not yet
+sent.** The app follows `docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she
+says otherwise.)*
+
+**Why the draft was shortened (checked on GitHub 2026-11-17):** Vika fixed the wrong-pixel line
+herself — `viti1/SCOS` commit `73112d2`, 2026-11-15, "FIX AN IMPORTANT BUG (spVar image size) +
+rename SCOSvsTime to shorter name". The script is now `SCOSvsTime_Ver2.m`; after
+`fitI_B_cut = fitI_B(roi.y, roi.x);` it cuts `spVar`, `darkVarPerWindow` and `darkVar` with
+`(roi.y, roi.x)` — the same three lines the long draft proposed. Same commit: the cached
+`smoothingCoefficients` file is no longer loaded (spVar is recalculated every run) and
+`requiredBG_nOfFrames` went 400 → 300. **Not changed:** ⟨I⟩ is still `fitI_A_cut*meanFrame +
+fitI_B_cut` (the `imboxfilt` lines stay commented out), and `baseFunc/ReadRecordVarAndMean.m`
+line 83 still divides the variance by N. So the wrong-pixel part and the code for it left the note;
+the hand-typed G of her 2024 file (1.468449 vs the table's 1.459666) left it too — it is history,
+today's Ver2 reads G through `LoadG`. The full long draft is in git (`docs/open_questions.md` at
+commit `bf3495c`); the three differences of her 2024 file are in todo Done item 70. The proposed
+MATLAB files (`…Ver2_proposed.m`, `ReadRecordVarAndMean_proposed.m`, run in MATLAB R2020b on
+2026-11-10) are still in `docs/vika_matlab/` (local).
+Also 2026-11-17: `baseFunc/CamerasMeasuredGain.csv` gained camera DAN02 (SN 40092364, Mono12,
+8 dB, 0.9327) on 2026-11-09 — added to the app's table the same day (user: no need to ask Vika);
+baseFunc's copy now rounds the other values to 9 decimals (≈ 4 × 10⁻¹⁰ relative), the app keeps
+the full ones.
+
 Message, ready to send:
 
 > Hi Vika,
-> A short follow-up, nothing urgent.
-> The app's automatic accuracy test compared the app with `LocalStd7x7_corr.mat`, which your Ver2
-> made on 1 Nov 2024 from `VikaHead\Basler_1920\T2_short_40Hz\expT5ms_Gain24dB_BL100DU_FR40Hz_005`.
-> We rebuilt that run exactly in Python (agreement to 10⁻¹⁴) and found it differs from today's
-> method in three ways:
-> 1. The same wrong-pixel line as before (`spVar(masks_cut)`, `darkVar(masks_cut)`; line 447 then,
->    427 in today's Ver2 on GitHub).
-> 2. G = 1.4685 DU/e, typed by hand for SN 40513592 Mono10 (0.5846 at 16 dB, rescaled to 24 dB).
->    `CamerasMeasuredGain.csv` through `LoadG` gives 1.4597 (from the 20 dB row). On this
->    recording 0.6 % in G moves corrected κ² by 5.6 %, because the shot-noise term G/⟨I⟩ is about
->    8 times larger than κ² itself.
-> 3. ⟨I⟩ from `FitMeanIm` (`fitI_A · meanFrame + fitI_B`) instead of the 7×7 window mean. The
->    protocol says the window mean, and your noIFit comparison script and the app use it. On this
->    recording that alone changes corrected κ² by 3.8 % on average (2.6–6.6 % per frame); on the
->    rig session from 22 Oct it was only 0.3 %.
-> These three partly cancel, which is why the app agreed with that file to about 1 %. With all
-> three updated, the app agrees to 2 × 10⁻⁷, and the test now checks it at 10⁻⁵.
+> I saw your fix of the spVar image size on GitHub (15 Nov) — thank you.
+> Two small things left, nothing urgent:
 >
-> In case it's useful, here is the change for Ver2 (today's GitHub version), tested in MATLAB:
+> 1. `SCOSvsTime_Ver2` still takes ⟨I⟩ from `FitMeanIm` (`fitI_A*meanFrame + fitI_B`). The
+>    protocol says the 7×7 window mean, and the app uses that. On the 2024 recording
+>    (`expT5ms_Gain24dB_BL100DU_FR40Hz_005`) the two give corrected κ² about 3.8 % apart; on the
+>    rig session of 22 Oct only 0.3 %.
+>    Is the window mean the method from now on, or is there a reason to keep the fit?
 >
-> After `fitI_B_cut = fitI_B(roi.y, roi.x);` (line 365), add:
-> ```
-> spVar            = spVar(roi.y , roi.x);
-> darkVarPerWindow = darkVarPerWindow(roi.y , roi.x);
-> darkVar          = darkVar(roi.y , roi.x);   % used only in the first-frame printout
-> ```
-> In the frame loop, use your commented-out lines (417, 423–424) instead of the fitted ones:
-> ```
->     meanIm = imboxfilt(im_cut,windowSize);
->     ...
->         fittedI = meanIm;
->         fittedISquare = meanIm.^2;
-> ```
-> And in `baseFunc/ReadRecordVarAndMean.m`, line 83 divides the dark variance by N; with N − 1
-> (as `std(rec,0,3).^2`):
-> ```
-> recVar = (recSSum/nOfFrames - recMean.^2) * nOfFrames/(nOfFrames-1);
-> ```
-> (You may already have this one locally — your comparison on 4 Nov used N − 1. Old
-> `meanIm.mat` files in dark folders keep the N-variance, so delete them after the change.)
+> 2. `baseFunc/ReadRecordVarAndMean.m` line 83 divides the dark variance by N;
+>    `std(rec,0,3).^2` divides by N − 1. The effect is small (0.28 % on that recording). The app
+>    uses N − 1.
 >
-> With these three changes, Ver2 in MATLAB R2020b on that recording gives the same corrected κ²,
-> raw κ² and ⟨I⟩ as the app's new reference on all 600 frames (to 10⁻¹³). Without the
-> `ReadRecordVarAndMean` change it is 0.28 % higher. `FitMeanIm` is then no longer used, so it
-> could also be removed from the calibration part to save time.
->
-> One question: is the window mean (as in the protocol) the method from now on, or is there a
-> reason to keep the fitted ⟨I⟩?
+> With the window mean and N − 1, Ver2 in MATLAB gives the same corrected κ² as the app on all
+> 600 frames of that recording (to 10⁻¹³).
 
 ---
 

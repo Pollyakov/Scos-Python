@@ -288,3 +288,16 @@ class TestStartScosGainGate:
         finally:
             w.btn_start_scos.setChecked(False)
             w.close()
+
+
+@pytest.mark.parametrize("serial, n_bits, gain_db, expected", [
+    ("40075248", 12, 8.0, 0.95415061637498),    # DAN01 - the rig camera
+    ("40513592", 12, 8.0, 0.931317527287469),   # Nadav06
+    ("40668569", 12, 8.0, 0.979874936),         # MOSHE
+    ("40092364", 12, 8.0, 0.9327),              # DAN02 - added 2026-11-17 from baseFunc
+])
+def test_the_labs_cameras_are_in_the_table(serial, n_bits, gain_db, expected):
+    """Each lab camera's exact row gives its measured G, as in MATLAB's
+    baseFunc/CamerasMeasuredGain.csv (compared 2026-11-17; baseFunc's copy
+    rounds the values to 9 decimals, the app keeps the full ones)."""
+    assert load_gain_from_table(serial, n_bits, gain_db) == pytest.approx(expected, rel=1e-12)
