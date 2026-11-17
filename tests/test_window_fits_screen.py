@@ -66,7 +66,7 @@ def _with_long_texts(w: MainWindow) -> None:
     parameter boxes in their locked look, as during a measurement."""
     w._set_params_enabled(False)
     w._frame_info_label.setText("Frame #123456  min=0  max=4095")
-    w.lbl_dropped.setText("Dropped: 12 + 345 lost at camera")
+    w._show_frame_loss(12, 345)      # the red block, with its padding
     w.lbl_size.setText("Size : 1936×1216")
     w.lbl_roi.setText("ROI  : full frame (1936x1216)")
     w._time_left_label.show()

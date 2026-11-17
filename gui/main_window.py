@@ -571,8 +571,8 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet("font-weight: bold; color: #00cc44;")
         self._proc_label.setStyleSheet("font-weight: bold; color: #ffaa00;")
 
-        self.lbl_dropped = QLabel("Dropped: 0")
-        self.lbl_dropped.setStyleSheet("font-weight: bold; color: #ff5555;")
+        self.lbl_dropped = QLabel()
+        self._show_frame_loss(0, 0)
 
         self.lbl_size   = QLabel("Size : --")
         self.lbl_mean_i = QLabel("⟨I⟩  : --")
@@ -1269,7 +1269,7 @@ class MainWindow(QMainWindow):
             self._connect_pipeline_intake()
             self._scos_worker.start()
             self._last_logged_dropped_count = 0
-            self.lbl_dropped.setText("Dropped: 0")
+            self._show_frame_loss(0, 0)
             logger.info("Pipeline started with %d workers", n_workers)
             # Begin calibration sequence: dark cal → bright cal → measure
             self._start_dark_cal()
@@ -1665,6 +1665,24 @@ class MainWindow(QMainWindow):
             logger.exception("Could not write startTime from t=0 — the file "
                              "keeps the time it was opened")
 
+    # Looks of the lost-frames counter: quiet while nothing is lost, a red
+    # block as soon as one frame is — red text all the time told nothing.
+    _FRAME_LOSS_NONE_SS = "font-weight: bold; color: #aaaaaa;"
+    _FRAME_LOSS_SOME_SS = ("font-weight: bold; color: white; "
+                           "background-color: #cc0000; padding: 1px 4px;")
+
+    def _show_frame_loss(self, dropped: int, lost: int) -> None:
+        """Show how many frames this run has lost, and make it impossible to
+        overlook when it is not zero. "Dropped" = the app's queue overflowed;
+        "lost at camera" = the frame never reached the app. The red stays
+        until the next Start SCOS resets the count."""
+        self.lbl_dropped.setText(
+            f"Dropped: {dropped}" + (f" + {lost} lost at camera" if lost else ""))
+        style = (self._FRAME_LOSS_SOME_SS if (dropped or lost)
+                 else self._FRAME_LOSS_NONE_SS)
+        if self.lbl_dropped.styleSheet() != style:
+            self.lbl_dropped.setStyleSheet(style)
+
     def _write_frame_accounting(self) -> None:
         """Record in the results file which clock timeVec came from and how
         many frames never made it into it. Runs inside _finish_session().
@@ -1679,6 +1697,9 @@ class MainWindow(QMainWindow):
         logger.info("Frame accounting — time source %s; %d frame(s) lost at the "
                     "camera, %d dropped from the processing queue",
                     source, lost, dropped)
+        # The label is otherwise refreshed once a second, from results: make
+        # it show the run's final count, which stays up until the next run.
+        self._show_frame_loss(dropped, lost)
         if self._recorder is None:
             return
         try:
@@ -3191,8 +3212,7 @@ class MainWindow(QMainWindow):
             # Two different losses: "Dropped" = the app's queue overflowed;
             # "lost at camera" = Pylon's buffers were full (or a transfer
             # failed) and the frame never reached the app at all.
-            self.lbl_dropped.setText(
-                f"Dropped: {dropped}" + (f" + {lost} lost at camera" if lost else ""))
+            self._show_frame_loss(dropped, lost)
             if dropped != self._last_logged_dropped_count:
                 logger.warning(
                     "SCOS pipeline overloaded — %d frame(s) dropped from the "
