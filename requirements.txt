@@ -1,23 +1,37 @@
-# Basler Camera
-pypylon
+# Exact versions that version 0 was tested with (2026-11-17, Python 3.13.5,
+# Windows 11; all 918 tests passed). setup.bat installs exactly these, so the
+# app behaves the same on every PC. Do not upgrade one of them without
+# running the whole test suite, slow tests included.
 
-# GUI & Real-time plotting
-PyQt6
-pyqtgraph
+# Basler camera
+pypylon==26.2.1
 
-# Image processing & numerics
-numpy
-scipy
-opencv-python
+# GUI and live plots
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.2
+PyQt6_sip==13.11.1
+pyqtgraph==0.14.0
+
+# Image processing and numerics
+numpy==2.4.3
+scipy==1.17.1
+opencv-python==4.13.0.92
 
 # Arduino communication
-pyserial
+pyserial==3.5
 
-# File I/O
-tifffile
-h5py
+# File input / output
+tifffile==2026.3.3
+h5py==3.16.0
 
-# Utilities
-matplotlib
-
-
+# The results figure (rBfi_fig.png)
+matplotlib==3.10.8
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.62.1
+kiwisolver==1.5.0
+packaging==26.0
+pillow==12.1.1
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+six==1.17.0

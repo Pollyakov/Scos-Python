@@ -1,0 +1,3 @@
+# setup.bat must reach every PC with Windows line ends, also in a ZIP download
+# from GitHub: cmd.exe can misread a batch file with Unix line ends.
+setup.bat -text

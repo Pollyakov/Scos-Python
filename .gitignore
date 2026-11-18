@@ -49,3 +49,7 @@ docs/vika_matlab/
 # output stay on this PC only (user, 2026-11-04). tools/compare_with_matlab.py stays in git.
 tools/gap_*.py
 gap_arrays.npz
+
+# The project overview for the supervisors (PDF, its HTML source and the figure in
+# it) - a personal document, kept local like interview_prep/ (user, 2026-11-18).
+docs/overview/

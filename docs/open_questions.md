@@ -205,8 +205,7 @@ sent by the user; **answered 2026-11-10: Vika confirmed it was a bug in her code
 −0.34 %, not −0.58 %.)
 
 **24. Fitted ⟨I⟩ (`FitMeanIm`) or the window mean — which is the method from now on?** *(first
-drafted 2026-11-10 after the accuracy re-check, todo Done item 70; **shortened 2026-11-17, not yet
-sent.** The app follows `docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she
+drafted 2026-11-10 after the accuracy re-check, todo Done item 70; **shortened 2026-11-17; sent by the user (reported 2026-11-18) — waiting for Vika's answer.** The app follows `docs/SCOS_protocol.md:53` — the window mean — and stays that way unless she
 says otherwise.)*
 
 **Why the draft was shortened (checked on GitHub 2026-11-17):** Vika fixed the wrong-pixel line
@@ -228,7 +227,7 @@ Also 2026-11-17: `baseFunc/CamerasMeasuredGain.csv` gained camera DAN02 (SN 4009
 baseFunc's copy now rounds the other values to 9 decimals (≈ 4 × 10⁻¹⁰ relative), the app keeps
 the full ones.
 
-Message, ready to send:
+Message as sent:
 
 > Hi Vika,
 > I saw your fix of the spVar image size on GitHub (15 Nov) — thank you.

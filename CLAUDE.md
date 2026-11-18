@@ -52,7 +52,10 @@ dialog by its window title — a new hand-built window (`QDialog`) needs an entr
 ## Setup & Run
 
 ```bash
-# Windows setup
+# Windows setup — one step: checks Python, makes venv, installs the pinned
+# libraries, makes the desktop icon, runs tools/check_install.py (README.md is the
+# new user's guide). requirements.txt holds EXACT tested versions — change one only
+# after the whole suite passes, slow tests included; pytest is in requirements-dev.txt.
 setup.bat
 
 # Run app

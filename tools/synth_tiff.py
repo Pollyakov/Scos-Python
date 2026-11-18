@@ -15,6 +15,8 @@ Example:
 """
 
 import argparse
+from pathlib import Path
+
 import numpy as np
 import tifffile
 
@@ -47,6 +49,8 @@ def main() -> None:
     mb = args.frames * args.height * args.width * 2 / 1024**2
     print(f"Generating {args.frames}×{args.height}×{args.width} uint16  ({mb:.0f} MB) …")
     stack = generate(args.width, args.height, args.frames, args.mean, args.seed)
+    # A fresh download has no scratch/ folder yet (it is not in git).
+    Path(args.out).resolve().parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(args.out, stack, photometric="minisblack")
     print(f"Saved: {args.out}")
 

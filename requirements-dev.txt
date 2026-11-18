@@ -1,0 +1,8 @@
+# For developers: everything the app needs, plus the test runner.
+#     venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==9.0.3
+colorama==0.4.6
+iniconfig==2.3.0
+pluggy==1.6.0
+Pygments==2.20.0
